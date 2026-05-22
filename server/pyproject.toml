@@ -1,0 +1,31 @@
+[project]
+name = "speculum-server"
+version = "0.1.0-dev"
+description = "Speculum backend — Korean equity market quantitative inspector"
+requires-python = ">=3.12"
+
+# 본 파일은 M0 T0 scaffold 시점의 최소 선언. 의존성은 Phase 1 진입 시 보강.
+# 자세한 dependency 정책은 docs/M0_PLAN.md §4.2 참조.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+# Speculum 의 모든 단위 테스트는 외부 의존 없이 작동해야 함 — Adapter 의 외부 호출은
+# integration/ 디렉토리에 별도 분리 (ADR-0003 D8).
+markers = [
+  "integration: 외부 출처 호출이 필요한 통합 테스트 (CI 야간만)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# 의도적으로 보수적 선택 — M0 단계에서 lint 폭증 방지.
+select = ["E", "F", "W", "I", "N", "B", "UP"]
+ignore = ["E501"]  # line-length 은 formatter 가 처리
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unused_ignores = true
