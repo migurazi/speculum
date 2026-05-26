@@ -6,6 +6,11 @@ requires-python = ">=3.12"
 
 # 본 파일은 M0 T0 scaffold 시점의 최소 선언. 의존성은 Phase 1 진입 시 보강.
 # 자세한 dependency 정책은 docs/M0_PLAN.md §4.2 참조.
+dependencies = [
+  # Windows 환경에서 ZoneInfo("Asia/Seoul") 가 시스템 tzdb 없이 작동하도록.
+  # Linux/Mac 은 OS tzdb 사용. Production 배포가 Linux Docker 면 stub 으로 무해.
+  "tzdata>=2024.1; sys_platform == 'win32'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

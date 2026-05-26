@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://speculum.dev/schemas/krx-calendar-v1.json",
+  "title": "Speculum KRX Trading Calendar v1",
+  "description": "KRX 영업일 캘린더. ADR-0008 D2 의 영구 진실 source. 토/일은 자동 휴장 — closed_days 에 포함 X (평일 휴장만). coverage 는 inclusive — min_date 와 max_date 자체도 범위 내. 본 schema 외 범위는 CalendarRangeError 로 명시적 fail.",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^(__proto__|constructor|prototype)$": false
+  },
+  "required": [
+    "$schema",
+    "type",
+    "version",
+    "coverage",
+    "verified_at",
+    "verified_by",
+    "verified_source",
+    "closed_days",
+    "half_days",
+    "content_hash"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "type": { "const": "krx-trading-calendar" },
+    "version": {
+      "type": "string",
+      "description": "Semver. patch = 단일 일자 정정 / minor = 신규 연도 추가 / major = schema 변경.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min_date", "max_date"],
+      "properties": {
+        "min_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Verified 범위의 시작 (inclusive). 본 일자 자체가 영업일/휴장일 여부는 closed_days 로 결정."
+        },
+        "max_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Verified 범위의 끝 (inclusive)."
+        }
+      }
+    },
+    "verified_at": {
+      "type": "string",
+      "format": "date",
+      "description": "마지막 KRX 공식 캘린더 cross-check 일. CI 게이트가 이 값의 stale 도 검사."
+    },
+    "verified_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "검증 수행자 식별 — 'speculum-bot' / 'operator-name' / 운영팀."
+    },
+    "verified_source": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 1000,
+      "description": "검증 시 비교한 1차 자료 URL. KRX 정보데이터시스템 발표 페이지 또는 정부 공휴일 고시."
+    },
+    "closed_days": {
+      "type": "array",
+      "description": "평일 휴장일 목록. 토/일은 코드에서 자동 처리 — 본 list 에 포함하지 말 것. 등장 순서 무관 — 코드가 set 으로 변환.",
+      "items": { "$ref": "#/$defs/dayEntry" }
+    },
+    "half_days": {
+      "type": "array",
+      "description": "반장 (early close) 목록. 1998 폐지 후 현재 빈 list. ADR-0008 D2 의 'half-day 도 영업일로 처리' 약속 + M2 도입 대비 schema 만 유지.",
+      "items": { "$ref": "#/$defs/halfDayEntry" }
+    },
+    "content_hash": {
+      "type": "string",
+      "description": "RFC 8785 JCS + SHA-256 of the canonical content (content_hash 필드 자체 제외). 'sha256:<hex>' 형식. factor_pack 과 동일 의미론 — ADR-0002 D4 immutable hash 원칙의 캘린더 적용.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+
+  "$defs": {
+    "dayEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["date", "reason"],
+      "properties": {
+        "date": {
+          "type": "string",
+          "format": "date",
+          "description": "ISO 8601 YYYY-MM-DD."
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "휴장 사유. 한국어 명칭 권장 (예: '신정', '설날', '대체공휴일')."
+        }
+      }
+    },
+    "halfDayEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["date", "reason", "early_close_time"],
+      "properties": {
+        "date": {
+          "type": "string",
+          "format": "date"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "early_close_time": {
+          "type": "string",
+          "pattern": "^\\d{2}:\\d{2}$",
+          "description": "조기 종료 시각 (KST, HH:MM). 예: '12:30'. M2 ADR 에서 본격 의미론 결정."
+        }
+      }
+    }
+  }
+}
