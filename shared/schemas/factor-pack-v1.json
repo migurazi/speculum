@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://speculum.dev/schemas/factor-pack-v1.json",
+  "title": "Speculum Factor Pack v1",
+  "description": "Quantitative factor definitions for the Korean equity market. ADR-0002 §D6 의 schema. Pack hash = RFC 8785 JCS + SHA-256.",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^(__proto__|constructor|prototype)$": false
+  },
+  "required": [
+    "$schema",
+    "type",
+    "pack_slug",
+    "version",
+    "publisher",
+    "license",
+    "created_at",
+    "citation",
+    "factors",
+    "content_hash"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "type": { "const": "factor-pack" },
+    "pack_slug": {
+      "type": "string",
+      "description": "Pack 식별 slug. 빌트인 = 'speculum-builtin'. community 는 'community/{publisher}-{slug}'.",
+      "pattern": "^(speculum-builtin|community/[a-z0-9][a-z0-9-]*|user/[a-z0-9-]+)$",
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "description": "Semver. Patch = 오타 보정 / minor = 추가 / major = 식 변경.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 YYYY-MM-DD."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "citation": { "$ref": "#/$defs/citation" },
+    "factors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/factor" }
+    },
+    "content_hash": {
+      "type": "string",
+      "description": "RFC 8785 JCS + SHA-256 of the canonical pack content (content_hash 필드 자체 제외). 'sha256:<hex>' 형식.",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+
+  "$defs": {
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "version": { "type": "string", "maxLength": 50 },
+        "url": { "type": "string", "format": "uri", "maxLength": 1000 },
+        "publisher": { "type": "string", "maxLength": 200 },
+        "doi": { "type": "string", "maxLength": 200 },
+        "note": { "type": "string", "maxLength": 1000 }
+      }
+    },
+
+    "canonicalId": {
+      "type": "string",
+      "description": "Canonical factor ID — Norma identity 3-tier 패턴. 빌트인 = '<slug>:<variant>'. ADR-0002 D2.",
+      "pattern": "^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)+$",
+      "maxLength": 200
+    },
+
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+
+    "factor": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["canonical_id", "uuid", "name", "description", "formula", "unit"],
+      "properties": {
+        "canonical_id": { "$ref": "#/$defs/canonicalId" },
+        "uuid": { "$ref": "#/$defs/uuid" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "사람이 읽는 이름. ADR-0007 §D4 의 금지 어휘 검사 통과 필수 (예: '추천' 금지)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "산출 정의 — 누구가 봐도 명확한 정의 텍스트. K-IFRS 연결/별도 명시."
+        },
+        "alt_names": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "maxItems": 10
+        },
+        "formula": { "$ref": "#/$defs/formula" },
+        "unit": {
+          "enum": ["ratio", "percent", "krw", "shares", "unitless", "days"],
+          "description": "결과 단위. ratio = 12.3, percent = 12.3% (사용자 표시 시 ×100 표기), krw = 원, shares = 주, unitless = N/A, days = 일수."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "maxLength": 50
+          },
+          "maxItems": 10
+        },
+        "ifrs_type": {
+          "enum": ["consolidated", "separate", "either", "n/a"],
+          "description": "재무제표 종류 의존성. ADR-0005."
+        },
+        "citation": { "$ref": "#/$defs/citation" }
+      }
+    },
+
+    "formula": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["ast", "inputs"],
+      "properties": {
+        "ast": { "$ref": "#/$defs/expression" },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 100
+          },
+          "description": "이 factor 가 입력으로 요구하는 field 이름 목록 — adapter / repository 와 contract."
+        }
+      }
+    },
+
+    "expression": {
+      "oneOf": [
+        { "$ref": "#/$defs/exprConst" },
+        { "$ref": "#/$defs/exprField" },
+        { "$ref": "#/$defs/exprOp" }
+      ]
+    },
+
+    "exprConst": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["const"],
+      "properties": {
+        "const": { "type": "number" }
+      }
+    },
+
+    "exprField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 100
+        }
+      }
+    },
+
+    "exprOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["op"],
+      "properties": {
+        "op": {
+          "enum": [
+            "add", "sub", "mul", "div",
+            "sum_last_n_quarters",
+            "avg",
+            "ratio_pct"
+          ]
+        },
+        "left":  { "$ref": "#/$defs/expression" },
+        "right": { "$ref": "#/$defs/expression" },
+        "args":  {
+          "type": "array",
+          "items": { "$ref": "#/$defs/expression" },
+          "minItems": 1,
+          "maxItems": 16
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 100
+        },
+        "n": { "type": "integer", "minimum": 1, "maximum": 20 }
+      }
+    }
+  }
+}
