@@ -139,6 +139,50 @@ class CorporateActionRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class CodeHistoryEntry:
+    """`stocks_master.code_history` JSONB 의 단일 entry — ADR-0009 D6.
+
+    종목코드 변경·재상장·합병 시 새 row 가 아닌 history append. 본 entry 의
+    `valid_from <= as_of < (valid_to or +inf)` 매칭이 lineage 의 시점 검색 key.
+    """
+
+    code: str
+    valid_from: date
+    valid_to: date | None  # None = 현재 유효
+    reason: str  # "initial_listing" / "merger_temporary" / "code_change" 등
+
+
+@dataclass(frozen=True, slots=True)
+class StockMasterRecord:
+    """KRX 종목 마스터 — ADR-0002 D5 / ADR-0009 D6 의 stocks_master row.
+
+    lineage 단위 entity — 종목코드 변경·재상장·합병 시 새 row 가 아닌 history
+    append. `current_code` 는 현재 활성 코드 (NULL = 폐지).
+
+    Attributes:
+        id: lineage UUID (영구 보존, 종목코드 변경 무관).
+        current_code: 현재 활성 코드. delisting_date 가 있으면 None 가능.
+        current_name: 종목명.
+        market: 상장 시장 — "KOSPI" / "KOSDAQ" / "KONEX".
+        listing_date: 최초 상장일.
+        delisting_date: 폐지일. None = 현재 활성.
+        fiscal_month: 결산 월 (12 = 12 월결산). ADR-0005 의 K-IFRS 결산기.
+        code_history: 종목코드 변경 history. `(code, valid_from, valid_to, reason)`.
+        ifrs_preference_default: K-IFRS 연결/별도 선호 — ADR-0005. "AUTO" / "CONSOLIDATED" / "SEPARATE".
+    """
+
+    id: UUID
+    current_code: str | None
+    current_name: str
+    market: str  # "KOSPI" | "KOSDAQ" | "KONEX"
+    listing_date: date
+    delisting_date: date | None
+    fiscal_month: int
+    code_history: tuple[CodeHistoryEntry, ...]
+    ifrs_preference_default: str = "AUTO"
+
+
+@dataclass(frozen=True, slots=True)
 class StockSnapshotRecord:
     """Factor 결과 precomputed snapshot — ADR-0002 D5 의 stock_snapshots row.
 

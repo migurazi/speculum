@@ -18,14 +18,37 @@
 
 from __future__ import annotations
 
+from typing import Final
+
 from fastapi import FastAPI
 
 from app.api.exception_handlers import register_exception_handlers
 from app.api.routes.meta import router as meta_router
+from app.api.routes.stocks import router as stocks_router
 from app.middleware.forbidden_words_guard import ForbiddenWordsGuardMiddleware
+from app.repositories.stocks_master_repository import (
+    FakeStocksMasterRepository,
+    StocksMasterRepository,
+)
+
+# 종목명·회사명·DART 공시 제목 등 EXTERNAL_QUOTE scope path — 금지 어휘 검사 제외.
+# oracle T25 자문 Risk-C1 — 회사명 "이베스트투자증권" 같은 substring 이 BLOCK
+# 되지 않도록. 본 set 의 key 가 dict 의 nested 어디서든 등장하면 그 값 검사 제외.
+_EXTERNAL_QUOTE_EXCLUDE_KEYS: Final[frozenset[str]] = frozenset({
+    # Stock master / detail (T25)
+    "name", "current_name", "company_name", "name_en",
+    "alt_names",
+    "stock_name", "stock_label",
+    # Disclosure metadata (T19 DART)
+    "title", "report_title",
+})
 
 
-def create_app(*, include_demo_routes: bool = False) -> FastAPI:
+def create_app(
+    *,
+    include_demo_routes: bool = False,
+    stocks_repository: StocksMasterRepository | None = None,
+) -> FastAPI:
     """FastAPI app 팩토리.
 
     Args:
@@ -33,6 +56,9 @@ def create_app(*, include_demo_routes: bool = False) -> FastAPI:
             **운영에서는 False (default)** — production binary 에 demo 가 살아
             있을 위험 차단 (oracle 자문 결정 7). 테스트 fixture 가 명시적
             True 주입.
+        stocks_repository: 종목 마스터 Repository 주입. None 이면 빈 Fake
+            (운영 의도 X — T13 SQLAlchemy 합류 후 본 인자가 실제 구현체).
+            테스트가 fixture 로 채운 Fake 를 주입.
 
     Returns:
         FastAPI app — middleware + exception handlers + routes wired.
@@ -44,13 +70,24 @@ def create_app(*, include_demo_routes: bool = False) -> FastAPI:
     )
 
     # ADR-0007 D4.4 의 강제 메커니즘 — 환경별 default policy 자동 적용.
-    app.add_middleware(ForbiddenWordsGuardMiddleware)
+    # 회사명 등 EXTERNAL_QUOTE scope 는 exclude_keys 로 검사 제외 (oracle T25 C1).
+    app.add_middleware(
+        ForbiddenWordsGuardMiddleware,
+        exclude_keys=_EXTERNAL_QUOTE_EXCLUDE_KEYS,
+    )
+
+    # Repository 주입 — endpoint dependency 가 app.state 에서 fetch.
+    app.state.stocks_repo = (
+        stocks_repository or FakeStocksMasterRepository(records=())
+    )
 
     # Domain exception → JSON handler (ADR-0008 D6 / oracle R1).
     register_exception_handlers(app)
 
     # Meta endpoint — `/api/as_of`, `/api/policy-versions`.
     app.include_router(meta_router)
+    # T25 — `/api/stocks/{code}`, `/api/stocks/search`.
+    app.include_router(stocks_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
