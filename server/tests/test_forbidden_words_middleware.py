@@ -539,8 +539,9 @@ def test_create_app_serves_demo_routes() -> None:
     from app.main import create_app
 
     # 환경변수 격리 — 호스트의 SPECULUM_FORBIDDEN_POLICY 가 테스트에 영향 주지 않도록.
+    # T24 후속: demo route 는 명시적 factory parameter 로만 활성 (oracle 결정 7).
     with _env("SPECULUM_FORBIDDEN_POLICY", None):
-        client = TestClient(create_app())
+        client = TestClient(create_app(include_demo_routes=True))
         res = client.get("/api/_demo/clean")
         assert res.status_code == 200
         res2 = client.get("/api/_demo/dirty")
