@@ -33,11 +33,13 @@ from app.repositories.pit_protocols import StockMasterRecord
 from app.schemas.stocks import (
     DEFAULT_DISPLAY_FACTORS,
     FactorValueOut,
+    StockCompareOut,
     StockDetailOut,
     StockSearchPageOut,
     StockStatus,
     StockSummaryOut,
 )
+from app.services.screen_run import normalize_stock_codes
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -45,6 +47,10 @@ router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 # KRX 종목코드 형식 — 6 자리 numeric (oracle 결정 3).
 # 1~6 자리 입력 허용 (zero-pad 적용). 비숫자 거부.
 _CODE_PATH_REGEX: Final[str] = r"^\d{1,6}$"
+
+# Compare 의 codes query — 2~6 개 (AC-F-05). dedup 후 limit 검증.
+_COMPARE_MIN_CODES: Final[int] = 2
+_COMPARE_MAX_CODES: Final[int] = 6
 
 
 def _normalize_single_code(code: str) -> str:
@@ -94,6 +100,103 @@ async def search_stocks(
         StockSummaryOut.from_master(r, as_of=as_of.value) for r in records
     )
     return StockSearchPageOut(items=items, total=len(items), next_cursor=None)
+
+
+@router.get("/compare", response_model=StockCompareOut)
+async def compare_stocks(
+    as_of: NormalizedAsOfDep,
+    repo: StocksRepoDep,
+    evaluator: FactorEvaluatorDep,
+    pack: ActivePackDep,
+    codes: str = Query(
+        ...,
+        description=(
+            "비교할 종목코드 — comma-separated (예: '005930,000660'). 2~6 개. "
+            "자동 zero-pad + dedup. 1~6 자리 numeric 만 허용."
+        ),
+        min_length=1,
+        max_length=200,
+    ),
+) -> StockCompareOut:
+    """Compare 뷰 — 2~6 종목 multi-fetch (AC-F-05).
+
+    Route 등록 순서가 중요 — `/compare` 가 `/{code}` 보다 먼저 등록되어야
+    FastAPI 의 path matching 이 본 endpoint 를 먼저 시도. `compare` 가 `{code}`
+    의 regex `^\\d{1,6}$` 와 겹치지 않으나, FastAPI 는 등록 순서 우선 매칭.
+
+    응답 의미 (T25 패턴 일관):
+        - items: 정규화·dedup 후 입력 순서 의 Stock Detail. lineage 존재 종목만.
+        - not_found: lineage 부재 codes — 사용자가 오타 / 미존재 코드 입력.
+    """
+    # 1. codes parse + 정규화.
+    raw_codes = [c.strip() for c in codes.split(",") if c.strip()]
+    if not raw_codes:
+        raise HTTPException(
+            status_code=400,
+            detail="`codes` query 가 비어 있습니다.",
+        )
+
+    # 형식 검증 (1~6 자리 numeric).
+    for code in raw_codes:
+        if not code.isdigit() or len(code) > 6:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "각 code 는 1~6 자리 숫자여야 합니다."
+                ),
+            )
+
+    # 정규화 — 6 자리 zero-pad. dedup 은 set 이지만 order 보존 위해 직접.
+    normalized_seen: dict[str, None] = {}  # ordered set 의미
+    for code in raw_codes:
+        normalized_seen[code.zfill(6)] = None
+    normalized = list(normalized_seen.keys())
+
+    # 2. 개수 검증 — dedup 으로 줄어든 경우 사용자에게 정규화 사실 안내 (oracle #4).
+    if len(normalized) < _COMPARE_MIN_CODES:
+        was_deduped = len(raw_codes) > len(normalized)
+        suffix = (
+            " (입력 코드들이 6 자리 zero-pad 정규화 후 중복으로 처리됨)"
+            if was_deduped else ""
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"최소 {_COMPARE_MIN_CODES} 개의 서로 다른 종목이 필요합니다 "
+                f"(received: {len(normalized)}){suffix}."
+            ),
+        )
+    if len(normalized) > _COMPARE_MAX_CODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"최대 {_COMPARE_MAX_CODES} 개까지 비교 가능합니다 "
+                f"(received: {len(normalized)})."
+            ),
+        )
+
+    # 3. fetch each + status 산출. lineage 부재면 not_found.
+    items: list[StockDetailOut] = []
+    not_found: list[str] = []
+    # M0 — pipeline 미합류라 모든 종목에 동일 stub. tuple + FactorValueOut frozen
+    # 이라 공유 안전. TODO(T18): 종목별 evaluator.evaluate(pack.factor, provider,
+    # as_of) 호출로 교체 — 본 loop 내부에서 per-stock 평가.
+    factor_stubs = _build_factor_stubs(pack)
+    for code in normalized:
+        master = repo.fetch_by_code(code, as_of=as_of.value)
+        if master is None:
+            not_found.append(code)
+            continue
+        items.append(StockDetailOut.from_master_and_factors(
+            master, factor_stubs, as_of=as_of.value,
+        ))
+
+    # not_found 도 입력 순서 보존 — items 와 일관 (oracle T27 #5). 사용자가
+    # 입력한 순서대로 "찾지 못한 코드" 가 표시되어 UI 가 자연.
+    return StockCompareOut(
+        items=tuple(items),
+        not_found=tuple(not_found),
+    )
 
 
 @router.get("/{code}", response_model=StockDetailOut)

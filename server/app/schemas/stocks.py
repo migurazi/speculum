@@ -25,6 +25,7 @@ __all__ = [
     "DEFAULT_DISPLAY_FACTORS",
     "CodeHistoryItemOut",
     "FactorValueOut",
+    "StockCompareOut",
     "StockDetailOut",
     "StockSearchPageOut",
     "StockStatus",
@@ -92,10 +93,14 @@ class StockSummaryOut(BaseModel):
     def from_master(
         cls, master: StockMasterRecord, *, as_of: date,
     ) -> "StockSummaryOut":
-        """도메인 → wire 단방향 factory."""
+        """도메인 → wire 단방향 factory.
+
+        `current_code` 가 None (폐지) 이면 lineage 의 마지막 historical code 로
+        fallback — UI 가 폐지 종목도 코드로 식별 가능 (ADR-0009 D7).
+        """
         return cls(
             id=master.id,
-            code=master.current_code or "",
+            code=_resolve_display_code(master),
             name=master.current_name,
             market=master.market,
             listing_date=master.listing_date,
@@ -167,7 +172,7 @@ class StockDetailOut(BaseModel):
     ) -> "StockDetailOut":
         return cls(
             id=master.id,
-            code=master.current_code or "",
+            code=_resolve_display_code(master),
             name=master.current_name,
             market=master.market,
             listing_date=master.listing_date,
@@ -184,6 +189,23 @@ class StockDetailOut(BaseModel):
             ),
             factors=factors,
         )
+
+
+class StockCompareOut(BaseModel):
+    """Compare view 의 wire schema — 2~6 종목 multi-fetch 결과 (T27).
+
+    Attributes:
+        items: 입력 codes 순서 (정규화·dedup 후) 의 Stock Detail. lineage 부재
+            종목은 본 list 에 없음 (`not_found` 로 별도 노출). UI 의 grid 가
+            본 순서대로 column 배치.
+        not_found: lineage 가 존재하지 않는 입력 codes. UI 가 "코드 X 는 알 수
+            없음" 표시. 정렬 — 사전식 ascending.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    items: tuple[StockDetailOut, ...]
+    not_found: tuple[str, ...]
 
 
 class StockSearchPageOut(BaseModel):
@@ -211,3 +233,25 @@ def _compute_status(master: StockMasterRecord, as_of: date) -> StockStatus:
     if master.delisting_date is not None and master.delisting_date <= as_of:
         return StockStatus.DELISTED
     return StockStatus.ACTIVE
+
+
+def _resolve_display_code(master: StockMasterRecord) -> str:
+    """UI 표시용 종목코드 — current_code 우선, 폐지면 마지막 historical code.
+
+    ADR-0009 D7 의 "피합병/폐지 종목 시계열 보존" 의도 — 폐지 종목도 UI 가 코드로
+    식별 가능해야 함.
+
+    `code_history` 의 invariant (oracle T27 #2):
+        Repository 가 `valid_from` 오름차순으로 정렬 보장. `[-1]` = 가장 최근 코드.
+        `merger_temporary` reason 의 임시 코드가 마지막일 경우 UI 가 그 임시
+        코드를 노출 — 의도된 동작 (역사적 마지막 식별자). 사용자가 historical
+        조회 시 임시 코드 인지가 필요한 경우 `code_history` 전체를 별도 표시.
+
+    lineage 도 history 도 비어있는 경우 (운영상 발생 X) 빈 string fallback.
+    """
+    if master.current_code:
+        return master.current_code
+    if master.code_history:
+        # 가장 최근 entry — Repository 가 valid_from asc 정렬 보장.
+        return master.code_history[-1].code
+    return ""

@@ -415,6 +415,203 @@ def test_normalize_single_code_rejects_too_long() -> None:
         _normalize_single_code("ABCDEF")
 
 
+# =============================================================================
+# 16. /api/stocks/compare — AC-F-05 (2~6 종목 multi-fetch)
+# =============================================================================
+
+def test_compare_two_stocks(client: TestClient) -> None:
+    res = client.get(
+        "/api/stocks/compare?codes=005930,000660&as_of=2024-05-07"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["items"]) == 2
+    assert body["not_found"] == []
+    codes = [i["code"] for i in body["items"]]
+    # 입력 순서 보존 — 005930 먼저, 000660 다음.
+    assert codes == ["005930", "000660"]
+
+
+def test_compare_preserves_input_order(client: TestClient) -> None:
+    """사용자 입력 순서가 UI grid column 순서."""
+    res = client.get(
+        "/api/stocks/compare?codes=000660,005930&as_of=2024-05-07"
+    )
+    body = res.json()
+    codes = [i["code"] for i in body["items"]]
+    assert codes == ["000660", "005930"]
+
+
+def test_compare_partial_missing_returns_not_found(client: TestClient) -> None:
+    """일부 lineage 부재 → 200 + not_found list."""
+    res = client.get(
+        "/api/stocks/compare?codes=005930,999999&as_of=2024-05-07"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["items"]) == 1
+    assert body["items"][0]["code"] == "005930"
+    assert body["not_found"] == ["999999"]
+
+
+def test_compare_zero_pads_short_codes(client: TestClient) -> None:
+    res = client.get(
+        "/api/stocks/compare?codes=5930,660&as_of=2024-05-07"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    codes = [i["code"] for i in body["items"]]
+    assert codes == ["005930", "000660"]
+
+
+def test_compare_dedup_after_zero_pad(client: TestClient) -> None:
+    """`5930` 과 `005930` 은 정규화 후 동일 → dedup → 1 개 → 400."""
+    res = client.get(
+        "/api/stocks/compare?codes=5930,005930&as_of=2024-05-07"
+    )
+    assert res.status_code == 400
+    assert "최소 2 개" in res.json()["detail"]
+
+
+def test_compare_min_codes_enforced(client: TestClient) -> None:
+    """1 개만 입력 → 400."""
+    res = client.get(
+        "/api/stocks/compare?codes=005930&as_of=2024-05-07"
+    )
+    assert res.status_code == 400
+    assert "최소" in res.json()["detail"]
+
+
+def test_compare_max_codes_enforced(client: TestClient) -> None:
+    """7 개 입력 → 400."""
+    res = client.get(
+        "/api/stocks/compare?codes=1,2,3,4,5,6,7&as_of=2024-05-07"
+    )
+    assert res.status_code == 400
+    assert "최대" in res.json()["detail"]
+
+
+def test_compare_six_codes_allowed(client: TestClient) -> None:
+    """경계 — 정확히 6 개는 허용."""
+    res = client.get(
+        "/api/stocks/compare?codes=005930,000660,078020,888881,999991,123456"
+        "&as_of=2024-05-07"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    # 6 종목 모두 lineage 존재 → not_found 빈.
+    assert body["not_found"] == []
+    # items 가 6 개여야 (lineage 모두 존재).
+    assert len(body["items"]) == 6
+
+
+def test_compare_non_digit_code_returns_400(client: TestClient) -> None:
+    res = client.get(
+        "/api/stocks/compare?codes=ABC,DEF&as_of=2024-05-07"
+    )
+    assert res.status_code == 400
+    assert "숫자" in res.json()["detail"]
+
+
+def test_compare_too_long_code_returns_400(client: TestClient) -> None:
+    res = client.get(
+        "/api/stocks/compare?codes=1234567,005930&as_of=2024-05-07"
+    )
+    assert res.status_code == 400
+
+
+def test_compare_empty_codes_returns_422(client: TestClient) -> None:
+    """`?codes=` 빈 값 → Query(min_length=1) 422."""
+    res = client.get("/api/stocks/compare?codes=&as_of=2024-05-07")
+    assert res.status_code == 422
+
+
+def test_compare_includes_factor_stubs(client: TestClient) -> None:
+    """각 item 의 factors 가 default 5 개 (T25 의 stub 패턴 동일)."""
+    res = client.get(
+        "/api/stocks/compare?codes=005930,000660&as_of=2024-05-07"
+    )
+    body = res.json()
+    for item in body["items"]:
+        assert len(item["factors"]) == 5
+        for f in item["factors"]:
+            assert f["is_na"] is True
+            assert f["na_reason"].startswith("missing_input:")
+
+
+def test_compare_x_asof_header_set(client: TestClient) -> None:
+    """compare endpoint 도 X-AsOf 헤더 set (T24 dependency 통합)."""
+    res = client.get(
+        "/api/stocks/compare?codes=005930,000660&as_of=2024-05-07"
+    )
+    assert res.headers["x-asof"] == "2024-05-07"
+
+
+def test_compare_status_per_item(client: TestClient) -> None:
+    """compare 의 each item 이 status 산출 (active / not_yet_listed / delisted)."""
+    # 005930 (active) + 999991 (not_yet_listed) + 888881 (delisted at 5/7).
+    res = client.get(
+        "/api/stocks/compare?codes=005930,999991,888881&as_of=2024-05-07"
+    )
+    body = res.json()
+    statuses = {i["code"]: i["status"] for i in body["items"]}
+    assert statuses["005930"] == "active"
+    assert statuses["999991"] == "not_yet_listed"
+    assert statuses["888881"] == "delisted"
+
+
+def test_compare_future_as_of_400(client: TestClient) -> None:
+    res = client.get(
+        "/api/stocks/compare?codes=005930,000660&as_of=2999-12-31"
+    )
+    assert res.status_code == 400
+    assert res.json()["code"] == "AS_OF_IN_FUTURE"
+
+
+def test_compare_trailing_comma_ignored(client: TestClient) -> None:
+    """oracle T27 #3 — trailing comma 는 빈 부분으로 strip + 무시."""
+    res = client.get(
+        "/api/stocks/compare?codes=005930,000660,&as_of=2024-05-07"
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert len(body["items"]) == 2
+
+
+def test_compare_not_found_preserves_input_order(client: TestClient) -> None:
+    """oracle T27 #5 — not_found 도 입력 순서 보존 (items 와 일관)."""
+    # 입력 순서: ZZ first, 005930, AA last (AA, ZZ 모두 lineage 부재).
+    res = client.get(
+        "/api/stocks/compare?codes=999998,005930,999997&as_of=2024-05-07"
+    )
+    body = res.json()
+    # not_found 입력 순서대로 999998 먼저, 999997 다음 (사전식이면 반대).
+    assert body["not_found"] == ["999998", "999997"]
+
+
+def test_compare_dedup_message_explains_normalization(client: TestClient) -> None:
+    """oracle T27 #4 — dedup 발생 시 정규화 사실 명시."""
+    res = client.get(
+        "/api/stocks/compare?codes=5930,005930&as_of=2024-05-07"
+    )
+    assert res.status_code == 400
+    detail = res.json()["detail"]
+    # 정규화 사실 안내가 메시지에 포함.
+    assert "zero-pad" in detail or "정규화" in detail
+
+
+def test_compare_dirty_codes_no_echo(client: TestClient) -> None:
+    """금지 어휘를 codes 에 넣어도 400 message 에 echo X."""
+    res = client.get(
+        "/api/stocks/compare?codes=추천,매수&as_of=2024-05-07"
+    )
+    # 400 (비숫자) — message 가 안전 vocabulary 만.
+    assert res.status_code == 400
+    body_str = str(res.json())
+    assert "추천" not in body_str
+    assert "매수" not in body_str
+
+
 def test_factor_stub_na_reason_uses_evaluator_taxonomy(client: TestClient) -> None:
     """oracle 2 차 C3 — stub 의 na_reason 이 evaluator taxonomy 와 일관 (missing_input:* 형식)."""
     res = client.get("/api/stocks/005930?as_of=2024-05-07")
