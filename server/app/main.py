@@ -24,8 +24,14 @@ from fastapi import FastAPI
 
 from app.api.exception_handlers import register_exception_handlers
 from app.api.routes.meta import router as meta_router
+from app.api.routes.runs import router as runs_router
+from app.api.routes.screen import router as screen_router
 from app.api.routes.stocks import router as stocks_router
 from app.middleware.forbidden_words_guard import ForbiddenWordsGuardMiddleware
+from app.repositories.screen_run_repository import (
+    FakeScreenRunRepository,
+    ScreenRunRepository,
+)
 from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
     StocksMasterRepository,
@@ -48,6 +54,7 @@ def create_app(
     *,
     include_demo_routes: bool = False,
     stocks_repository: StocksMasterRepository | None = None,
+    runs_repository: ScreenRunRepository | None = None,
 ) -> FastAPI:
     """FastAPI app 팩토리.
 
@@ -80,14 +87,19 @@ def create_app(
     app.state.stocks_repo = (
         stocks_repository or FakeStocksMasterRepository(records=())
     )
+    app.state.runs_repo = runs_repository or FakeScreenRunRepository()
 
     # Domain exception → JSON handler (ADR-0008 D6 / oracle R1).
     register_exception_handlers(app)
 
     # Meta endpoint — `/api/as_of`, `/api/policy-versions`.
     app.include_router(meta_router)
-    # T25 — `/api/stocks/{code}`, `/api/stocks/search`.
+    # T25/T27 — /api/stocks/{code}, /api/stocks/search, /api/stocks/compare.
     app.include_router(stocks_router)
+    # T26 — POST /api/screen (실행만).
+    app.include_router(screen_router)
+    # T26 + T40 — /api/runs (Save Run + recent + fetch + diff).
+    app.include_router(runs_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

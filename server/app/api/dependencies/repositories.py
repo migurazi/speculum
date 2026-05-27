@@ -12,6 +12,10 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from app.repositories.screen_run_repository import (
+    FakeScreenRunRepository,
+    ScreenRunRepository,
+)
 from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
     StocksMasterRepository,
@@ -44,9 +48,23 @@ def get_active_pack() -> LoadedPack:
     return DEFAULT_PACK
 
 
+def get_runs_repository(request: Request) -> ScreenRunRepository:
+    """Screen Run snapshot repository — `request.app.state.runs_repo`.
+
+    M0 default = FakeScreenRunRepository (in-memory). 테스트가 fixture 로 override.
+    T13 합류 후 SQLAlchemy session-bound 구현체.
+    """
+    repo = getattr(request.app.state, "runs_repo", None)
+    if repo is None:
+        return FakeScreenRunRepository()
+    return repo
+
+
 StocksRepoDep = Annotated[StocksMasterRepository, Depends(get_stocks_repository)]
 """Endpoint type-level dependency hint."""
 
 FactorEvaluatorDep = Annotated[FactorEvaluator, Depends(get_factor_evaluator)]
 
 ActivePackDep = Annotated[LoadedPack, Depends(get_active_pack)]
+
+RunsRepoDep = Annotated[ScreenRunRepository, Depends(get_runs_repository)]

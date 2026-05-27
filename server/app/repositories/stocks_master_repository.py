@@ -91,6 +91,19 @@ class StocksMasterRepository(Protocol):
         """
         ...
 
+    def list_active(self, *, as_of: date) -> Sequence[StockMasterRecord]:
+        """as_of 시점에 active 인 모든 종목 — Screener 의 universe.
+
+        `listing_date <= as_of AND (delisting_date is None OR delisting_date > as_of)`
+        조건의 lineage. 폐지 종목 제외 (survivorship bias 회피 — Screener universe
+        의 default 정의).
+
+        T18 합류 후 KRX universe 의 진짜 active set. 본 method 는 Screener
+        (T26 의 POST /api/screen, /api/runs) 와 universe-level 분석 (M1 의 시장
+        wide query) 의 backbone.
+        """
+        ...
+
 
 class FakeStocksMasterRepository(StocksMasterRepository):
     """In-memory KRX 마스터 — T13 SQLAlchemy 구현체의 contract reference.
@@ -179,3 +192,19 @@ class FakeStocksMasterRepository(StocksMasterRepository):
 
         results.sort()
         return tuple(r for _, _, r in results[:limit])
+
+    def list_active(self, *, as_of: date) -> Sequence[StockMasterRecord]:
+        """as_of 시점 active lineage — listing_date <= as_of < (delisting_date or inf).
+
+        Sort by current_code (정렬 안정성) — 폐지 종목 (current_code=None) 은
+        active 정의상 제외되므로 None 미발생.
+        """
+        active: list[StockMasterRecord] = []
+        for r in self._records:
+            if r.listing_date > as_of:
+                continue
+            if r.delisting_date is not None and r.delisting_date <= as_of:
+                continue
+            active.append(r)
+        # 결정적 정렬 — current_code asc (None 은 active 정의상 미존재).
+        return tuple(sorted(active, key=lambda r: r.current_code or ""))
