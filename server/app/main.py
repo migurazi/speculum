@@ -26,7 +26,9 @@ from app.api.exception_handlers import register_exception_handlers
 from app.api.routes.meta import router as meta_router
 from app.api.routes.runs import router as runs_router
 from app.api.routes.screen import router as screen_router
+from app.api.routes.screener_sets import router as screener_sets_router
 from app.api.routes.stocks import router as stocks_router
+from app.api.routes.watchlists import router as watchlists_router
 from app.middleware.forbidden_words_guard import ForbiddenWordsGuardMiddleware
 from app.repositories.screen_run_repository import (
     FakeScreenRunRepository,
@@ -35,6 +37,12 @@ from app.repositories.screen_run_repository import (
 from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
     StocksMasterRepository,
+)
+from app.repositories.watchlist_repository import (
+    FakeScreenerSetRepository,
+    FakeWatchlistRepository,
+    ScreenerSetRepository,
+    WatchlistRepository,
 )
 
 # 종목명·회사명·DART 공시 제목 등 EXTERNAL_QUOTE scope path — 금지 어휘 검사 제외.
@@ -55,6 +63,8 @@ def create_app(
     include_demo_routes: bool = False,
     stocks_repository: StocksMasterRepository | None = None,
     runs_repository: ScreenRunRepository | None = None,
+    watchlist_repository: WatchlistRepository | None = None,
+    screener_set_repository: ScreenerSetRepository | None = None,
 ) -> FastAPI:
     """FastAPI app 팩토리.
 
@@ -88,6 +98,10 @@ def create_app(
         stocks_repository or FakeStocksMasterRepository(records=())
     )
     app.state.runs_repo = runs_repository or FakeScreenRunRepository()
+    app.state.watchlist_repo = watchlist_repository or FakeWatchlistRepository()
+    app.state.screener_set_repo = (
+        screener_set_repository or FakeScreenerSetRepository()
+    )
 
     # Domain exception → JSON handler (ADR-0008 D6 / oracle R1).
     register_exception_handlers(app)
@@ -100,6 +114,9 @@ def create_app(
     app.include_router(screen_router)
     # T26 + T40 — /api/runs (Save Run + recent + fetch + diff).
     app.include_router(runs_router)
+    # T28 — /api/watchlists (CRUD) + /api/screener-sets (조건셋).
+    app.include_router(watchlists_router)
+    app.include_router(screener_sets_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

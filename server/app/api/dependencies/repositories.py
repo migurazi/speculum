@@ -20,6 +20,12 @@ from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
     StocksMasterRepository,
 )
+from app.repositories.watchlist_repository import (
+    FakeScreenerSetRepository,
+    FakeWatchlistRepository,
+    ScreenerSetRepository,
+    WatchlistRepository,
+)
 from app.services.factor_evaluator import FactorEvaluator
 from app.services.factor_pack import DEFAULT_PACK, LoadedPack
 
@@ -60,6 +66,25 @@ def get_runs_repository(request: Request) -> ScreenRunRepository:
     return repo
 
 
+def get_watchlist_repository(request: Request) -> WatchlistRepository:
+    """Watchlist CRUD repository — `request.app.state.watchlist_repo`.
+
+    M0 default = FakeWatchlistRepository. T13 합류 후 SQLAlchemy 구현체.
+    """
+    repo = getattr(request.app.state, "watchlist_repo", None)
+    if repo is None:
+        return FakeWatchlistRepository()
+    return repo
+
+
+def get_screener_set_repository(request: Request) -> ScreenerSetRepository:
+    """ScreenerSet (조건셋) repository — `request.app.state.screener_set_repo`."""
+    repo = getattr(request.app.state, "screener_set_repo", None)
+    if repo is None:
+        return FakeScreenerSetRepository()
+    return repo
+
+
 StocksRepoDep = Annotated[StocksMasterRepository, Depends(get_stocks_repository)]
 """Endpoint type-level dependency hint."""
 
@@ -68,3 +93,11 @@ FactorEvaluatorDep = Annotated[FactorEvaluator, Depends(get_factor_evaluator)]
 ActivePackDep = Annotated[LoadedPack, Depends(get_active_pack)]
 
 RunsRepoDep = Annotated[ScreenRunRepository, Depends(get_runs_repository)]
+
+WatchlistRepoDep = Annotated[
+    WatchlistRepository, Depends(get_watchlist_repository),
+]
+
+ScreenerSetRepoDep = Annotated[
+    ScreenerSetRepository, Depends(get_screener_set_repository),
+]
