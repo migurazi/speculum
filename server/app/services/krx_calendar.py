@@ -41,7 +41,6 @@ Inclusivity 정책:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -53,6 +52,9 @@ from zoneinfo import ZoneInfo
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
+
+from app.services._jcs import canonicalize_jcs as _canonicalize_jcs_shared
+from app.services._jcs import compute_content_hash as _compute_content_hash_shared
 
 # 운영 코드의 wildcard import 시 노출되는 public surface. `_fill_content_hash` 등
 # build-time utility 는 의도적으로 제외 — 운영 코드 path 에서의 우발적 호출 방지
@@ -168,31 +170,18 @@ Inclusivity = Literal["both", "neither", "left", "right"]
 
 
 # =============================================================================
-# RFC 8785 JCS — factor_pack 과 동일 의미론. 캘린더의 content_hash 계산.
-# (별도 모듈 분리는 후속 정리 — 지금은 inline 복제, 두 곳 동기화 부담 명시.)
+# RFC 8785 JCS — `_jcs` util 로 이관 (T30 공유 정리). private re-export.
 # =============================================================================
 
 def _canonicalize_jcs(value: Any) -> bytes:
-    """RFC 8785 JCS subset — sort_keys + 공백제거 + ensure_ascii=False.
-
-    factor_pack.canonicalize_jcs 와 동일 의미론. 두 모듈이 같은 hash 패턴을
-    공유하나, 모듈간 import 결합을 피하기 위해 inline 복제. 정책 변경 시 두 곳
-    모두 수정 (또는 별도 hashing util 모듈로 추출).
-    """
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    """`_jcs.canonicalize_jcs` 의 backwards-compat alias — 기존 tests / inline
+    호출자가 그대로 작동하도록."""
+    return _canonicalize_jcs_shared(value)
 
 
 def _compute_content_hash(body: dict[str, Any]) -> str:
-    """`content_hash` 필드 제외 후 JCS + SHA-256. 반환: 'sha256:<hex>'."""
-    without_hash = {k: v for k, v in body.items() if k != _HASH_FIELD}
-    digest = hashlib.sha256(_canonicalize_jcs(without_hash)).hexdigest()
-    return f"sha256:{digest}"
+    """`content_hash` 필드 제외 후 JCS + SHA-256."""
+    return _compute_content_hash_shared(body, exclude_key=_HASH_FIELD)
 
 
 # =============================================================================

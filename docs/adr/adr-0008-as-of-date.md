@@ -143,14 +143,43 @@ CREATE TABLE screen_runs (
   query        JSONB NOT NULL,
   as_of        DATE NOT NULL,            -- freeze
   result_codes TEXT[] NOT NULL,
-  result_hash  TEXT NOT NULL,            -- SHA-256 of (query, as_of, result_codes)
-  data_versions JSONB NOT NULL,           -- M1 — KRX batch_id, DART batch_id
+  result_hash  TEXT NOT NULL,            -- SHA-256 of (query, as_of, result_codes, data_versions) — D7-bis
+  data_versions JSONB NOT NULL,           -- T30 의 정책 hash + version aggregator + M1 KRX/DART batch_id
   computed_at  TIMESTAMPTZ NOT NULL,
   ...
 );
 ```
 
 같은 query 라도 as_of 가 다르면 다른 Run hash.
+
+#### D7-bis. `result_hash` 입력 확장 (T30 보완, 2026-05-27)
+
+원안 (위 schema 의 코멘트가 명시했던) "SHA-256 of (query, as_of, result_codes)" 는
+§2.10 Reproducibility 와 모순. factor_pack v1.0 → v1.0.1 (오타 보정) 변경이 같은
+query/as_of/result_codes 라도 산출 logic 이 달라졌는데 `result_hash` 가 동일 →
+6 개월 후 재현 시 다른 결과 가능성 silent.
+
+**확장 정의 (T30 으로 implementation)**:
+```
+result_hash = JCS-SHA256({
+  "query": canonical_query,           # 정렬·dedup 후 conditions + selected_factors
+  "as_of": ISO 8601 date,
+  "result_codes": sorted 6-digit codes,
+  "data_versions": {…}                # snapshot_versions.collect_active_policy_versions()
+})
+```
+
+`data_versions` 의 freeze 가 hash 의 self-contained witness. 외부 export (M2
+community pack 의 JSON 직렬화) 시 row 컬럼이 사라져도 hash 만으로 모든 정책
+context 가 재현 가능. ADR-0002 D4 의 "Pack hash" 패턴과 동형.
+
+`snapshot_versions.collect_active_policy_versions()` 의 키 set (snapshot schema
+v1.0 — 11 키): `factor_pack_content_hash`, `factor_pack_slug`, `factor_pack_version`,
+`calendar_content_hash`, `calendar_version`, `pit_policy_version`,
+`price_adjustment_policy_hash`, `adjustment_policy_version`, `ca_policy_version`,
+`evaluator_version`, `snapshot_schema_version`.
+
+M1 추가 예정: `krx_batch_id`, `dart_batch_id` (데이터 정정 추적).
 
 ### D8. M0 한계 — 일 단위 PIT
 

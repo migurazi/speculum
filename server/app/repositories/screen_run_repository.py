@@ -1,0 +1,95 @@
+"""ScreenRunRepository Protocol — DB 추상화 (T13 후 SQLAlchemy 구현체 합류).
+
+T26 (`/api/screen`) / T40 (Save Run 버튼) 의 contract. 본 사이클은 Protocol 만
+정의 + in-memory Fake 제공 (oracle 자문 결정 6).
+
+PIT-aware Repository (pit_protocols.py) 와 달리 Screen Run 은 자기 자체가 freeze
+단위 — 임의 시점 조회 가능. method 시그니처에 `as_of` 없음.
+"""
+
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Protocol, Sequence, runtime_checkable
+from uuid import UUID
+
+from app.services.screen_run import ScreenRunSnapshot
+
+__all__ = [
+    "FakeScreenRunRepository",
+    "ScreenRunNotFoundError",
+    "ScreenRunRepository",
+]
+
+
+class ScreenRunNotFoundError(Exception):
+    """`fetch_by_id` 의 not-found case — `None` 반환 vs raise 정책 선택은 호출자."""
+
+
+@runtime_checkable
+class ScreenRunRepository(Protocol):
+    """Screen Run 의 저장/조회 contract.
+
+    모든 method 가 `user_id` keyword required — M0 single-user 라도 type-level
+    enforcement (T31 합류 후 multi-user 안전).
+    """
+
+    def save(self, snapshot: ScreenRunSnapshot) -> None:
+        """snapshot 저장. id 중복 시 정책은 구현체 결정 (overwrite vs raise)."""
+        ...
+
+    def fetch_by_id(
+        self, run_id: UUID, *, user_id: UUID,
+    ) -> ScreenRunSnapshot | None:
+        """`run_id` 의 snapshot. `user_id` 가 owner 가 아니면 None.
+
+        Note: M0 single-user 라도 type-level user_id 검사 강제 — T31 합류 후
+        다른 사용자의 Run 누출 차단.
+        """
+        ...
+
+    def fetch_recent(
+        self, *, user_id: UUID, limit: int = 20,
+    ) -> Sequence[ScreenRunSnapshot]:
+        """`user_id` 의 최근 Run — `computed_at` 내림차순. 최대 `limit` 개."""
+        ...
+
+
+class FakeScreenRunRepository(ScreenRunRepository):
+    """In-memory Fake — T26/T40 의 contract test + 단위 테스트.
+
+    SQLAlchemy 구현체 (T13 후) 와 동일 시나리오 통과 강제. M0 의 reference
+    implementation.
+    """
+
+    def __init__(self) -> None:
+        self._by_id: dict[UUID, ScreenRunSnapshot] = {}
+        self._by_user: dict[UUID, list[ScreenRunSnapshot]] = defaultdict(list)
+
+    def save(self, snapshot: ScreenRunSnapshot) -> None:
+        # M0 정책: overwrite 허용 (id 충돌 시 새 값). 운영 시 SQLAlchemy 의
+        # UNIQUE constraint 가 처리. Fake 는 단순.
+        self._by_id[snapshot.id] = snapshot
+        # by_user index 갱신.
+        bucket = self._by_user[snapshot.user_id]
+        # 중복 id 제거 후 append (overwrite 의미 보존).
+        bucket[:] = [s for s in bucket if s.id != snapshot.id]
+        bucket.append(snapshot)
+
+    def fetch_by_id(
+        self, run_id: UUID, *, user_id: UUID,
+    ) -> ScreenRunSnapshot | None:
+        snap = self._by_id.get(run_id)
+        if snap is None or snap.user_id != user_id:
+            return None
+        return snap
+
+    def fetch_recent(
+        self, *, user_id: UUID, limit: int = 20,
+    ) -> Sequence[ScreenRunSnapshot]:
+        if limit < 0:
+            raise ValueError(f"limit must be >= 0, got {limit}")
+        bucket = self._by_user.get(user_id, [])
+        # computed_at 내림차순 정렬, 최대 limit.
+        sorted_runs = sorted(bucket, key=lambda s: s.computed_at, reverse=True)
+        return tuple(sorted_runs[:limit])

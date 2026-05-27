@@ -28,7 +28,6 @@ RFC 8785 JCS 구현 노트:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -38,6 +37,7 @@ from typing import Any, Final
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
+from app.services._jcs import canonicalize_jcs, compute_content_hash
 from app.services.forbidden_words import CheckScope, assert_clean
 
 # =============================================================================
@@ -119,49 +119,16 @@ _VALIDATOR: Final[Draft202012Validator] = Draft202012Validator(_SCHEMA)
 
 
 # =============================================================================
-# RFC 8785 JCS — JSON Canonicalization Scheme (subset)
+# RFC 8785 JCS — `_jcs` util 로 이관 (T30 의 공유 정리).
+# 운영 backwards compat 을 위해 `canonicalize_jcs` 를 본 모듈에서도 re-export.
 # =============================================================================
 
-def canonicalize_jcs(value: Any) -> bytes:
-    """RFC 8785 JCS 정규화 후 UTF-8 bytes 반환.
-
-    JCS 의 핵심 규칙:
-    - object 의 키는 UTF-16 code unit 순서로 정렬.
-    - 모든 공백 제거 (separators=(',', ':')).
-    - 문자열은 JSON minimal escape.
-    - 숫자는 IEEE 754 double → "shortest" 형식 (JavaScript Number.prototype.toString).
-    - ensure_ascii=False — non-ASCII 그대로.
-
-    한계 — 본 구현은 JCS subset:
-    - 키 정렬은 Python `sorted()` 사용 (codepoint = UTF-16 codepoint for BMP 문자).
-      대부분의 한국어·영어 키에서 결과 동일. 비-BMP supplementary characters 는
-      차이 발생 가능. Speculum 의 key 는 ASCII 만 사용 (`canonical_id`,
-      `formula` 등) → 안전.
-    - 숫자 canonicalization 은 Python `json.dumps` default. integer 와 short
-      decimal 은 RFC 8785 와 일치. 매우 작은 / 큰 float (지수 표기) 는 차이 가능.
-      Speculum 의 factor pack 은 numeric 가 거의 없음 → 영향 미미.
-
-    cross-runtime 검증은 별도 fixture corpus + Node 측 `canonicalize` 라이브러리
-    비교 (다음 사이클의 CI step).
-    """
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
-
-
 def compute_pack_hash(body: dict[str, Any]) -> str:
-    """`content_hash` 필드 제외 후 JCS + SHA-256.
+    """`content_hash` 필드 제외 후 JCS + SHA-256. `_jcs.compute_content_hash` 의 alias.
 
     반환 형식: "sha256:<hex>".
     """
-    without_hash = {k: v for k, v in body.items() if k != _HASH_FIELD}
-    canonical = canonicalize_jcs(without_hash)
-    digest = hashlib.sha256(canonical).hexdigest()
-    return f"sha256:{digest}"
+    return compute_content_hash(body, exclude_key=_HASH_FIELD)
 
 
 # =============================================================================
@@ -311,6 +278,18 @@ def load_builtin_pack(version: str = "1.0.0") -> LoadedPack:
     """
     path = _BUILTIN_DIR / f"speculum-builtin-v{version}.json"
     return load_pack(path)
+
+
+# =============================================================================
+# Module-level default pack — krx_calendar.DEFAULT_CALENDAR 패턴과 일관
+# =============================================================================
+#
+# M0 single-pack 가정: 운영 시 본 builtin pack 만 active. M2 community pack
+# 진입 시 `PackRegistry` 도입 + 본 singleton 의미 재정의 (oracle T30 자문 결정 8).
+# snapshot_versions.py 가 본 singleton 의 content_hash / pack_slug / version 참조.
+
+DEFAULT_PACK: Final[LoadedPack] = load_builtin_pack("1.0.0")
+"""M0 빌트인 pack — module import 시 1 회 로드. snapshot_versions 의 active pack."""
 
 
 # =============================================================================

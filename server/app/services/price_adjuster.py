@@ -43,7 +43,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
@@ -51,6 +50,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Final, Literal, Mapping, Sequence
 
 from app.repositories.pit_protocols import CorporateActionRecord, PriceRecord
+from app.services._jcs import canonicalize_jcs as _canonicalize_jcs_shared
 from app.services.as_of_policy import PIT_POLICY_VERSION
 from app.services.pit_enforcer import PITEnforcer
 
@@ -398,18 +398,8 @@ def _require_decimal(value: Any, *, action_id: Any, field_name: str) -> Decimal:
 # =============================================================================
 
 def _canonicalize_jcs(value: Any) -> bytes:
-    """RFC 8785 JCS subset — factor_pack / krx_calendar 와 동일.
-
-    별도 util 모듈 추출은 후속 사이클 (3 번째 inline 복제 — drift risk 증가는
-    cross-module test 로 회귀 보호).
-    """
-    return json.dumps(
-        value,
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
+    """`_jcs.canonicalize_jcs` 의 backwards-compat alias (T30 의 공유 정리)."""
+    return _canonicalize_jcs_shared(value)
 
 
 def _build_policy_body() -> dict:
