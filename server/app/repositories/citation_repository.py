@@ -1,4 +1,4 @@
-"""Citation Repository Protocol + Fake — `pit_protocols.py` 와 결 일관.
+"""Citation Repository Protocol + Fake + SQL — `pit_protocols.py` 와 결 일관.
 
 `SourceCitation` 모델은 `app/models/` 의 도메인 entity. Repository (DB 추상화)
 와 Fake (test/in-memory infrastructure) 는 본 `app/repositories/` layer.
@@ -6,7 +6,7 @@
 oracle 2 차 리뷰 M4 — `app/models/` 가 운영 도메인 entity 만 보유, Repository
 는 본 layer 로 분리하여 `pit_protocols.py` 와 동일 패턴 유지.
 
-T13 SQLAlchemy 합류 후 `SqlCitationRepository` 가 본 layer 에 추가됨.
+T13 합류 — `SqlCitationRepository` 추가 (SQLAlchemy 2 sync session).
 """
 
 from __future__ import annotations
@@ -14,11 +14,20 @@ from __future__ import annotations
 from typing import Protocol, Sequence, runtime_checkable
 from uuid import UUID
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.converters import (
+    citation_orm_to_record,
+    citation_record_to_orm,
+)
+from app.db.orm.source_citations import SourceCitationORM
 from app.models.source_citation import SourceCitation, SourceCitationError
 
 __all__ = [
     "CitationRepository",
     "FakeCitationRepository",
+    "SqlCitationRepository",
 ]
 
 
@@ -69,3 +78,46 @@ class FakeCitationRepository(CitationRepository):
             self._by_batch.get(batch_id, []),
             key=lambda c: (c.created_at, str(c.id)),
         ))
+
+
+class SqlCitationRepository(CitationRepository):
+    """SQLAlchemy 기반 citation store — T13 합류.
+
+    append-only invariant 강제:
+        - SQLAlchemy session 의 add/flush 로 INSERT 만 사용.
+        - 같은 id 의 row 가 이미 있으면 `SourceCitationError` raise (DB UNIQUE
+          constraint 위반 → IntegrityError 를 변환).
+        - DB layer 의 BEFORE UPDATE trigger 가 UPDATE 차단 (PostgreSQL 한정,
+          alembic 0001 migration). SQLite (test) 는 본 layer 의 id 중복 검사가
+          유일 방어.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def save(self, citation: SourceCitation) -> None:
+        # id 중복 사전 검사 — DB IntegrityError 보다 명확한 SourceCitationError.
+        existing = self._session.get(SourceCitationORM, citation.id)
+        if existing is not None:
+            raise SourceCitationError(
+                f"citation with id {citation.id} already exists "
+                f"(append-only invariant)"
+            )
+        self._session.add(citation_record_to_orm(citation))
+        self._session.flush()
+
+    def fetch_by_id(self, citation_id: UUID) -> SourceCitation | None:
+        orm = self._session.get(SourceCitationORM, citation_id)
+        return citation_orm_to_record(orm) if orm is not None else None
+
+    def fetch_by_batch(self, batch_id: UUID) -> Sequence[SourceCitation]:
+        stmt = (
+            select(SourceCitationORM)
+            .where(SourceCitationORM.batch_id == batch_id)
+            .order_by(
+                SourceCitationORM.created_at.asc(),
+                SourceCitationORM.id.asc(),
+            )
+        )
+        result = self._session.execute(stmt)
+        return tuple(citation_orm_to_record(o) for o in result.scalars().all())

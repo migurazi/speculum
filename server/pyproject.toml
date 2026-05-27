@@ -10,6 +10,25 @@ dependencies = [
   # Windows 환경에서 ZoneInfo("Asia/Seoul") 가 시스템 tzdb 없이 작동하도록.
   # Linux/Mac 은 OS tzdb 사용. Production 배포가 Linux Docker 면 stub 으로 무해.
   "tzdata>=2024.1; sys_platform == 'win32'",
+  # T13 — PostgreSQL 16 (운영) + SQLite (단위 테스트 + 로컬 dev 옵션).
+  # SQLAlchemy 2.x sync ORM + Alembic migration.
+  #
+  # **sync repo 결정** (T13 결정): 기존 Repository Protocol (`pit_protocols.py`
+  # 등) 이 모두 sync `def` 시그니처 — Fake 와 Protocol 변경 없이 SQL 구현체를
+  # 드롭인. M0 single-user staging 에서 event loop block 은 허용 가능 trade-off.
+  # M1+ 멀티-사용자 진입 시 async repo 전환을 단일 cycle 로 분리 (ARCHITECTURE.md
+  # §3.1 의 "(Async)" 표기는 M1+ 의 의도 — 본 cycle 은 M0 scope).
+  #
+  # psycopg[binary] = sync PG driver (SQLAlchemy 2 호환). M0 의 일배치도 sync.
+  "sqlalchemy>=2.0,<3.0",
+  "alembic>=1.13,<2.0",
+  "psycopg[binary]>=3.1,<4.0",
+]
+
+[project.optional-dependencies]
+# 단위 테스트. 운영 image 에는 포함 X.
+test = [
+  "pytest>=8.0,<9.0",
 ]
 
 [tool.pytest.ini_options]
