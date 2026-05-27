@@ -36,3 +36,24 @@ def get_environment() -> Environment:
     except ValueError:
         # 알 수 없는 값 — 안전한 DEV 로 fallback.
         return Environment.DEV
+
+
+def get_database_url() -> str | None:
+    """`SPECULUM_DATABASE_URL` 환경변수 — T13 wiring 의 SQL/Fake 자동 선택 키.
+
+    설정값:
+        - `postgresql+psycopg://user:pass@host:port/dbname` — 운영 PostgreSQL.
+        - `sqlite:///path/to.sqlite` — 로컬 dev / single-machine.
+        - `sqlite:///:memory:` — integration test (in-memory).
+        - **None / 빈 문자열** — Fake repository 모드 (M0 default, T13 wiring 전
+          과 같은 동작).
+
+    Returns:
+        URL 문자열 (truthy) 또는 None (Fake 모드).
+
+    Note:
+        URL scheme 검증은 본 함수가 하지 않음 — SQLAlchemy `create_engine` 이
+        invalid scheme 에서 raise. 본 함수는 단순 환경변수 read + trim.
+    """
+    raw = os.environ.get("SPECULUM_DATABASE_URL", "").strip()
+    return raw or None

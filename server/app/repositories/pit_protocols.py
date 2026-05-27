@@ -101,7 +101,11 @@ class FinancialRecord:
     code: str
     code_lineage_id: UUID
     effective_date: date
-    fiscal_period: str  # "2024Q1", "2024-FY" 등
+    # fiscal_period: T19 DART 일배치 표준 = `f"{year}Q{quarter}"` (예: "2024Q1",
+    # "2024Q2", "2024Q3", "2024Q4"). Q4 = DART 사업보고서 (연간). oracle T19 M2
+    # — ADR-0002 D5 예시의 "2024-FY" 는 의미상 alias 이나 운영 코드는 QN 포맷
+    # 일관. service / API 가 다른 포맷 도입 시 silent mismatch — 별도 cycle 결정.
+    fiscal_period: str
     account: str  # "net_income_consolidated_ifrs"
     value: Decimal
     unit: str  # "krw", "ratio" 등
@@ -247,6 +251,18 @@ class PriceRepository(Protocol):
         """
         ...
 
+    def save_prices(self, records: Sequence[PriceRecord]) -> None:
+        """가격 row bulk insert — T18 KRX 일배치 합류.
+
+        Invariant:
+            - 같은 `(code, effective_date)` 의 중복 insert 는 구현체 정책 (SQL
+              은 UNIQUE constraint raise, Fake 는 overwrite). 호출자 책임으로
+              dedup 권장.
+            - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼 있어야
+              FK 만족. T18 orchestrator 가 citation → price 순서 강제.
+        """
+        ...
+
 
 @runtime_checkable
 class FinancialRepository(Protocol):
@@ -265,6 +281,19 @@ class FinancialRepository(Protocol):
         구현체는 supersede chain 을 as_of-time 기준으로 해소 — `PITEnforcer.
         latest_active_record` 의 의미론을 구현체가 가져가거나, 호출 후 PITEnforcer
         에 위임 가능. Protocol 은 시그니처만 강제.
+        """
+        ...
+
+    def save_financials(self, records: Sequence[FinancialRecord]) -> None:
+        """재무제표 row bulk insert — T19 DART 일배치 합류.
+
+        Invariant:
+            - 정정공시 시 호출자가 `superseded_by` 를 옛 row.id 로 설정. 본 메서드는
+              그 의미를 강제하지 않음 (data integrity 는 호출자 + DB CHECK).
+            - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼 있어야
+              FK 만족. T19 orchestrator 가 citation → financial 순서.
+            - SQL 구현체는 같은 id 중복 시 IntegrityError (id 는 PK). Fake 는
+              overwrite (단순화).
         """
         ...
 

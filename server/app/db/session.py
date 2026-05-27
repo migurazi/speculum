@@ -51,15 +51,16 @@ def create_engine_from_url(
     pool_size: int = 5,
     max_overflow: int = 10,
 ) -> Engine:
-    """Sync engine factory.
+    """Sync engine factory — dialect-aware pool args.
 
     Args:
         url: SQLAlchemy DSN — `postgresql+psycopg://user:pass@host:port/db` 또는
-            `sqlite:///:memory:`. SQLite in-memory + 다중 connection share 가
-            필요한 테스트는 호출자가 `StaticPool` 명시 (본 factory 는 default).
+            `sqlite:///:memory:`. SQLite 는 connection-per-thread 모델이라 pool
+            args (pool_size/max_overflow) 가 default pool class 와 호환되지
+            않음 → 본 factory 가 자동 분기.
         echo: SQL 로그 노출 — dev 디버깅용. PROD 는 False.
-        pool_size: connection pool base size. SQLite in-memory 는 무시.
-        max_overflow: pool 초과 시 임시 connection 허용 수.
+        pool_size: connection pool base size. SQLite 는 무시.
+        max_overflow: pool 초과 시 임시 connection 허용 수. SQLite 는 무시.
 
     Returns:
         Engine — lifespan 의 stop hook 에서 `engine.dispose()` 필수.
@@ -67,14 +68,18 @@ def create_engine_from_url(
     Note:
         SQLite in-memory `:memory:` 는 connection 별로 별도 DB. 같은 engine 의
         session 들이 공유하려면 conftest 에서 `poolclass=StaticPool` + `connect_
-        args={"check_same_thread": False}` 명시.
+        args={"check_same_thread": False}` 명시 (본 factory 는 default pool 사용).
     """
+    # SQLite 는 default SingletonThreadPool 사용 — pool_size/max_overflow 미지원.
+    # PostgreSQL 등 다른 dialect 는 QueuePool default — pool args 지원.
+    if url.startswith("sqlite"):
+        return create_engine(url, echo=echo, future=True)
     return create_engine(
         url,
         echo=echo,
         pool_size=pool_size,
         max_overflow=max_overflow,
-        future=True,  # SQLAlchemy 2 의 2.0-style API enable (M0 default).
+        future=True,
     )
 
 

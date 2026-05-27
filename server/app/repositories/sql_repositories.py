@@ -40,7 +40,9 @@ from sqlalchemy.orm import Session
 from app.db.converters import (
     corporate_action_orm_to_record,
     financial_orm_to_record,
+    financial_record_to_orm,
     price_orm_to_record,
+    price_record_to_orm,
     stocks_master_orm_to_record,
 )
 from app.db.orm.corporate_actions import CorporateActionORM
@@ -101,6 +103,18 @@ class SqlPriceRepository(PriceRepository):
         result = self._session.execute(stmt)
         return tuple(price_orm_to_record(o) for o in result.scalars().all())
 
+    def save_prices(self, records: Sequence[PriceRecord]) -> None:
+        """T18 합류 — bulk insert. 같은 (code, date) PK 중복 시 IntegrityError.
+
+        호출자 (T18 KRX 일배치) 가 dedup 책임:
+            - 일배치 1 회 = 1 영업일 fetch → 중복 가능성 낮음.
+            - retry 시 같은 batch 의 부분 성공 후 다시 insert 면 IntegrityError.
+              상위 layer 가 처리 (현재 사이클 미구현 — backlog).
+        """
+        for r in records:
+            self._session.add(price_record_to_orm(r))
+        self._session.flush()
+
 
 # =============================================================================
 # Financial — 정정공시 chain 해소 (PITEnforcer 위임)
@@ -154,6 +168,20 @@ class SqlFinancialRepository(FinancialRepository):
             key=lambda r: (r.effective_date, r.fiscal_period, str(r.id)),
         )
         return tuple(sorted_periods[-max_periods:])
+
+    def save_financials(self, records: Sequence[FinancialRecord]) -> None:
+        """T19 합류 — bulk insert. 같은 id 중복 시 IntegrityError.
+
+        정정공시 처리는 호출자 책임:
+            - 옛 row 의 superseded_by 컬럼은 별도 UPDATE 가 아니라, 옛 row 를
+              fetch 후 `superseded_by=new_id` 의 새 row 로 다시 save_financials
+              (append-only 의미 위반). M0 단순화: 옛 row 의 superseded_by 는
+              호출자가 별도 ORM 업데이트로 처리 (T19 향후 cycle 또는 별도
+              update_superseded_by 메서드).
+        """
+        for r in records:
+            self._session.add(financial_record_to_orm(r))
+        self._session.flush()
 
 
 # =============================================================================
@@ -228,15 +256,20 @@ class SqlStocksMasterRepository(StocksMasterRepository):
         self, code: str, *, as_of: date,
     ) -> StockMasterRecord | None:
         # oracle 리뷰 M2 — 2-단계 fetch:
-        # 1) fast path: `current_code == code` 단일 row index lookup (운영
-        #    `/api/stocks/{code}` hot path 의 80%+ 케이스). 종목코드 변경은 드물고
-        #    대부분 current_code 매칭.
-        # 2) slow path: code_history JSON 의 옛 코드 매칭. 종목코드 변경 history
-        #    가 있는 lineage 만 전체 scan 진입.
-        fast_stmt = select(StocksMasterORM).where(
-            StocksMasterORM.current_code == code,
+        # 1) fast path: `current_code == code` index lookup (운영 hot path 80%+).
+        # 2) slow path: code_history JSON 의 옛 코드 매칭 (lineage 전체 scan).
+        #
+        # oracle 리뷰 C2 — `current_code` 에 UNIQUE 미강제 (ADR-0009 D7 재상장
+        # 등에서 같은 code 가 다른 lineage 의 current_code 역사 가질 수 있음).
+        # `scalar_one_or_none` 이 `MultipleResultsFound` raise 가능 → `.first()`
+        # + ORDER BY id 결정성 보강. Fake (`stocks_master_repository.py:130`)
+        # 의 `candidates[0]` 첫 매치 의미와 동등.
+        fast_stmt = (
+            select(StocksMasterORM)
+            .where(StocksMasterORM.current_code == code)
+            .order_by(StocksMasterORM.id.asc())
         )
-        fast_row = self._session.execute(fast_stmt).scalar_one_or_none()
+        fast_row = self._session.execute(fast_stmt).scalars().first()
         if fast_row is not None:
             return stocks_master_orm_to_record(fast_row)
 

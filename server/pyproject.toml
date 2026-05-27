@@ -23,6 +23,17 @@ dependencies = [
   "sqlalchemy>=2.0,<3.0",
   "alembic>=1.13,<2.0",
   "psycopg[binary]>=3.1,<4.0",
+  # T15 — Data Source Adapter (pykrx primary). pykrx 는 sync API + KRX 페이지
+  # 크롤링 + pandas DataFrame 반환. ADR-0003 D6 의 rate limit / circuit
+  # breaker 는 adapter 의 호출자 책임 (T18 일배치).
+  "pykrx>=1.0,<2.0",
+  "pandas>=2.0,<3.0",
+  # T14 — FDR adapter (verify 출처). pykrx 와 cross-check (ADR-0001 D3 /
+  # ADR-0003 D4). 외부 source (Yahoo / Naver) wrap 라 신뢰성은 pykrx 보다 낮음.
+  "finance-datareader>=0.9,<1.0",
+  # T16 — DART OpenAPI httpx client. FastAPI starlette 가 이미 의존하나 본
+  # 패키지의 직접 사용을 위해 명시 declare (semver pin 안정성).
+  "httpx>=0.27,<1.0",
 ]
 
 [project.optional-dependencies]

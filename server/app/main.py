@@ -1,7 +1,8 @@
 """Speculum FastAPI app — T24 bootstrap + dependency wiring.
 
 7 사이클의 standalone 도메인이 본 app 에서 합류. T25~T28 endpoint 는 별도
-사이클에서 router 로 추가.
+사이클에서 router 로 추가. T13 wiring 사이클에서 SQL repository auto-swap
++ engine lifespan 추가.
 
 현재 구성:
 - ForbiddenWordsGuardMiddleware — 모든 JSON 응답 검사 (ADR-0007 D4.4)
@@ -10,14 +11,20 @@
 - Exception handlers — domain 예외 → JSON + validation input sanitize
 - `/api/as_of` (정규화 결과) + `/api/policy-versions` (정책 freeze 집계)
 - `/healthz` — middleware skip 대상
+- **T13 wiring**: `SPECULUM_DATABASE_URL` env var 있을 때 SQL engine
+  lifespan + `app.state.db_sessionmaker` 등록. dependencies/repositories.py
+  의 factory 가 자동 swap.
 
 관련 ADR:
 - ADR-0007 D4.4 — middleware policy 별 응답 처리
 - ADR-0008 D6 — as_of API contract
+- ADR-0002 D5 / ADR-0009 D6 — DB schema (T13)
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Final
 
 from fastapi import FastAPI
@@ -29,6 +36,8 @@ from app.api.routes.screen import router as screen_router
 from app.api.routes.screener_sets import router as screener_sets_router
 from app.api.routes.stocks import router as stocks_router
 from app.api.routes.watchlists import router as watchlists_router
+from app.core.config import get_database_url
+from app.db.session import create_engine_from_url, create_sessionmaker
 from app.middleware.forbidden_words_guard import ForbiddenWordsGuardMiddleware
 from app.repositories.screen_run_repository import (
     FakeScreenRunRepository,
@@ -65,6 +74,7 @@ def create_app(
     runs_repository: ScreenRunRepository | None = None,
     watchlist_repository: WatchlistRepository | None = None,
     screener_set_repository: ScreenerSetRepository | None = None,
+    database_url: str | None = None,
 ) -> FastAPI:
     """FastAPI app 팩토리.
 
@@ -73,17 +83,61 @@ def create_app(
             **운영에서는 False (default)** — production binary 에 demo 가 살아
             있을 위험 차단 (oracle 자문 결정 7). 테스트 fixture 가 명시적
             True 주입.
-        stocks_repository: 종목 마스터 Repository 주입. None 이면 빈 Fake
-            (운영 의도 X — T13 SQLAlchemy 합류 후 본 인자가 실제 구현체).
-            테스트가 fixture 로 채운 Fake 를 주입.
+        stocks_repository: 종목 마스터 Repository 주입. None 이면 (1) SQL
+            wiring 활성 시 SqlStocksMasterRepository, (2) 비활성 시 빈 Fake.
+            테스트가 fixture 로 채운 Fake 를 주입 가능.
+        runs_repository: Screen Run snapshot repository — T13 Phase B 진행 전이
+            라 SQL 미지원. None 이면 FakeScreenRunRepository.
+        watchlist_repository: Watchlist CRUD repository — T13 Phase B 진행 전이
+            라 SQL 미지원. None 이면 FakeWatchlistRepository.
+        screener_set_repository: ScreenerSet CRUD — Phase B. None 이면 Fake.
+        database_url: SQL engine DSN. None 이면 `SPECULUM_DATABASE_URL` 환경변수
+            확인. 둘 다 None 이면 Fake-only mode (T13 wiring 비활성).
+            테스트가 명시적 in-memory URL 주입 가능.
 
     Returns:
-        FastAPI app — middleware + exception handlers + routes wired.
+        FastAPI app — middleware + exception handlers + routes + lifespan wired.
+
+    Note (T13 wiring):
+        SQL engine 은 lifespan startup 에서 생성, shutdown 에서 dispose. 명시적
+        `database_url` 주입이 환경변수보다 우선 — 테스트는 fixture 단계에서
+        DSN 지정 가능.
     """
+    # 효과적 DB URL — 명시 인자 > 환경변수 > None.
+    # oracle 리뷰 L2 — 빈 문자열도 None 으로 정규화 (명시 `database_url=""` 의도
+    # 가 SQLAlchemy create_engine 의 raise 로 이어지지 않도록).
+    explicit_url = (database_url or "").strip() or None
+    effective_db_url = explicit_url if explicit_url is not None else get_database_url()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # startup — DB URL 있으면 engine + sessionmaker 생성, app.state 등록.
+        if effective_db_url is not None:
+            engine = create_engine_from_url(effective_db_url)
+            app.state.db_engine = engine
+            app.state.db_sessionmaker = create_sessionmaker(engine)
+        else:
+            # Fake-only mode — 명시적 None marker (factory 가 분기).
+            app.state.db_engine = None
+            app.state.db_sessionmaker = None
+
+        try:
+            yield
+        finally:
+            # oracle 리뷰 M1 — shutdown 의 race 회피: state reset 제거.
+            # `engine.dispose()` 만 호출. dispose 된 engine 에서 새 session
+            # 생성 시 SQLAlchemy 가 명시 에러 raise → silent Fake fall-through
+            # 차단. in-flight request 의 outstanding session 은 dispose 가 그
+            # connection 만 idle 시 close.
+            engine = getattr(app.state, "db_engine", None)
+            if engine is not None:
+                engine.dispose()
+
     app = FastAPI(
         title="Speculum",
         description="한국 주식 시장 정량 데이터 탐색기 — 정보 제공 도구",
         version="0.1.0-dev",
+        lifespan=lifespan,
     )
 
     # ADR-0007 D4.4 의 강제 메커니즘 — 환경별 default policy 자동 적용.
@@ -93,10 +147,10 @@ def create_app(
         exclude_keys=_EXTERNAL_QUOTE_EXCLUDE_KEYS,
     )
 
-    # Repository 주입 — endpoint dependency 가 app.state 에서 fetch.
-    app.state.stocks_repo = (
-        stocks_repository or FakeStocksMasterRepository(records=())
-    )
+    # Repository 명시 주입 — endpoint dependency 가 app.state 에서 fetch.
+    # 명시 주입 우선, 미주입 시 factory 가 SQL/Fake auto-swap (T13 wiring).
+    # Phase B 미진행 도메인 (runs / watchlist / screener_set) 은 항상 Fake.
+    app.state.stocks_repo_override = stocks_repository
     app.state.runs_repo = runs_repository or FakeScreenRunRepository()
     app.state.watchlist_repo = watchlist_repository or FakeWatchlistRepository()
     app.state.screener_set_repo = (

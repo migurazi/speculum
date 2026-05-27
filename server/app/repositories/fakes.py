@@ -62,6 +62,26 @@ class FakePriceRepository(PriceRepository):
             if start <= r.effective_date <= as_of
         ]
 
+    def save_prices(self, records: Sequence[PriceRecord]) -> None:
+        """T18 합류 — bulk insert. 같은 (code, date) overwrite 의미 (Fake 정책).
+
+        SQL 구현체는 UNIQUE constraint 로 중복 raise — 호출자가 dedup 해야 함.
+        Fake 는 단순화: 같은 (code, effective_date) 가 있으면 새 record 로 교체.
+        """
+        for new_record in records:
+            bucket = self._by_code[new_record.code]
+            # 같은 (code, effective_date) 의 기존 record 제거 후 새로 삽입.
+            bucket[:] = [
+                r for r in bucket
+                if r.effective_date != new_record.effective_date
+            ]
+            bucket.append(new_record)
+        # 영향받은 code 만 재정렬.
+        for new_record in records:
+            self._by_code[new_record.code].sort(
+                key=lambda r: r.effective_date,
+            )
+
 
 class FakeFinancialRepository(FinancialRepository):
     """In-memory financial store + supersede chain 해소.
@@ -75,6 +95,18 @@ class FakeFinancialRepository(FinancialRepository):
         for r in records:
             self._by_code[r.code].append(r)
         self._enforcer = PITEnforcer()
+
+    def save_financials(self, records: Sequence[FinancialRecord]) -> None:
+        """T19 DART 일배치 합류 — bulk insert. 같은 id overwrite (Fake 단순화).
+
+        SQL 구현체는 PK 중복 시 IntegrityError — 호출자가 정정공시 시
+        superseded_by 만 지정 + 새 id 부여 의무.
+        """
+        for new_record in records:
+            bucket = self._by_code[new_record.code]
+            # 같은 id 가 있으면 제거 후 새로 삽입 (overwrite 의미).
+            bucket[:] = [r for r in bucket if r.id != new_record.id]
+            bucket.append(new_record)
 
     def fetch_financials(
         self,

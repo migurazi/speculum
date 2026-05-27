@@ -1,0 +1,109 @@
+"""dart_account_mapper — IFRS taxonomy ID → canonical account key.
+
+DART 공시의 재무제표는 K-IFRS taxonomy ID (e.g., `ifrs-full_Assets`) 로 발표.
+service / repository / factor evaluator 는 canonical key (e.g.,
+`total_assets`) 로 작동 — 본 mapper 가 정규화 layer.
+
+설계 결정:
+
+1. **빌트인 minimum viable mapping (~15 계정)** — M0 의 factor pack (ADR-0004
+   PER/PBR/ROE/PSR/부채비율) 산출에 필요한 핵심 계정. 운영 데이터 수집 후 확장.
+
+2. **미매핑 시 warning + identifier 보존** — silent drop 안 함. canonical key
+   는 `unmapped:<ifrs_id>` 형식 → service 가 알 수 있음.
+
+3. **dual variant (consolidated / separate)** — ADR-0005 의 multi-id 패턴.
+   같은 IFRS ID 가 sj_div (BS/IS/CF) 와 결합되어 canonical key 결정. 하지만
+   본 cycle MVP 는 IFRS ID 만 — ifrs_type 은 별도 컬럼.
+
+4. **immutable mapping dict** — `MappingProxyType` 로 read-only 보장.
+
+관련 ADR:
+- ADR-0003 D2 — canonical schema (account)
+- ADR-0004 — 시가총액·EPS·PER 산출 정의 (필요 계정)
+- ADR-0005 — K-IFRS 연결/별도 (ifrs_type 별도 차원)
+"""
+
+from __future__ import annotations
+
+from types import MappingProxyType
+from typing import Final, Mapping
+
+__all__ = [
+    "UNMAPPED_PREFIX",
+    "is_unmapped",
+    "map_ifrs_account",
+]
+
+
+# 미매핑 계정의 canonical key prefix. service 가 본 prefix 로 미매핑 식별.
+UNMAPPED_PREFIX: Final[str] = "unmapped:"
+
+
+# M0 minimum viable mapping — ADR-0004 의 PER/PBR/ROE/PSR/부채비율 산출에 필요한
+# 핵심 계정. K-IFRS Taxonomy 2022 기준.
+#
+# IFRS ID → canonical key:
+#   "ifrs-full_X" = K-IFRS 공식 taxonomy
+#   "dart_X"      = DART 자체 정의 (한국 추가 계정)
+_MAPPING: Final[Mapping[str, str]] = MappingProxyType({
+    # ===== 재무상태표 (Balance Sheet) =====
+    "ifrs-full_Assets": "total_assets",
+    "ifrs-full_CurrentAssets": "current_assets",
+    "ifrs-full_NoncurrentAssets": "noncurrent_assets",
+    "ifrs-full_Liabilities": "total_liabilities",
+    "ifrs-full_CurrentLiabilities": "current_liabilities",
+    "ifrs-full_NoncurrentLiabilities": "noncurrent_liabilities",
+    "ifrs-full_Equity": "total_equity",
+    # 지배기업 소유주 지분 (자기자본) — ROE 분모.
+    "ifrs-full_EquityAttributableToOwnersOfParent": "equity_attributable_to_owners",
+
+    # ===== 손익계산서 (Income Statement) =====
+    "ifrs-full_Revenue": "revenue",
+    # 영업이익.
+    "dart_OperatingIncomeLoss": "operating_income",
+    # 당기순이익.
+    "ifrs-full_ProfitLoss": "net_income",
+    # 지배기업 소유주 귀속 순이익 — EPS 분자.
+    "ifrs-full_ProfitLossAttributableToOwnersOfParent": "net_income_attributable_to_owners",
+
+    # ===== 주식 발행 정보 =====
+    # 기본주당이익 (EPS).
+    "ifrs-full_BasicEarningsLossPerShare": "basic_eps",
+    # 희석주당이익.
+    "ifrs-full_DilutedEarningsLossPerShare": "diluted_eps",
+
+    # ===== 현금흐름표 (Cash Flow) =====
+    "ifrs-full_CashFlowsFromUsedInOperatingActivities": "cash_flow_operating",
+    "ifrs-full_CashFlowsFromUsedInInvestingActivities": "cash_flow_investing",
+    "ifrs-full_CashFlowsFromUsedInFinancingActivities": "cash_flow_financing",
+})
+
+
+def map_ifrs_account(ifrs_account_id: str) -> str:
+    """IFRS taxonomy ID → canonical key.
+
+    Args:
+        ifrs_account_id: DART 응답의 account_id 컬럼 (예: "ifrs-full_Assets").
+
+    Returns:
+        canonical key (예: "total_assets"). 미매핑 시 `UNMAPPED_PREFIX +
+        ifrs_account_id` (예: "unmapped:ifrs-full_SomeRareAccount"). silent
+        drop 안 함 — service 가 미매핑 인식 가능.
+
+    Notes:
+        매핑되지 않은 계정도 DB 에 그대로 저장 → 운영 데이터 분석으로
+        매핑 확장 가능. 본 함수는 lookup only — DB write 의무 없음.
+    """
+    if not isinstance(ifrs_account_id, str) or not ifrs_account_id.strip():
+        # 빈 입력은 명시 unmapped — DART 응답 schema drift 의 fail-soft.
+        return f"{UNMAPPED_PREFIX}<empty>"
+    return _MAPPING.get(ifrs_account_id, f"{UNMAPPED_PREFIX}{ifrs_account_id}")
+
+
+def is_unmapped(canonical_key: str) -> bool:
+    """canonical key 가 미매핑 (`unmapped:...` prefix) 인지 검사.
+
+    service / factor evaluator 가 본 helper 로 미매핑 row skip / warning 분기.
+    """
+    return canonical_key.startswith(UNMAPPED_PREFIX)
