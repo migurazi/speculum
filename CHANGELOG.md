@@ -47,10 +47,46 @@ M0 v0.1.0 작업 중 — pre-release. 본 섹션은 release 시점에 `[0.1.0] -
   attribution / PIT bypass. GitHub Actions + GitLab CI mirror (T41).
 - **License** — MIT (코드). 데이터는 1차 자료 제공자 라이선스 따름
   ([ADR-0006 D5](docs/adr/adr-0006-legal-review.md)).
+- **Playwright E2E** — 16+5 tests (T42-A setup + T42-B 4 뷰 시나리오 +
+  /privacy /terms /disclaimer page sanity). chromium / ko-KR / Asia/Seoul.
+  CI workflow (`client-e2e.yml`) push/PR + nightly + workflow_dispatch.
+- **Backend integration tests** — `server/tests/integration/` — adapter
+  실 호출 smoke (pykrx/FDR/DART) + 일배치 e2e (SQLite + Fake adapter +
+  alert hook). nightly CI (`integration-nightly.yml`).
+- **일배치 dry-run + alert hook** — `KrxDailyBatch` / `DartDailyBatch`
+  에 `dry_run` 파라미터 + `BatchAlertHandler` Protocol (NullAlertHandler
+  / LoggingAlertHandler). conflict / failure / complete 3 이벤트 (T43-B).
+- **개인정보처리방침 + 이용약관 + 면책조항 페이지** — `/privacy`,
+  `/terms`, `/disclaimer` 세 페이지 신설 (1차 초안, 변호사 자문 ADR-0019
+  반영 release 전 갱신). DisclaimerFooter 실 link (T46 V2).
+- **ConsentModal v2** — 개인정보보호법 제22조 별도 동의 — 3 체크박스
+  (개인정보 / 국외 이전 / 만 14세 이상) 모두 체크 시 enable. localStorage
+  v2 key (v1 사용자 재동의 강제). useConsent JSON ConsentRecord (T46 V2).
+- **OSS infra 잔여** — SECURITY.md / CODE_OF_CONDUCT.md / TROUBLESHOOTING.md
+  (T44).
+- **CI 게이트 (5/5)** — i18n keys 게이트 외 4 종 + source attribution
+  file-system 가드. T42 의 `client-e2e.yml` 합류.
+- **개발 환경** — `docker-compose.yml` (Postgres 16 dev service +
+  optional Adminer profile) + `.env.example` (server + client 통합
+  template) (T0 잔여 완성).
+- **PriceRecord.trading_value 컬럼** — KRX 거래대금 영구화 schema 준비
+  (Alembic 0004). factor pack `volume-turnover:avg-20d` 의 입력 schema
+  준비 (T46 V3).
+
+### Changed
+
+- **DART effective_date 보수 정책** — 분기말 → 자본시장법 제160조 신고기한
+  (Q1~Q3 = +45일, Q4 = +90일). `_disclosure_deadline` 함수 + ADR-0012
+  신설. silent look-ahead bias 0 보장 (T46 V1, Momus M0 review V1).
+- **Forbidden words SoT** — `진입` 단독 제거 (phrase `진입 시점` /
+  `진입시점` 만 유지) — ADR-0013 신설 + ADR-0007 D9.2 어휘 제거 절차
+  준수 (T46 V4). ADR-0007 D4.1/D4.2 본문은 카테고리별 대표 예시 +
+  "전체 list 는 SoT (D4.6)" 명시 (T46 V5). `allowed_phrases` 보강
+  (`추천 위젯` / `종목 추천을 제공` / `alembic upgrade` 등 — T46 V15).
 
 ### Decided (ADR)
 
-12 개 ADR — `docs/adr/` 참조. 핵심:
+14 개 ADR — `docs/adr/` 참조. 핵심:
 
 - **ADR-0001** 가격 보정 정책 — raw + adjusted 양립.
 - **ADR-0002** Factor / Fact 데이터 모델 — multi-id ambiguous indicators
@@ -61,17 +97,30 @@ M0 v0.1.0 작업 중 — pre-release. 본 섹션은 release 시점에 `[0.1.0] -
 - **ADR-0008** As-of Date Picker 일급 — 모든 historical 쿼리가 as_of 통과.
 - **ADR-0009** Corporate Action — 이중 PIT (announced / effective).
 - **ADR-0011** Watchlist scope — 폴더 + 메모 + Save Run, 가격 알림 미포함.
+- **ADR-0012** (신규, T46 V1) DART effective_date 보수 정책 — 자본시장법
+  제160조 신고기한 (분기 +45일 / 사업 +90일).
+- **ADR-0013** (신규, T46 V4) Forbidden word `진입` 단독 제거 — phrase
+  `진입 시점` / `진입시점` 만 유지. ADR-0007 D9.2 절차 준수.
+
+### Conformance (T45 Momus review)
+
+- **라운드 1** (rev1) — REJECT (Critical 2 / High 4 / Medium 5 / Low 3).
+- **라운드 2** (rev2) — **OKAY (squash 가능)**. Critical 0 / High 0,
+  W1~W7 모두 Low/M1 backlog.
 
 ### Out of scope (M0 미진행 — M1+ 또는 별도 cycle)
 
-- 가격 차트 (lightweight-charts) — Stock Detail / Compare 의 phase B.
-- Factor 평가 pipeline (T18 evaluator) — backend 결과 codes 는 M0 fixture.
-- NextAuth Google OAuth 합류 (T31 잔여).
-- Playwright E2E (T42).
-- Backend integration test (T43).
-- T44 OSS infra 잔여 — SECURITY / CODE_OF_CONDUCT / TROUBLESHOOTING.
-- T41 i18n keys 게이트.
-- Momus conformance review (T45).
+- **가격 차트** (lightweight-charts) — Stock Detail / Compare 의 phase B.
+- **Factor 평가 pipeline** — FieldProvider wiring 합류 (`volume-turnover`
+  + 빌트인 ~30 factor evaluator 실 호출).
+- **NextAuth Google OAuth 합류** (T31 잔여) — M0 single-user SYSTEM_USER_ID.
+- **DART list.json fetch** — 정확한 rcept_dt (ADR-0012 D6).
+- **변호사 자문** (ADR-0019) + KRX 라이선스 답변 (ADR-0018) — release 전
+  의무 (AC-L-02).
+- **Corporate action batch 통합** — PriceAdjuster service 완성 (T20 ✅
+  done), batch (krx_daily) wiring 은 read-time vs write-time 정책 결정
+  필요.
+- **합병 / 분할 본격 보정** (ADR-0009 D7) — M0 detect-only.
 
 ---
 

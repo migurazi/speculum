@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Final
 
 from fastapi import FastAPI, status
@@ -31,12 +32,20 @@ from app.services.as_of_policy import (
     AsOfOutOfRangeError,
     AsOfPolicyError,
 )
+from app.services.forbidden_words import ForbiddenWordsAssertError
 
 # 응답 code 값 — 안정적 식별자. frontend 분기.
 _AS_OF_FUTURE: Final[str] = "AS_OF_IN_FUTURE"
 _AS_OF_OUT_OF_RANGE: Final[str] = "AS_OF_OUT_OF_RANGE"
 _AS_OF_GENERIC: Final[str] = "AS_OF_INVALID"
 _VALIDATION_GENERIC: Final[str] = "INVALID_REQUEST"
+_FORBIDDEN_INTERNAL: Final[str] = "FORBIDDEN_WORDS_GUARD_INTERNAL"
+
+# Server-side log channel — handler 가 어휘 echo 를 ERROR 레벨 emit.
+# response body 와 분리.
+_FORBIDDEN_LOG: Final[logging.Logger] = logging.getLogger(
+    "speculum.forbidden_words.assert",
+)
 
 
 def register_exception_handlers(app: FastAPI) -> None:
@@ -83,6 +92,36 @@ def register_exception_handlers(app: FastAPI) -> None:
             content={
                 "code": _AS_OF_GENERIC,
                 "detail": "as_of 입력이 정책에 위반됩니다.",
+            },
+        )
+
+    @app.exception_handler(ForbiddenWordsAssertError)
+    async def forbidden_words_handler(
+        request: Request, exc: ForbiddenWordsAssertError,
+    ) -> JSONResponse:
+        """Momus M0 review V12/W6 — `assert_clean` 의 ValueError 어휘 echo 차단.
+
+        `ForbiddenWordsAssertError` (ValueError sub-class) raise 시점에
+        message attr 가 server-side 로그용 어휘 echo 보존. 본 handler 가
+        그 어휘를 절대 response body 에 노출하지 않고, server log 만 emit
+        후 generic 500 응답 — middleware (ForbiddenWordsGuardMiddleware) 의
+        2 차 방어 의존 X (handler 가 1 차 차단).
+
+        ADR-0007 D4.4.2 의 "응답 본문 echo 0" 약속의 코드 수준 implementation.
+        """
+        # Server-side ERROR — 운영자가 root cause 추적용. response body 는
+        # 어휘 noun_echo. matches / scope / context 모두 log 한 줄로.
+        _FORBIDDEN_LOG.error(
+            "assert_clean raised: scope=%s context=%s matches=%s",
+            exc.scope.value,
+            exc.context or "(none)",
+            [(m.word, m.index) for m in exc.matches],
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "code": _FORBIDDEN_INTERNAL,
+                "detail": "서버 내부 오류 — 요청을 처리할 수 없습니다.",
             },
         )
 

@@ -58,6 +58,34 @@ class ForbiddenKind(Enum):
     EN_ABSOLUTE = "en-absolute"
 
 
+class ForbiddenWordsAssertError(ValueError):
+    """`assert_clean` 의 raise 전용 sub-class — Momus M0 review V12/W6.
+
+    기존 ValueError catch 와 backward compat (ValueError 상속) + FastAPI
+    exception handler 가 본 sub-class 만 명시 catch → generic 500 응답 + 어휘
+    echo 차단. ValueError 의 message attr 는 server-side 로그용 어휘 echo
+    유지, `.matches` / `.scope` / `.context` attribute 가 audit 용.
+
+    호출자 직접 catch 시 `except ValueError` 또는 `except
+    ForbiddenWordsAssertError` 모두 작동.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        matches: tuple[Match, ...],
+        scope: CheckScope,
+        context: str = "",
+    ) -> None:
+        super().__init__(message)
+        # server-side audit 용 — handler 가 본 attribute 로 generic 500 응답
+        # 생성 + 별도 log line 으로 detail 기록.
+        self.matches: Final[tuple[Match, ...]] = matches
+        self.scope: Final[CheckScope] = scope
+        self.context: Final[str] = context
+
+
 class CheckScope(Enum):
     """검사 scope — ADR-0007 D4.5 (oracle 리뷰 C3).
 
@@ -318,6 +346,13 @@ def assert_clean(
         # context 의 control character 제거 (log injection 방어).
         safe_context = re.sub(r"[\x00-\x1f]", "?", context) if context else ""
         suffix = f" [{safe_context}]" if safe_context else ""
-        raise ValueError(
-            f"Forbidden words detected{suffix} (scope={scope.value}): {details}"
+        # ForbiddenWordsAssertError (ValueError sub-class) raise — backward
+        # compat 보존 + FastAPI handler 가 본 type 만 명시 catch (Momus W6 fix).
+        # message 는 server-side log/alert 용 어휘 echo 보존, response body
+        # 차단은 handler 책임.
+        raise ForbiddenWordsAssertError(
+            f"Forbidden words detected{suffix} (scope={scope.value}): {details}",
+            matches=tuple(matches),
+            scope=scope,
+            context=safe_context,
         )

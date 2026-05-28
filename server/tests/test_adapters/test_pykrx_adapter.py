@@ -156,7 +156,10 @@ def test_fetch_ohlcv_citation_seven_tuple(monkeypatch: pytest.MonkeyPatch) -> No
     assert cit.batch_id == batch_id
     assert cit.effective_date == date(2024, 1, 2)
     assert "005930" in cit.identifier
-    assert cit.url is not None and "005930" in cit.url
+    # Momus M0 review W1 — KRX 종목 deep link 부재. citation url 은 None.
+    # FDR adapter 와 일관 — 추후 KRX OPEN API (ADR-0018 답변 후) 합류 시
+    # 정확한 deep link.
+    assert cit.url is None
     assert cit.retrieved_at.utcoffset() == fixed_now.utcoffset()
 
 

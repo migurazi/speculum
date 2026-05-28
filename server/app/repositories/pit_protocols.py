@@ -84,6 +84,11 @@ class PriceRecord:
     low_raw: Decimal
     close_raw: Decimal
     volume: int
+    # 거래대금 (원) — Momus M0 review V3 fix. factor pack 의
+    # `volume-turnover:avg-20d` 가 20 영업일 trading_value 평균 입력으로 사용.
+    # FieldProvider wiring (factor_evaluator 합류) 은 M1 backlog —
+    # 현 cycle 은 schema + batch 영구화 만.
+    trading_value: Decimal
     close_adjusted: Decimal  # ADR-0001
     citation_id: UUID  # ADR-0002 D3
     created_at: datetime
@@ -93,7 +98,12 @@ class PriceRecord:
 class FinancialRecord:
     """재무제표 단일 항목 (account 별 row).
 
-    ADR-0002 D3 — `effective_date` 는 공시 효력일 (DART rcept_dt 가 아닌 회계기간 등).
+    `effective_date` 의 의미 (ADR-0012 D7 명시):
+        - KRX 가격: trade_date (정확).
+        - DART 재무제표: 본 record 가 시장에 100% 가용해진 시점. M0 v0.1.0 은
+          자본시장법 제160조 신고기한 (Q1~Q3 = +45일, Q4 = +90일) 으로
+          보수 산출 (ADR-0012 D1). 실 rcept_dt 의 정확한 값은 `estimated_fields`
+          marker 보존 + M1+ DART list.json fetch 합류 시 갱신.
     정정공시 시 새 row + 옛 row 의 `superseded_by` = 새 row.id.
     """
 

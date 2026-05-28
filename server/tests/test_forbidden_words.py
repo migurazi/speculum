@@ -20,6 +20,7 @@ import pytest
 from app.services.forbidden_words import (
     CheckScope,
     ForbiddenKind,
+    ForbiddenWordsAssertError,
     assert_clean,
     normalize,
     scan_api_response,
@@ -209,6 +210,24 @@ def test_assert_clean_system_scope_strict() -> None:
     """SYSTEM scope — 가장 엄격."""
     with pytest.raises(ValueError):
         assert_clean("매수 추천 종목", scope=CheckScope.SYSTEM)
+
+
+def test_assert_clean_raises_forbidden_words_assert_error_subclass() -> None:
+    """ForbiddenWordsAssertError (ValueError sub-class) raise — Momus V12/W6 fix.
+
+    backward compat (ValueError catch 도 OK) + handler 가 본 sub-class 만
+    명시 catch → response body echo 차단.
+    """
+    with pytest.raises(ForbiddenWordsAssertError) as exc_info:
+        assert_clean("매수 추천 종목", scope=CheckScope.SYSTEM, context="test")
+    err = exc_info.value
+    # ValueError sub-class — 기존 catch path 호환.
+    assert isinstance(err, ValueError)
+    # audit attribute 보존.
+    assert err.scope == CheckScope.SYSTEM
+    assert err.context == "test"
+    assert len(err.matches) >= 1
+    assert all(m.word for m in err.matches)
 
 
 def test_assert_clean_user_private_skips_check() -> None:

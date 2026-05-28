@@ -23,11 +23,13 @@
 
 **Goal**: M0 진입 전 모든 H 우선순위 ADR 작성. 결정 없이 코드 작성하면 후일 깨짐.
 
-**Status (2026-05-22)**: **T1~T12 의 12 ADR 작성 완료**. T0 (scaffold) 만 남음.
+**Status (2026-05-28)**: **T0 + T1~T12 의 12 ADR + template 모두 작성 완료**.
+T0 scaffold = `client/` + `server/` + README (ko/en) + `docker-compose.yml`
+(Postgres 16 dev service) + `.env.example`.
 
 | T | 제목 | 산출물 | 의존 | Status |
 |---|---|---|---|---|
-| T0 | 프로젝트 scaffold (Next.js + FastAPI + Postgres + Docker compose) | `client/`, `server/`, `docker-compose.yml`, README.md 초안 | - | pending |
+| T0 | 프로젝트 scaffold (Next.js + FastAPI + Postgres + Docker compose) | `client/`, `server/`, `docker-compose.yml`, README.md 초안 | - | ✅ done (`docker-compose.yml` + `.env.example` 추가) |
 | T1 | ADR-0001 가격 보정 정책 | [`docs/adr/adr-0001-price-adjustment.md`](adr/adr-0001-price-adjustment.md) | - | ✅ ACCEPTED |
 | T2 | ADR-0002 Factor / Fact 데이터 모델 | [`docs/adr/adr-0002-factor-fact-model.md`](adr/adr-0002-factor-fact-model.md) | - | ✅ ACCEPTED |
 | T3 | ADR-0003 Data Source Adapter 패턴 | [`docs/adr/adr-0003-data-source-adapter.md`](adr/adr-0003-data-source-adapter.md) | T2 | ✅ ACCEPTED |
@@ -41,7 +43,7 @@
 | T11 | ADR-0011 Watchlist scope | [`docs/adr/adr-0011-watchlist-scope.md`](adr/adr-0011-watchlist-scope.md) | T6, T7, T8, T9, T10 | ✅ ACCEPTED |
 | T12 | Conformance review work-order 템플릿 | [`docs/work-orders/_template-conformance-review.md`](work-orders/_template-conformance-review.md) | - | ✅ DONE |
 
-→ **Phase 0 종료 = 12 ADR + 1 template + scaffold (T0 pending)**.
+→ **Phase 0 종료 = 12 ADR + 1 template + scaffold (T0 ✅ done — docker-compose + .env.example 합류)**.
 
 **M0 release 전 추가 검토 권장 ADR** (Phase 0 의 부산물):
 - ADR-0018 KRX 정보데이터시스템 라이선스 답변 반영 (krxdata@krx.co.kr 문의)
@@ -52,64 +54,64 @@
 
 **Goal**: 1 차 자료 파이프라인이 단단히 작동. ADR-002, ADR-003 구현.
 
-| T | 제목 | 산출물 | 의존 |
-|---|---|---|---|
-| T13 | PostgreSQL 16 schema 초안 (stocks_master, prices_daily, financials, corporate_actions, source_citations) | Alembic migration + ER 다이어그램 | T2, T9 |
-| T14 | Source Adapter 인터페이스 + 구현 — FDR | `server/app/adapters/fdr_adapter.py` + tests | T3, T13 |
-| T15 | Source Adapter 구현 — pykrx | `server/app/adapters/pykrx_adapter.py` + tests | T3, T13 |
-| T16 | Source Adapter 구현 — DART OpenAPI (재무제표 XBRL/HTML 파싱) | `server/app/adapters/dart_adapter.py` + dart_account_mapper + tests | T3, T13 |
-| T17 | KRX 영업일 캘린더 entity + 휴장일·반장 처리 | `server/app/services/krx_calendar.py` + tests | T13 |
-| T18 | 일배치 — KRX 16:30 KST (가격·시가총액·거래량·종목 마스터 변경 감지) | `server/batch/krx_daily.py` + Sentry alert | T14, T15, T17 |
-| T19 | 일배치 — DART 03:00 KST (재무제표 + corporate action 공시) | `server/batch/dart_daily.py` + rate limit 정책 | T16, T17 |
-| T20 | Corporate Action 보정 엔진 (액면분할·무상증자·유상증자·합병·분할·자사주) | `server/app/services/corporate_action.py` + tests | T9, T18, T19 |
-| T21 | PIT Enforcer service (모든 historical 쿼리에 as_of 강제) | `server/app/services/pit_enforcer.py` + tests + repository 통합 | T13, T20 |
-| T22 | Factor Definition 엔티티 + ~30 빌트인 factor pack JSON | `server/builtin-packs/factors/v1.0.json` + 산출식 모듈 | T2, T4, T5, T21 |
-| T23 | Source Citation 의무 필드 강제 (모든 fact 가 citation 보유) | `server/app/models/source_citation.py` + 빌드 게이트 | T13, T22 |
+| T | 제목 | 산출물 | 의존 | Status |
+|---|---|---|---|---|
+| T13 | PostgreSQL 16 schema 초안 (stocks_master, prices_daily, financials, corporate_actions, source_citations) | Alembic migration + ER 다이어그램 | T2, T9 | ✅ done |
+| T14 | Source Adapter 인터페이스 + 구현 — FDR | `server/app/adapters/fdr_adapter.py` + tests | T3, T13 | ✅ done |
+| T15 | Source Adapter 구현 — pykrx | `server/app/adapters/pykrx_adapter.py` + tests | T3, T13 | ✅ done |
+| T16 | Source Adapter 구현 — DART OpenAPI (재무제표 XBRL/HTML 파싱) | `server/app/adapters/dart_adapter.py` + dart_account_mapper + tests | T3, T13 | ✅ done |
+| T17 | KRX 영업일 캘린더 entity + 휴장일·반장 처리 | `server/app/services/krx_calendar.py` + tests | T13 | ✅ done (v1.0 = 2024 단년 verified, T17.1 확장 backlog) |
+| T18 | 일배치 — KRX 16:30 KST (가격·시가총액·거래량·종목 마스터 변경 감지) | `server/batch/krx_daily.py` + Sentry alert | T14, T15, T17 | ✅ done (SAVEPOINT rollback + ConflictDetector, scheduler 미통합) |
+| T19 | 일배치 — DART 03:00 KST (재무제표 + corporate action 공시) | `server/batch/dart_daily.py` + rate limit 정책 | T16, T17 | ✅ done (회사별 SAVEPOINT, scheduler 미통합) |
+| T20 | Corporate Action 보정 엔진 (액면분할·무상증자·유상증자·합병·분할·자사주) | `server/app/services/price_adjuster.py` + tests | T9, T18, T19 | ✅ done (PriceAdjuster service + 41 단위 test, ADR-0009 D2 13 action_type 매트릭스. T18 batch 통합은 별도 cycle — read-time vs write-time 보정 정책 결정 필요) |
+| T21 | PIT Enforcer service (모든 historical 쿼리에 as_of 강제) | `server/app/services/pit_enforcer.py` + tests + repository 통합 | T13, T20 | ✅ done |
+| T22 | Factor Definition 엔티티 + ~30 빌트인 factor pack JSON | `server/builtin-packs/factors/v1.0.json` + 산출식 모듈 | T2, T4, T5, T21 | ✅ done (`speculum-builtin-v1.0.0.json`) |
+| T23 | Source Citation 의무 필드 강제 (모든 fact 가 citation 보유) | `server/app/models/source_citation.py` + 빌드 게이트 | T13, T22 | ✅ done |
 
 ### Phase 2 — Backend API
 
 **Goal**: 4 뷰가 호출할 API endpoint. ADR-007, ADR-008 구현.
 
-| T | 제목 | 산출물 | 의존 |
-|---|---|---|---|
-| T24 | FastAPI app 부트스트랩 + 인증 미들웨어 (NextAuth JWT 검증) | `server/app/main.py` + auth middleware + tests | T13 |
-| T25 | `/api/stocks/search` + `/api/stocks/{code}` | router + service + tests | T22, T23 |
-| T26 | `/api/screen` (조건 빌더 입력 + as_of + 결과) | router + service + Screen Run schema 자리 | T22, T8 |
-| T27 | `/api/compare` (2~6 종목 multi-fetch) | router + tests | T25 |
-| T28 | `/api/watchlist` CRUD + `/api/screener_sets` CRUD | router + repository + tests | T13, T24, T11 |
-| T29 | 금지 어휘 검사 — request/response 모두 (8 기둥 §2.2) | `server/app/services/forbidden_words.py` + CI 게이트 | T24 |
-| T30 | Screen Run snapshot DB schema (자리만, M0 본격 X) | `server/app/models/screen_run.py` + nullable | T13, §2.10 |
+| T | 제목 | 산출물 | 의존 | Status |
+|---|---|---|---|---|
+| T24 | FastAPI app 부트스트랩 + 인증 미들웨어 (NextAuth JWT 검증) | `server/app/main.py` + auth middleware + tests | T13 | ✅ done |
+| T25 | `/api/stocks/search` + `/api/stocks/{code}` | router + service + tests | T22, T23 | ✅ done |
+| T26 | `/api/screen` (조건 빌더 입력 + as_of + 결과) | router + service + Screen Run schema 자리 | T22, T8 | ✅ done |
+| T27 | `/api/compare` (2~6 종목 multi-fetch) | router + tests | T25 | ✅ done (compare 는 `/api/stocks` multi-fetch 로 client 합성, 별도 endpoint X) |
+| T28 | `/api/watchlist` CRUD + `/api/screener_sets` CRUD | router + repository + tests | T13, T24, T11 | ✅ done |
+| T29 | 금지 어휘 검사 — request/response 모두 (8 기둥 §2.2) | `server/app/services/forbidden_words.py` + CI 게이트 | T24 | ✅ done |
+| T30 | Screen Run snapshot DB schema (자리만, M0 본격 X) | `server/app/models/screen_run.py` + nullable | T13, §2.10 | ✅ done (ORM + Alembic 0003 + `/api/runs`) |
 
 ### Phase 3 — Frontend MVP 4 뷰
 
 **Goal**: 4 뷰가 작동. ADR-010 홈 화면 결정 반영.
 
-| T | 제목 | 산출물 | 의존 |
-|---|---|---|---|
-| T31 | Next.js scaffold + Tailwind + shadcn/ui + NextAuth Google | `client/app/`, `client/lib/`, `client/components/ui/` | T0 |
-| T32 | 동의 모달 + footer disclaimer + 금지 어휘 ESLint rule | `client/components/disclaimers/` + `.eslintrc` | T6, T29 |
-| T33 | Source Attribution component (모든 값 옆 식·출처·기준일) | `client/components/SourceAttribution.tsx` + 빌드 게이트 | T23 |
-| T34 | As-of date picker (전역 가능, 일급 UI element) | `client/components/AsOfDatePicker.tsx` + 전역 store | T8 |
-| T35 | 홈 화면 — ADR-010 결정대로 | `client/app/(app)/page.tsx` | T10, T34 |
-| T36 | Screener 뷰 — 조건 빌더 + 결과 테이블 (TanStack Table 가상화) | `client/app/(app)/screener/` | T26, T33, T34 |
-| T37 | Stock Detail 뷰 — 지표 카드 + 가격 차트 (Lightweight Charts) + 재무 시계열 | `client/app/(app)/stock/[code]/` | T25, T33, T34 |
-| T38 | Compare 뷰 — 2~6 종목 그리드 + 차트 오버레이 | `client/app/(app)/compare/` | T27, T33 |
-| T39 | Watchlist 뷰 — 폴더 트리 + 메모 + Screen Run 저장 (ADR-011 정책 따름) | `client/app/(app)/watchlist/` | T28, T11 |
-| T40 | "Save Run" 버튼 — Screen Run snapshot 생성 (§2.10) | `client/components/SaveRunButton.tsx` + `/api/runs` | T30 |
+| T | 제목 | 산출물 | 의존 | Status |
+|---|---|---|---|---|
+| T31 | Next.js scaffold + Tailwind + shadcn/ui + NextAuth Google | `client/app/`, `client/lib/`, `client/components/ui/` | T0 | ✅ done (shadcn/ui 미도입, Tailwind primitives 직접) |
+| T32 | 동의 모달 + footer disclaimer + 금지 어휘 ESLint rule | `client/components/disclaimers/` + `.eslintrc` | T6, T29 | ✅ done (ESLint rule 은 backend CI 게이트로 대체) |
+| T33 | Source Attribution component (모든 값 옆 식·출처·기준일) | `client/components/SourceAttribution.tsx` + 빌드 게이트 | T23 | ✅ done |
+| T34 | As-of date picker (전역 가능, 일급 UI element) | `client/components/AsOfDatePicker.tsx` + 전역 store | T8 | ✅ done |
+| T35 | 홈 화면 — ADR-010 결정대로 | `client/app/(app)/page.tsx` | T10, T34 | ✅ done |
+| T36 | Screener 뷰 — 조건 빌더 + 결과 테이블 (TanStack Table 가상화) | `client/app/(app)/screener/` | T26, T33, T34 | ✅ done (가상화는 M0 scope 외, plain table) |
+| T37 | Stock Detail 뷰 — 지표 카드 + 가격 차트 (Lightweight Charts) + 재무 시계열 | `client/app/(app)/stock/[code]/` | T25, T33, T34 | ✅ done (Lightweight Charts 는 M0 scope 외, MetricCard + CodeHistory) |
+| T38 | Compare 뷰 — 2~6 종목 그리드 + 차트 오버레이 | `client/app/(app)/compare/` | T27, T33 | ✅ done (차트 오버레이 backlog) |
+| T39 | Watchlist 뷰 — 폴더 트리 + 메모 + Screen Run 저장 (ADR-011 정책 따름) | `client/app/(app)/watchlist/` | T28, T11 | ✅ done |
+| T40 | "Save Run" 버튼 — Screen Run snapshot 생성 (§2.10) | `client/components/SaveRunButton.tsx` + `/api/runs` | T30 | ✅ done (+ Recent Runs page) |
 
 ### Phase 4 — Polish + Conformance + Release
 
 **Goal**: 8+2 기둥 conformance 검토. 릴리즈 무결성.
 
-| T | 제목 | 산출물 | 의존 |
-|---|---|---|---|
-| T41 | CI 게이트 — 5 종 (forbidden words, source attribution, disclaimer coverage, PIT bypass, i18n keys) | `.github/workflows/` 또는 `.gitlab-ci.yml` | T29, T32, T33 |
-| T42 | E2E tests (Playwright) — 4 뷰 기본 시나리오 + 동의 모달 | `client/tests/e2e/` | T36~T40 |
-| T43 | 백엔드 통합 테스트 — 일배치 dry-run + adapter 충돌 시 alert | `server/tests/integration/` | T18, T19, T22 |
-| T44 | OSS infra — README (ko + en) / LICENSE / CHANGELOG / RELEASE_NOTES / CONTRIBUTING / SECURITY / CODE_OF_CONDUCT / TROUBLESHOOTING | repo 루트 | - |
-| T45 | M0 conformance review — KRX / K-IFRS / DART / 자본시장법 (Momus 의뢰) | `docs/work-orders/m0-conformance-review.md` | T1~T40 완료 |
-| T46 | Conformance review 결과 반영 (필요 시 fix) | TBD | T45 |
-| T47 | Squash merge to develop + tag v0.1.0 + RELEASE_NOTES | - | T46 |
+| T | 제목 | 산출물 | 의존 | Status |
+|---|---|---|---|---|
+| T41 | CI 게이트 — 5 종 (forbidden words, source attribution, disclaimer coverage, PIT bypass, i18n keys) | `.github/workflows/` 또는 `.gitlab-ci.yml` | T29, T32, T33 | ✅ done (i18n keys 는 M1+, 나머지 4 종 + source-attribution file-system) |
+| T42 | E2E tests (Playwright) — 4 뷰 기본 시나리오 + 동의 모달 | `client/tests/e2e/` | T36~T40 | ✅ done — 21 tests (A: setup + consent + home / B: 4 뷰 시나리오 + privacy/terms/disclaimer page sanity). chromium / ko-KR / Asia/Seoul. CI `client-e2e.yml` |
+| T43 | 백엔드 통합 테스트 — 일배치 dry-run + adapter 충돌 시 alert | `server/tests/integration/` | T18, T19, T22 | ✅ done (A: adapter 실 호출 smoke + nightly CI / B: dry-run + BatchAlertHandler + DB e2e) |
+| T44 | OSS infra — README (ko + en) / LICENSE / CHANGELOG / RELEASE_NOTES / CONTRIBUTING / SECURITY / CODE_OF_CONDUCT / TROUBLESHOOTING | repo 루트 | - | ✅ done (RELEASE_NOTES 는 T47 시점 작성) |
+| T45 | M0 conformance review — KRX / K-IFRS / DART / 자본시장법 (Momus 의뢰) | `docs/work-orders/m0-conformance-review.md` | T1~T40 완료 | ✅ done — 라운드 1 REJECT → 라운드 2 **OKAY (squash 가능)**. [rev1](work-orders/m0-conformance-review-rev1.md) / [rev2](work-orders/m0-conformance-review-rev2.md) |
+| T46 | Conformance review 결과 반영 (필요 시 fix) | ADR-0012 + ADR-0013 + V2 페이지 + V3 schema + V15 SoT + rev2 후속 (W1/W4/W6/W7/V2 CI 가드) | T45 | ✅ done — Critical 2 (V1 DART PIT / V2 ConsentModal) + High 3 (V3/V4/V5) + Medium V15 / V2 잔존 CI 가드 + Low V12/W1/W4/W6/W7 fix. V6 (ADR-0018/0019/AC-L-02) 는 외부 자문 의존 — release blocker (T47 전, squash 와 분리) |
+| T47 | Squash merge to develop + tag v0.1.0 + RELEASE_NOTES | - | T46 | pending (T13~T44 squash 는 d7101ac 으로 1차 완료. 본 feature branch (m0-plan-status-update) 의 12 commits squash + tag 는 사용자 명시 동의 + release blocker V6 처리 후) |
 
 ---
 
@@ -225,7 +227,87 @@
 
 ---
 
-## 6. M1 진입 전 검증 사항 (M0 종료 후)
+## 6. T47 — Squash + tag v0.1.0 절차
+
+본 섹션은 T47 의 정확한 실행 절차 + release blocker checklist. squash 와
+release 가 분리됨에 주의 — squash 는 Momus rev2 OKAY 후 즉시 가능, tag /
+publication 은 변호사 자문 (ADR-0019) 후.
+
+### 6.1 사전 조건 (T46 완료 검증)
+
+squash 진입 전 확인:
+
+- [x] Momus rev2 결론 = OKAY ([rev2 보고서](work-orders/m0-conformance-review-rev2.md))
+- [x] Critical 0 / High 0 (Momus rev2 §3 분류 요약)
+- [x] 모든 actionable Medium/Low 처리 (V12/V15/V2 CI 가드/W1/W4/W6/W7)
+- [x] server pytest 902+/902+ pass, ruff clean
+- [x] client lint + vitest 199/199 + E2E 21/21 pass
+- [x] check_forbidden_words.py 0 위반
+- [x] check_disclaimer_coverage.py 0 위반
+
+### 6.2 Squash 절차 (사용자 명시 동의 후)
+
+CLAUDE.md global 정책상 squash merge + push + branch 삭제는 **사용자 명시
+동의 의무**.
+
+```bash
+# 1. 동기화 — origin develop 의 새 commit 확인.
+git fetch origin
+git checkout develop && git pull --ff-only
+
+# 2. feature branch 의 commits 를 develop 의 working tree 로 squash.
+git merge --squash feature/m0-plan-status-update
+
+# 3. 단일 commit 생성 — 본 cycle 의 squash commit message 는 사용자가 작성
+#    또는 본 cycle 의 commit log 종합. M0 release 의 사용자 가시 history.
+git commit -m "<사용자 작성 또는 종합>"
+
+# 4. push — 사용자 명시 동의 (대기 정책 [[feedback-no-push-without-explicit-command]]).
+git push origin develop
+
+# 5. branch 정리 — 사용자 명시 동의.
+git branch -D feature/m0-plan-status-update
+```
+
+### 6.3 Release blocker checklist (tag v0.1.0 전 의무)
+
+본 항목들은 **squash 후 develop branch 에서 처리** — squash 와 release 가
+분리됨에 주의.
+
+- [ ] **ADR-0018 신설** — KRX 정보데이터시스템 라이선스 답변 반영
+  (krxdata@krx.co.kr 문의 결과).
+- [ ] **ADR-0019 신설** — 변호사 자문 결과 반영 (ADR-0006 D9 의 4 항목 검증).
+- [ ] **AC-L-02 통과** — ADR-0006 법률 자문 결과 반영.
+- [ ] **처리방침 / 이용약관 / 면책조항** (현재 1차 초안) 의 변호사 검토 반영
+  — `/privacy`, `/terms`, `/disclaimer` 페이지 본문 갱신.
+- [ ] (선택) Momus 라운드 3 — release blocker 처리 후 최종 검증.
+
+### 6.4 Tag + RELEASE_NOTES (release 시점)
+
+```bash
+# 1. RELEASE_NOTES.md 작성 — CHANGELOG.md Unreleased 의 항목을 0.1.0 으로
+#    promote (Keep a Changelog 형식).
+# 2. tag.
+git tag -a v0.1.0 -m "M0 v0.1.0 — MVP 4 뷰 + 1차 자료 파이프라인"
+git push origin v0.1.0
+# 3. GitHub Release / GitLab Release 페이지 — RELEASE_NOTES.md 본문 복사.
+```
+
+Pre-release 옵션 — release blocker 처리 전 사용자 ~5 명 검증 필요 시
+`v0.1.0-rc.1` 태그로 사전 공개:
+
+```bash
+git tag -a v0.1.0-rc.1 -m "M0 v0.1.0 release candidate 1"
+git push origin v0.1.0-rc.1
+```
+
+### 6.5 Tag 직후 — M1 plan 작성 진입
+
+tag v0.1.0 publication 후 M1 plan 작성 진입 — §7 (M1 진입 전 검증 사항).
+
+---
+
+## 7. M1 진입 전 검증 사항 (M0 종료 후)
 
 M0 가 release 된 뒤 M1 진입 전:
 

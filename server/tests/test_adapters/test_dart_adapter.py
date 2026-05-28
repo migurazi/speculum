@@ -134,8 +134,10 @@ def test_fetch_financial_statement_returns_canonical_rows() -> None:
     assert assets.ifrs_type == IfrsType.CFS
     assert assets.fiscal_year == 2023
     assert assets.fiscal_quarter == 4
-    # effective_date = 분기말 (Q=4 → 12-31).
-    assert assets.effective_date == date(2023, 12, 31)
+    # effective_date = 신고기한 (ADR-0012 D1 의 보수 정책). Q4 = 사업보고서
+    # → 사업연도 종료 + 90일 (캘린더 산술). 2023-12-31 + 90d = 2024-03-30
+    # (2024 윤년 → 2월 29일 포함이라 31+29+30 = 90).
+    assert assets.effective_date == date(2024, 3, 30)
 
 
 # =============================================================================
@@ -285,9 +287,10 @@ def test_fetch_preserves_unmapped_rows_with_warning() -> None:
 
 
 def test_fetch_estimated_fields_marks_effective_date() -> None:
-    """oracle 리뷰 M3 회귀 — effective_date 분기말 근사를 estimated 로 명시.
+    """ADR-0012 D3 회귀 — effective_date 가 보수적 신고기한 근사임을 표시.
 
-    T18 ConflictDetector / PIT enforcer 가 본 metadata 로 비교 제외 / 보강.
+    실 rcept_dt (회사가 일찍 공시한 경우) 와의 잔여 lag 가 추정 — M1+ list.json
+    fetch (ADR-0012 D6) 합류 시 marker 자연 제거.
     """
     rows_raw = [_dart_row(account_id="ifrs-full_Assets", thstrm_amount="100")]
     adapter = _adapter_with_response(_dart_response(rows=rows_raw))
@@ -297,6 +300,46 @@ def test_fetch_estimated_fields_marks_effective_date() -> None:
         ifrs_type=IfrsType.CFS, batch_id=uuid4(),
     )
     assert result.estimated_fields == frozenset({"effective_date"})
+
+
+# =============================================================================
+# 5.1 ADR-0012 D1 신고기한 정책 — 분기별 effective_date 매트릭스
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    "fiscal_year,fiscal_quarter,expected_date",
+    [
+        # Q1 (1분기 보고서): 분기 종료 (3-31) + 45일 = 5-15.
+        (2023, 1, date(2023, 5, 15)),
+        # Q2 (반기 보고서): 분기 종료 (6-30) + 45일 = 8-14.
+        (2023, 2, date(2023, 8, 14)),
+        # Q3 (3분기 보고서): 분기 종료 (9-30) + 45일 = 11-14.
+        (2023, 3, date(2023, 11, 14)),
+        # Q4 (사업 보고서): 2023-12-31 + 90일 (캘린더 산술, 2024 윤년 영향)
+        # = 31 + 29 + 30 = 90 → 2024-03-30.
+        (2023, 4, date(2024, 3, 30)),
+        # 비윤년 다음해 — 2025-12-31 + 90d = 31 + 28 + 31 = 90 → 2026-03-31.
+        (2025, 4, date(2026, 3, 31)),
+    ],
+)
+def test_disclosure_deadline_matrix(
+    fiscal_year: int,
+    fiscal_quarter: int,
+    expected_date: date,
+) -> None:
+    """ADR-0012 D1 의 신고기한 매트릭스 — 자본시장법 제160조 보수 정책."""
+    rows_raw = [_dart_row(account_id="ifrs-full_Assets", thstrm_amount="100")]
+    adapter = _adapter_with_response(_dart_response(rows=rows_raw))
+    result = adapter.fetch_financial_statement(
+        code="005930", corp_code="00126380",
+        fiscal_year=fiscal_year, fiscal_quarter=fiscal_quarter,
+        ifrs_type=IfrsType.CFS, batch_id=uuid4(),
+    )
+    assert len(result.data) == 1
+    assert result.data[0].effective_date == expected_date
+    # citation 의 effective_date 도 동일.
+    assert result.citations[0].effective_date == expected_date
 
 
 # =============================================================================

@@ -38,16 +38,33 @@ Speculum 에 기여해주셔서 감사합니다. 본 문서는 **저장소 운�
 ### 2.2 setup
 
 ```bash
-# frontend
-cd client
-pnpm install
-pnpm dev               # http://localhost:3000
+# 1. 환경변수 template 복사 후 값 채우기 (DART_API_KEY / AUTH_SECRET 등).
+cp .env.example .env
+# server 환경변수 (host 실행):
+#   export $(grep -v '^#' .env | xargs)            # bash
+#   Get-Content .env | ForEach-Object { ... }      # PowerShell — README 참조
+# client 는 .env.local 로 복사 — Next.js 자동 로드.
+cp .env.example client/.env.local
 
-# backend (별도 터미널)
-cd server
-python -m pip install -e ".[test]"
-uvicorn app.main:app   # http://localhost:8000
+# 2. Postgres 16 (dev 의존성 service) — docker compose.
+docker compose up -d                # postgres 5432 띄움
+docker compose ps                   # health=healthy 대기 (~5s)
+
+# 3. Alembic migration — schema 0001~0003 적용.
+cd server && python -m pip install -e ".[test]"
+alembic upgrade head
+
+# 4. FastAPI (별도 터미널).
+uvicorn app.main:app                # http://localhost:8000
+
+# 5. Next.js (별도 터미널).
+cd client && pnpm install
+pnpm dev                            # http://localhost:3000
 ```
+
+선택: `docker compose --profile tools up -d` 로 Adminer (DB 시각 도구) 추가 —
+http://localhost:8080. M0 운영 deploy 의 컨테이너화는 별도 cycle (현 compose 는
+dev 의존성 service 만).
 
 ---
 
@@ -155,6 +172,27 @@ DART_API_KEY=<your-key> python -m pytest tests/integration -m integration -v
 # 동일, PowerShell
 $env:DART_API_KEY = "<your-key>"; python -m pytest tests/integration -m integration -v
 ```
+
+#### E2E tests (Playwright, client/)
+
+4 뷰 + 동의 모달 사용자 흐름은 `client/tests/e2e/` (M0_PLAN T42). CI 의
+`client-e2e.yml` 이 push/PR `client/**` 시 + KST 03:00 nightly +
+workflow_dispatch 에서 실행. chromium 1 개만 (M0).
+
+```bash
+cd client
+# 최초 1 회 — chromium download (~150MB, Windows/macOS/Linux 자동).
+pnpm e2e:install
+
+# 실 브라우저 실행 (next dev 자동 spawn).
+pnpm e2e
+
+# UI 모드 (개발 디버깅).
+pnpm e2e:ui
+```
+
+Windows 노트: PowerShell 에서도 동일. `pnpm e2e:install` 가 chromium binary
+를 `~\AppData\Local\ms-playwright\` 에 cache. CI 와 동일 hash 사용.
 
 ### 4.2 테스트 작성
 

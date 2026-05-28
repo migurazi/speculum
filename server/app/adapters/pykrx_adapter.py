@@ -89,11 +89,12 @@ _PYKRX_MARKET_CAP_COLUMNS: Final[dict[str, str]] = {
     "shares_outstanding": "상장주식수",
 }
 
-# KRX 정보데이터시스템의 종목 detail URL — citation 의 url 채움.
-_KRX_STOCK_DETAIL_URL_TEMPLATE: Final[str] = (
-    "https://kind.krx.co.kr/common/disclsviewer.do?method=search"
-    "&isurCmpyCd={code}"
-)
+# Citation `url` 은 None — Momus M0 review W1 fix. 기존의 `kind.krx.co.kr/...`
+# `isurCmpyCd={code}` 는 KIND 공시시스템의 발행회사 고유번호 (8자리) 매개
+# 변수로 6자리 KRX 종목코드를 그대로 넣어 404. KRX 정보데이터시스템 (data.
+# krx.co.kr) 도 form submission 기반이라 종목별 deep link 부재. FDR adapter
+# 와 일관되게 None 사용 — 추후 KRX OPEN API (ADR-0018 답변 후) 합류 시 정확한
+# deep link 생성 가능.
 
 
 class PykrxAdapter(DataSourceAdapter):
@@ -214,7 +215,7 @@ class PykrxAdapter(DataSourceAdapter):
             identifier=f"{code}|{fromdate.isoformat()}|{todate.isoformat()}|ohlcv",
             effective_date=rows[-1].trade_date,
             batch_id=batch_id,
-            url=_KRX_STOCK_DETAIL_URL_TEMPLATE.format(code=code),
+            url=None,  # W1: KRX 종목 deep link 부재 — 추후 KRX OPEN API 합류 시.
         )
         return FetchResult(data=rows, citations=(citation,))
 
@@ -288,7 +289,7 @@ class PykrxAdapter(DataSourceAdapter):
             ),
             effective_date=rows[-1].trade_date,
             batch_id=batch_id,
-            url=_KRX_STOCK_DETAIL_URL_TEMPLATE.format(code=code),
+            url=None,  # W1: KRX 종목 deep link 부재 — 추후 KRX OPEN API 합류 시.
         )
         return FetchResult(data=rows, citations=(citation,))
 
@@ -344,7 +345,7 @@ class PykrxAdapter(DataSourceAdapter):
             identifier=f"{code}|{as_of_str}|stock_master",
             effective_date=as_of,
             batch_id=batch_id,
-            url=_KRX_STOCK_DETAIL_URL_TEMPLATE.format(code=code),
+            url=None,  # W1: KRX 종목 deep link 부재 — 추후 KRX OPEN API 합류 시.
         )
         return FetchResult(data=data, citations=(citation,))
 

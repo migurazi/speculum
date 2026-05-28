@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final
 from uuid import UUID, uuid4
@@ -243,11 +243,11 @@ class DartAdapter(DataSourceAdapter):
                 f"DART {parsed.unmapped_account_count} unmapped IFRS accounts — "
                 f"dart_account_mapper extension required"
             )
-        # oracle 리뷰 M3 — `effective_date` 가 분기말 근사 (실제 rcept_dt 가 아닌).
-        # 분기말은 실제 공시일 (보통 분기말 + 45~60 일) 보다 빠른 시점이라
-        # PIT 시 silently 미존재 데이터 노출 위험. T18 ConflictDetector / PIT
-        # enforcer 가 본 필드를 estimated 로 인식하여 추가 검증 가능. 정확한
-        # rcept_dt 는 DART list endpoint 별도 fetch (별도 cycle backlog).
+        # `effective_date` 는 ADR-0012 D1 의 보수적 신고기한 — 자본시장법
+        # 제160조 (Q1~Q3 = +45일, Q4 = +90일). 100% 회사 공시 완료 시점이라
+        # silent look-ahead bias 0. 단 실제 rcept_dt (회사가 일찍 공시한 경우)
+        # 와의 잔여 lag 가 추정 — `estimated_fields` marker 보존. M1+ 의 DART
+        # list.json fetch (ADR-0012 D6) 합류 시 marker 자연 제거.
         return FetchResult(
             data=rows,
             citations=(citation,),
@@ -388,8 +388,10 @@ class DartAdapter(DataSourceAdapter):
                 f"{fiscal_year}Q{fiscal_quarter} {ifrs_type.value}"
             )
 
-        # 분기말 date 로 일괄 설정 (M3: 분기 내 모든 row 가 같은 effective_date).
-        effective_date = _fiscal_quarter_end(fiscal_year, fiscal_quarter)
+        # 공시 신고기한 (ADR-0012 D1) — 분기 종료 + 45/90일. 분기 내 모든
+        # row 가 같은 effective_date. 자본시장법 제160조 신고기한 = 100% 공시
+        # 완료 보장 시점 → silent look-ahead bias 0.
+        effective_date = _disclosure_deadline(fiscal_year, fiscal_quarter)
 
         rows: list[FinancialStatementRow] = []
         skipped_row_count = 0
@@ -521,12 +523,35 @@ def _validate_fiscal_period(year: int, quarter: int) -> None:
         )
 
 
-def _fiscal_quarter_end(year: int, quarter: int) -> date:
-    """분기말 date — 본 cycle MVP 의 effective_date 근사.
+def _disclosure_deadline(year: int, quarter: int) -> date:
+    """공시 신고기한 — ADR-0012 D1 의 effective_date 산출 보수 정책.
 
-    정확한 rcept_dt 는 DART list endpoint 별도 fetch (M0+ backlog). 본 함수는
-    분기말 (3-31, 6-30, 9-30, 12-31) 로 근사 — PIT 의미상 가장 보수적.
+    자본시장법 제160조 의 신고기한을 effective_date 의 lower bound 로 적용.
+    분기 종료 시점에는 보고서가 미공시 상태이므로 PIT 의미 위반 (Momus M0
+    review V1). 신고기한이면 100% 회사 공시 완료 보장 → silent look-ahead
+    bias 0.
+
+    매트릭스 (자본시장법 제160조, 캘린더 +N일 산술):
+        Q1 (1분기 보고서): 분기 종료 + 45일 → year-05-15
+        Q2 (반기 보고서):  분기 종료 + 45일 → year-08-14
+        Q3 (3분기 보고서): 분기 종료 + 45일 → year-11-14
+        Q4 (사업 보고서):  사업연도 종료 + 90일 → (year+1)-03-31
+                          (윤년 다음해 시 -03-30, e.g. 2023 Q4 → 2024-03-30)
+
+    잔여 추정 — 실제 일찍 공시한 회사의 데이터는 사용 못 함 (false-negative,
+    보수적 측면). 정확한 rcept_dt 는 DART list.json endpoint 별도 fetch
+    (ADR-0012 D6 의 M1+ work-order).
+
+    Returns:
+        해당 분기의 신고기한 마지막 일자. PIT Enforcer 가 본 값을 effective_date
+        로 사용 — `record.effective_date <= as_of` 비교 의미 보존.
     """
-    # quarter=1 → 3-31, Q=2 → 6-30, Q=3 → 9-30, Q=4 → 12-31.
-    month_day = {1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31)}[quarter]
-    return date(year, month_day[0], month_day[1])
+    quarter_end = {
+        1: date(year, 3, 31),
+        2: date(year, 6, 30),
+        3: date(year, 9, 30),
+        4: date(year, 12, 31),
+    }[quarter]
+    # Q4 = 사업보고서 (90일), 나머지 = 분기보고서 (45일).
+    lag_days = 90 if quarter == 4 else 45
+    return quarter_end + timedelta(days=lag_days)

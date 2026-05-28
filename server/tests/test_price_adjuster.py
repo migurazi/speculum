@@ -54,6 +54,9 @@ def _price(
         effective_date=d,
         open_raw=p, high_raw=p, low_raw=p, close_raw=p,
         volume=volume,
+        # trading_value = close × volume — adjuster test 에선 정확성 무관
+        # (보정 대상 외). Momus V3 schema 준수만.
+        trading_value=p * Decimal(volume),
         close_adjusted=p,  # placeholder — Adjuster 가 재계산.
         citation_id=_DUMMY_CITATION,
         created_at=datetime(d.year, d.month, d.day, 17, 0, tzinfo=UTC),
@@ -529,7 +532,8 @@ def test_multiple_codes_in_price_list_raises() -> None:
         effective_date=date(2024, 4, 2),
         open_raw=Decimal("100"), high_raw=Decimal("100"),
         low_raw=Decimal("100"), close_raw=Decimal("100"),
-        volume=1, close_adjusted=Decimal("100"),
+        volume=1, trading_value=Decimal("100"),
+        close_adjusted=Decimal("100"),
         citation_id=_DUMMY_CITATION,
         created_at=datetime(2024, 4, 2, tzinfo=UTC),
     )
@@ -621,7 +625,8 @@ def test_all_ohlc_columns_get_adjusted() -> None:
         effective_date=date(2024, 4, 1),
         open_raw=Decimal("50000"), high_raw=Decimal("51000"),
         low_raw=Decimal("49500"), close_raw=Decimal("50500"),
-        volume=1_000_000, close_adjusted=Decimal("50500"),
+        volume=1_000_000, trading_value=Decimal("50500000000"),
+        close_adjusted=Decimal("50500"),
         citation_id=_DUMMY_CITATION,
         created_at=datetime(2024, 4, 1, 17, 0, tzinfo=UTC),
     )

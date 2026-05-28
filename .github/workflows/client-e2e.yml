@@ -1,0 +1,84 @@
+# Client E2E — Playwright (M0_PLAN T42).
+#
+# AC-F-01 / AC-L-01 / AC-P-03 등 사용자 흐름 검증. unit (vitest) 와 별도 —
+# 실 브라우저 + Next dev server.
+#
+# 트리거 정책 (M0):
+#   - workflow_dispatch — 수동 (release 직전 sanity).
+#   - schedule — KST 03:00 (UTC 18:00) nightly.
+#   - push/PR client/** — M0 의 4 뷰 + 동의 모달 시나리오 회귀 가드.
+#
+# 비용: chromium download ~150MB + Next build/dev startup. PR/push 마다
+# 부담이 큰 경우 schedule + workflow_dispatch 로 축소 가능 (M0 운영 1 주
+# 후 평가).
+#
+# 의존성:
+#   - Node 20 + pnpm 9
+#   - playwright install chromium --with-deps (Linux apt 기반 dep 설치)
+#
+# 관련 ADR / 문서:
+# - M0_PLAN T42 (E2E Playwright)
+# - AC-F-01 / AC-L-01 / AC-P-03
+
+name: client-e2e
+
+on:
+  schedule:
+    # UTC 18:00 = KST 03:00. server-ci 와 시간대 분리.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+  push:
+    branches: [develop, main]
+    paths:
+      - "client/**"
+      - ".github/workflows/client-e2e.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - ".github/workflows/client-e2e.yml"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Browsers
+        # `--with-deps` 가 Linux 의 chromium 시스템 의존성 (libnss 등) 설치.
+        # cache 는 별도 hash key — playwright version 변경 시 invalidate.
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Run Playwright tests
+        env:
+          CI: "true"
+        run: pnpm e2e
+
+      - name: Upload Playwright report
+        # 실패 / 성공 무관 upload — 운영자가 trace 확인 가능. 통과 시도 비용
+        # 미미 (artifact 보존 기간 default 90 일).
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: client/playwright-report/
+          retention-days: 14

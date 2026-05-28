@@ -80,11 +80,21 @@ ADR-0011 D1 결정. M0 에서 push notification 자체 없음.
 
 #### D4.1 절대 금지 — 사용자 visible 텍스트 (한국어)
 
-```
-추천 / 추천종목 / 유망 / 유망주 / 기대 / 기대주 / 주목 / 주목할 / 강력 매수 / 강력매수
-강추 / 강력 추천 / 비중 확대 / 비중확대 / 매수 / 매도 / 사세요 / 파세요
-탑픽 / 픽 / 종목 픽 / 베스트 / 적기
-```
+**전체 list 는 `shared/forbidden-words.json` 의 `ko_absolute` 배열이 single
+source of truth (D4.6).** ADR 본문은 정책 근거 + 대표 예시만 — list 갱신 시
+ADR 동기 필수는 없으나 SoT 와 본문 불일치를 회피하기 위해 본문은 카테고리별
+대표 예시로 한정.
+
+대표 예시 (카테고리별):
+- **추천·평가 어휘**: 추천 / 유망 / 기대 / 주목 / 종목 픽 / 탑픽 / 강추
+- **강도 어휘**: 강력 매수 / 강력 추천 / 비중 확대 / 강력 매도
+- **거래 행위 단독**: 매수 / 매도 / 매집 / 손절 / 익절 / 사세요 / 파세요
+- **거래 시점**: 진입 시점 / 적기
+- **평가 라벨**: 목표 주가 / 투자 의견 / 고평가 / 저평가 / 보유 권유 / 관망 / 베스트
+- **picks**: 픽 / 추천종목 / 유망종목 / 유망주 / 기대주 / 관심 종목 픽
+
+전체 어휘 + 별도 ADR 발행 이력 (예: ADR-0013 의 `진입` 단독 제거) 은 SoT JSON
+참조. 본 카테고리 분류는 D9 (어휘 변경 절차) 의 의사결정 도구일 뿐.
 
 > **Note**: "Top Pick", "Best Buy" 등 영문 표현은 D4.2 카테고리에서만 다룬다.
 > 한국어 패턴은 substring 매칭이라 영문 표현이 한국어 카테고리에 있으면
@@ -92,10 +102,14 @@ ADR-0011 D1 결정. M0 에서 push notification 자체 없음.
 
 #### D4.2 절대 금지 — 사용자 visible 텍스트 (영문)
 
-```
-Buy / Sell / Recommended / Recommendation / Top Pick / Best / Strong Buy / Conviction
-Should Buy / Worth Buying / Bullish / Bearish / Outperform / Underperform
-```
+**전체 list 는 `shared/forbidden-words.json` 의 `en_absolute` 배열 (D4.6).**
+
+대표 예시 (카테고리별):
+- **거래 행위**: Buy / Sell / Long / Short / Accumulate
+- **추천**: Recommended / Recommendation / Top Pick / Best Buy / Best
+- **점수·라벨**: Conviction / Outperform / Underperform / Overweight / Underweight / Upgrade / Downgrade
+- **강도**: Strong Buy / Strong Sell / Should Buy / Worth Buying / Bullish / Bearish
+- **목표·보유**: Price Target / Target Price / Hold
 
 #### D4.3 허용된 표현
 

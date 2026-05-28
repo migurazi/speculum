@@ -1,0 +1,73 @@
+# Speculum dev compose — Postgres 16 only (M0 T0 scaffold).
+#
+# 본 compose 는 **개발자 로컬 환경의 의존성 service** 만 제공. client (Next.js
+# pnpm dev) / server (FastAPI uvicorn) 는 호스트에서 직접 실행 — 빠른 hot
+# reload + IDE debug + Node/Python 버전 일관성 확보.
+#
+# 운영 deploy 의 컨테이너화는 별도 cycle — 본 compose 는 dev 용도.
+#
+# 사용법:
+#   docker compose up -d           # Postgres + (선택) Adminer 시작
+#   docker compose down            # 정지 (volume 보존)
+#   docker compose down -v         # 정지 + 데이터 wipe (Alembic 재실행)
+#
+# 환경변수 (호스트 실행 server 측):
+#   export SPECULUM_DATABASE_URL=postgresql+psycopg://speculum:speculum@localhost:5432/speculum_dev
+#   cd server && alembic upgrade head
+#   cd server && uvicorn app.main:app --reload
+#
+# 자세한 setup 은 CONTRIBUTING.md §2.2 참조.
+
+services:
+  # =============================================================================
+  # PostgreSQL 16 — Speculum 의 운영 DB. ADR-0002 D5 의 append-only invariant
+  # 가 BEFORE UPDATE trigger 에서 강제되므로 SQLite 와 schema 호환만으로는
+  # 운영 안전성 부족 — 로컬 dev 도 PG 권장 (단위 test 는 SQLite OK).
+  # =============================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: speculum-postgres
+    restart: unless-stopped
+    environment:
+      # dev credentials — 운영용 X. .env.example 의 SPECULUM_DATABASE_URL 과
+      # 일치 필요.
+      POSTGRES_USER: speculum
+      POSTGRES_PASSWORD: speculum
+      POSTGRES_DB: speculum_dev
+      # 한글 collation — KRX 종목명 정렬 + LIKE 검색 정확성.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --locale=C"
+    ports:
+      # 호스트 5432 와 충돌 시 5433 등으로 override (compose.override.yml).
+      - "5432:5432"
+    volumes:
+      # named volume — `docker compose down -v` 시에만 wipe.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # alembic upgrade / app boot 전 ready 검증.
+      test: ["CMD-SHELL", "pg_isready -U speculum -d speculum_dev"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # =============================================================================
+  # Adminer — DB 시각 도구 (선택). PostgreSQL 16 와 host network 공유.
+  # 운영 deploy 에는 포함 X — dev only.
+  # `docker compose --profile tools up` 으로 활성. default profile 미포함.
+  # =============================================================================
+  adminer:
+    image: adminer:4.8.1
+    container_name: speculum-adminer
+    profiles: ["tools"]
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+
+volumes:
+  postgres-data:
+    name: speculum-postgres-data

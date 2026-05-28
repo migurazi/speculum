@@ -108,6 +108,7 @@ def _price(
         low_raw=Decimal(str(close)),
         close_raw=Decimal(str(close)),
         volume=1_000_000,
+        trading_value=Decimal(str(close)) * Decimal(1_000_000),
         close_adjusted=Decimal(str(close)),
         citation_id=_DUMMY_CITATION_ID,
         created_at=datetime(
@@ -638,6 +639,7 @@ def test_sql_price_repository_rejects_duplicate_id(
         low_raw=Decimal("70000"),
         close_raw=Decimal("70000"),
         volume=1_000_000,
+        trading_value=Decimal("70000000000"),
         close_adjusted=Decimal("70000"),
         citation_id=_DUMMY_CITATION_ID,
         created_at=datetime(2024, 1, 15, 17, 0, tzinfo=UTC),
@@ -653,6 +655,7 @@ def test_sql_price_repository_rejects_duplicate_id(
         low_raw=Decimal("80000"),
         close_raw=Decimal("80000"),
         volume=2_000_000,
+        trading_value=Decimal("160000000000"),
         close_adjusted=Decimal("80000"),
         citation_id=_DUMMY_CITATION_ID,
         created_at=datetime(2024, 1, 15, 17, 0, tzinfo=UTC),

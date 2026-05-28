@@ -52,7 +52,10 @@ class FinancialORM(Base):
     code_lineage_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), nullable=False,
     )
-    # ADR-0002 D3 — `effective_date` 는 공시 효력일 (DART rcept_dt 또는 회계기간 등).
+    # `effective_date` = M0 v0.1.0 의 자본시장법 제160조 신고기한 보수 정책
+    # (ADR-0012 D1): Q1~Q3 = 분기 종료 + 45일, Q4 = 사업연도 종료 + 90일.
+    # 실 DART rcept_dt 의 정확한 값은 estimated_fields marker 보존 + M1+
+    # list.json fetch 합류 시 갱신 (ADR-0012 D6).
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     fiscal_period: Mapped[str] = mapped_column(String(16), nullable=False)
     # "net_income_consolidated_ifrs" 등 dart_account_mapper 정규화된 account 키.
@@ -86,4 +89,13 @@ class FinancialORM(Base):
         ),
         # supersede chain 추적 — 정정공시 발생 시 옛 row 찾기.
         Index("ix_financials_superseded_by", "superseded_by"),
+        # lineage 단위 시계열 scan 의 hot path — Momus M0 review W4 fix.
+        # 종목코드 변경 (재상장 / 합병 후 신규 코드) lineage 의 historical
+        # financials fetch 시 PostgreSQL 의 sequential scan 회피.
+        # prices_daily 의 `ix_prices_daily_lineage_date` 와 일관성.
+        Index(
+            "ix_financials_lineage_date",
+            "code_lineage_id",
+            "effective_date",
+        ),
     )

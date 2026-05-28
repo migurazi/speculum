@@ -216,6 +216,38 @@ mojibake — Linux runner 에선 무관하지만 Windows runner 사용 시.
 - force push 사실 확인 후 stack 정리.
 - 정책 위반 분명하면 main 으로 rollback 후 reissue.
 
+### 4.4 client-e2e (Playwright) chromium 다운로드 실패
+
+**증상**: `pnpm e2e:install` 또는 CI 의 `Install Playwright Browsers` step
+에서 binary download fail (network / proxy).
+
+**원인**:
+- 회사망 프록시 / 방화벽이 `playwright.azureedge.net` 차단.
+- Linux CI 의 시스템 라이브러리 누락 (`--with-deps` 미사용).
+
+**해결**:
+- 로컬: `HTTPS_PROXY=<proxy> pnpm e2e:install` (bash) 또는 PowerShell
+  `$env:HTTPS_PROXY = "<proxy>"; pnpm e2e:install`.
+- CI: workflow 의 `playwright install chromium --with-deps` 가 apt 의존성
+  자동 설치 — `--with-deps` 누락 시 실행 시점에 libnss 등 missing error.
+- chromium binary 만 download (firefox/webkit 미사용) — `--with-deps` 옵션
+  덕분에 ~150MB 만 transfer.
+
+### 4.5 client-e2e 의 `next dev` 가 안 뜨거나 timeout
+
+**증상**: `pnpm e2e` 가 "Timed out waiting 120000ms for http://localhost:3000".
+
+**원인**:
+- port 3000 이 이미 사용 중 (다른 dev server, Docker, 등).
+- Next 의 첫 빌드 (cold cache) 가 120 초 초과.
+
+**해결**:
+- 다른 process 종료 (`netstat -ano | findstr :3000` Windows, `lsof -i :3000`
+  bash).
+- playwright.config 의 `webServer.timeout` 임시 상향 (CI 만 — 로컬은
+  reuseExistingServer 로 회피).
+- 또는 별도 터미널에서 `pnpm dev` 미리 띄운 후 `pnpm e2e` — reuse.
+
 ---
 
 ## 5. 알려진 한계 (M0 의도)

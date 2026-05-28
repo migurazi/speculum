@@ -65,6 +65,11 @@ class PriceDailyORM(Base):
     close_raw: Mapped[Decimal] = mapped_column(_PRICE_NUMERIC, nullable=False)
     # 거래량 — 한국 주식 일거래량 ~수억주 (BigInteger 안전).
     volume: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # 거래대금 (원) — Momus M0 review V3 fix. factor pack 의 turnover 입력.
+    # 한국 주식 일거래대금 max ~수조원 → Numeric(28, 4) 안전 마진.
+    trading_value: Mapped[Decimal] = mapped_column(
+        Numeric(precision=28, scale=4), nullable=False,
+    )
     close_adjusted: Mapped[Decimal] = mapped_column(_PRICE_NUMERIC, nullable=False)
     citation_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),

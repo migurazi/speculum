@@ -49,12 +49,18 @@ def canonicalize_jcs(value: Any) -> bytes:
 
     Args:
         value: dict / list / 원시 (int/str/bool/None). NaN/Infinity float 거부.
+            **Decimal 입력 차단** — `json.dumps` 가 Decimal 직접 직렬화 미지원
+            (TypeError). 호출자가 `str(decimal_value)` 로 명시 변환 의무 (Momus
+            M0 review W7). float 변환은 IEEE 754 잔차로 cross-runtime drift
+            위험 → 항상 string 경유.
 
     Returns:
         UTF-8 encoded bytes — JSON canonical form.
 
     Raises:
-        ValueError: NaN / Infinity float 또는 직렬화 불가 타입.
+        ValueError: NaN / Infinity float.
+        TypeError: 직렬화 불가 타입 (Decimal / datetime / set 등 — 호출자가
+            str 또는 isoformat 으로 변환 책임).
     """
     return json.dumps(
         value,

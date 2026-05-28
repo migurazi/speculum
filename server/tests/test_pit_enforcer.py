@@ -94,6 +94,7 @@ def _price(
         low_raw=Decimal(str(close)),
         close_raw=Decimal(str(close)),
         volume=1_000_000,
+        trading_value=Decimal(str(close)) * Decimal(1_000_000),
         close_adjusted=Decimal(str(close)),
         citation_id=_DUMMY_CITATION_ID,
         created_at=datetime(effective_date.year, effective_date.month,

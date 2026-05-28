@@ -64,5 +64,10 @@ coverage/
 .coverage.*
 htmlcov/
 
+# Playwright (client E2E artifact — Test report / video / screenshot / trace)
+client/playwright-report/
+client/test-results/
+client/playwright/.cache/
+
 # Sisyphus / planning
 .sisyphus/runs/

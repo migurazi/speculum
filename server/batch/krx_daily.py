@@ -423,6 +423,10 @@ class KrxDailyBatch:
                 low_raw=row.low,
                 close_raw=row.close,
                 volume=row.volume,
+                # 거래대금 — Momus M0 review V3 fix. OHLCVRow.value 가 pykrx
+                # 의 `거래대금` 컬럼 (이미 fetch 중). factor pack 의
+                # `volume-turnover:avg-20d` 입력 schema 준비.
+                trading_value=row.value,
                 # T20 미적용 — raw 와 동일. 후속 일배치가 update.
                 close_adjusted=row.close,
                 citation_id=citation_id,

@@ -1,21 +1,24 @@
 /**
  * DisclaimerFooter — ADR-0006 D2/D5 + ADR-0007 D2 의 footer 의무 구현.
  *
- * 모든 화면 하단에 배치 (`app/layout.tsx`). 본문 3 요소:
+ * 모든 화면 하단에 배치 (`app/layout.tsx`). 본문 4 요소:
  *   1. 본 도구는 정보 제공 도구이며 투자 자문이 아님 (ADR-0006 D2).
  *   2. 데이터 출처 표기 — DART / KRX / pykrx / FDR (ADR-0006 D5).
- *   3. 자세한 약관·정책 link (placeholder — M0 release 직전 추가).
+ *   3. 처리방침 · 이용약관 · 면책조항 실 link (T46 V2 fix — Momus M0 review).
  *
  * 8 기둥 §2.2 No Advice 의 사용자 시각 명시 — footer 본문에 금지 어휘
- * (ADR-0007 D4 의 ko_absolute / en_absolute) 사용 불가. ESLint rule (T29)
- * 이 빌드 시 강제.
+ * (ADR-0007 D4 의 ko_absolute / en_absolute) 사용 불가. CI 게이트 (T29) 가
+ * 빌드 시 강제.
  *
  * 관련 ADR / 문서:
  * - ADR-0006 D2 (No Advice — 법적 implementation), D5 (데이터 라이선스
  *   출처 의무).
  * - ADR-0007 D2 (모든 화면 footer disclaimer 의무).
- * - M0_PLAN T32 (본 cycle).
+ * - Momus M0 review V2 (Critical, T46 fix) — placeholder 교체.
+ * - M0_PLAN T32 (initial scaffold).
  */
+
+import Link from "next/link";
 
 import { cn } from "@/lib/utils";
 
@@ -54,7 +57,26 @@ export function DisclaimerFooter({
           <span className="font-medium">FinanceDataReader</span>.
         </p>
         <p className="text-neutral-500">
-          개인정보처리방침 · 이용약관 · 면책조항 — M0 release 직전 게시 예정.
+          <Link
+            href="/privacy"
+            className="underline-offset-2 hover:text-neutral-800 hover:underline"
+          >
+            개인정보처리방침
+          </Link>
+          {" · "}
+          <Link
+            href="/terms"
+            className="underline-offset-2 hover:text-neutral-800 hover:underline"
+          >
+            이용약관
+          </Link>
+          {" · "}
+          <Link
+            href="/disclaimer"
+            className="underline-offset-2 hover:text-neutral-800 hover:underline"
+          >
+            면책조항
+          </Link>
         </p>
       </div>
     </footer>

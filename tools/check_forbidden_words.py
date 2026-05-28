@@ -70,6 +70,9 @@ _DEFAULT_EXCLUDES: Final[tuple[str, ...]] = (
     "**/.mypy_cache/**",
     "**/coverage/**",
     "**/htmlcov/**",
+    # Playwright E2E artifact (Momus M0 review V15) — gitignored, generated.
+    "**/playwright-report/**",
+    "**/test-results/**",
     # 정의 파일 자체 — 운영 금지 어휘 list 가 본 file 에 정의.
     "shared/forbidden-words.json",
     # 정의 파일을 import 하는 builtin pack / schemas — 사용자 facing X.
