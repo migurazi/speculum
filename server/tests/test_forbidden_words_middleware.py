@@ -14,10 +14,15 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+if TYPE_CHECKING:
+    # type annotation only — runtime 에는 endpoint 함수 안에서 lazy import.
+    from starlette.responses import Response
 
 from app.core.config import Environment
 from app.middleware.forbidden_words_guard import (
@@ -27,7 +32,6 @@ from app.middleware.forbidden_words_guard import (
     ForbiddenWordsPolicy,
     default_policy_for,
 )
-
 
 # =============================================================================
 # Test fixtures — 정책별 app + AuditSink spy

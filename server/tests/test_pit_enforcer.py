@@ -15,7 +15,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Final
 from uuid import UUID, uuid4
@@ -42,7 +42,6 @@ from app.services.pit_enforcer import (
     PITEnforcer,
     PITError,
 )
-
 
 # =============================================================================
 # Helpers — 테스트용 record builder. 의미 없는 필드는 placeholder.
@@ -75,7 +74,7 @@ def _fin(
         ifrs_type="consolidated",
         citation_id=_DUMMY_CITATION_ID,
         superseded_by=superseded_by,
-        created_at=created_at or datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=created_at or datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 
@@ -98,7 +97,7 @@ def _price(
         close_adjusted=Decimal(str(close)),
         citation_id=_DUMMY_CITATION_ID,
         created_at=datetime(effective_date.year, effective_date.month,
-                            effective_date.day, 17, 0, tzinfo=timezone.utc),
+                            effective_date.day, 17, 0, tzinfo=UTC),
     )
 
 
@@ -126,7 +125,7 @@ def _ca(
         citation_id=_DUMMY_CITATION_ID,
         superseded_by=superseded_by,
         created_at=created_at or datetime(announced_date.year, announced_date.month,
-                                          announced_date.day, 9, 0, tzinfo=timezone.utc),
+                                          announced_date.day, 9, 0, tzinfo=UTC),
     )
 
 
@@ -202,7 +201,7 @@ def test_latest_active_record_3_stage_supersede_chain() -> None:
         fiscal_period="2024Q1",
         value=100,
         effective_date=date(2024, 4, 15),
-        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=UTC),
         superseded_by=v2_id,
         record_id=v1_id,
     )
@@ -210,7 +209,7 @@ def test_latest_active_record_3_stage_supersede_chain() -> None:
         fiscal_period="2024Q1",
         value=110,
         effective_date=date(2024, 5, 20),  # 정정 effective
-        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
         superseded_by=v3_id,
         record_id=v2_id,
     )
@@ -218,7 +217,7 @@ def test_latest_active_record_3_stage_supersede_chain() -> None:
         fiscal_period="2024Q1",
         value=115,
         effective_date=date(2024, 8, 10),
-        created_at=datetime(2024, 8, 10, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 8, 10, 9, 0, tzinfo=UTC),
         record_id=v3_id,
     )
     records = [v1, v2, v3]
@@ -245,13 +244,13 @@ def test_latest_active_record_tie_breaks_by_created_at() -> None:
         fiscal_period="2024Q1",
         value=100,
         effective_date=date(2024, 4, 15),
-        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=UTC),
     )
     r_new = _fin(
         fiscal_period="2024Q1",
         value=120,
         effective_date=date(2024, 4, 15),
-        created_at=datetime(2024, 6, 1, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 6, 1, 9, 0, tzinfo=UTC),
     )
     # 두 record 모두 active (supersede X), 같은 effective_date.
     result = enforcer.latest_active_record([r_old, r_new], date(2024, 7, 1))
@@ -342,7 +341,7 @@ def test_latest_active_by_key_groups_by_fiscal_period() -> None:
     enforcer = PITEnforcer()
     q1_v1 = _fin(fiscal_period="2024Q1", value=100, effective_date=date(2024, 4, 15))
     q1_v2 = _fin(fiscal_period="2024Q1", value=110, effective_date=date(2024, 5, 20),
-                 created_at=datetime(2024, 5, 20, tzinfo=timezone.utc))
+                 created_at=datetime(2024, 5, 20, tzinfo=UTC))
     q2 = _fin(fiscal_period="2024Q2", value=200, effective_date=date(2024, 7, 15))
     q3_future = _fin(fiscal_period="2024Q3", value=300, effective_date=date(2024, 10, 15))
 
@@ -411,14 +410,14 @@ def test_fake_financial_repository_resolves_supersede_chain() -> None:
         effective_date=date(2024, 4, 15),
         superseded_by=v2_id,
         record_id=v1_id,
-        created_at=datetime(2024, 4, 15, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 15, tzinfo=UTC),
     )
     v2 = _fin(
         fiscal_period="2024Q1",
         value=120,
         effective_date=date(2024, 5, 20),
         record_id=v2_id,
-        created_at=datetime(2024, 5, 20, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, tzinfo=UTC),
     )
     repo = FakeFinancialRepository([v1, v2])
 
@@ -514,7 +513,7 @@ def test_fake_stock_snapshot_repository_exact_match() -> None:
         value_unit="ratio",
         inputs={},
         citation_id=_DUMMY_CITATION_ID,
-        computed_at=datetime(2024, 5, 1, 17, 0, tzinfo=timezone.utc),
+        computed_at=datetime(2024, 5, 1, 17, 0, tzinfo=UTC),
     )
     repo = FakeStockSnapshotRepository([snap])
 
@@ -536,13 +535,13 @@ def test_fake_stock_snapshot_repository_fetches_multiple_factors() -> None:
         stock_code="005930", as_of_date=date(2024, 5, 1), factor_uuid=factor_a,
         value=Decimal("12.34"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
-        computed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        computed_at=datetime(2024, 5, 1, tzinfo=UTC),
     )
     snap_b = StockSnapshotRecord(
         stock_code="005930", as_of_date=date(2024, 5, 1), factor_uuid=factor_b,
         value=Decimal("1.2"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
-        computed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        computed_at=datetime(2024, 5, 1, tzinfo=UTC),
     )
     repo = FakeStockSnapshotRepository([snap_a, snap_b])
 
@@ -578,13 +577,13 @@ def test_chain_fan_in_two_predecessors_pointing_to_same_successor() -> None:
     b_id = UUID("00000000-0000-0000-0000-0000000000b2")
     a = _fin(fiscal_period="2024Q1", effective_date=date(2024, 1, 1),
              superseded_by=head_id, record_id=a_id,
-             created_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
+             created_at=datetime(2024, 1, 1, tzinfo=UTC))
     b = _fin(fiscal_period="2024Q1", effective_date=date(2024, 2, 1),
              superseded_by=head_id, record_id=b_id,
-             created_at=datetime(2024, 2, 1, tzinfo=timezone.utc))
+             created_at=datetime(2024, 2, 1, tzinfo=UTC))
     head = _fin(fiscal_period="2024Q1", effective_date=date(2024, 3, 1),
                 record_id=head_id,
-                created_at=datetime(2024, 3, 1, tzinfo=timezone.utc))
+                created_at=datetime(2024, 3, 1, tzinfo=UTC))
     result = enforcer.latest_active_record([a, b, head], date(2024, 6, 1))
     assert result.id == head_id
 
@@ -613,7 +612,7 @@ def test_three_cycle_with_intermediate_future_date_is_detected() -> None:
 def test_latest_active_record_id_is_final_tiebreaker() -> None:
     """oracle C6 — 같은 effective_date + 같은 created_at 의 두 record → id 로 결정성 확보."""
     enforcer = PITEnforcer()
-    same_dt = datetime(2024, 4, 1, tzinfo=timezone.utc)
+    same_dt = datetime(2024, 4, 1, tzinfo=UTC)
     id_low = UUID("00000000-0000-0000-0000-000000000001")
     id_high = UUID("00000000-0000-0000-0000-0000000000ff")
     r1 = _fin(fiscal_period="2024Q1", effective_date=date(2024, 4, 15),
@@ -644,7 +643,7 @@ def test_stock_snapshot_record_id_is_cached() -> None:
         factor_uuid=UUID("00000000-0000-0000-0000-000000000fa1"),
         value=Decimal("12.34"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
-        computed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        computed_at=datetime(2024, 5, 1, tzinfo=UTC),
     )
     id_a = snap.id
     id_b = snap.id
@@ -753,7 +752,7 @@ def test_stock_snapshot_record_satisfies_pit_record_protocol() -> None:
         stock_code="005930", as_of_date=date(2024, 5, 1), factor_uuid=factor_uuid,
         value=Decimal("12.34"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
-        computed_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+        computed_at=datetime(2024, 5, 1, tzinfo=UTC),
     )
     # property 노출 — effective_date / id / created_at
     assert snap.effective_date == snap.as_of_date

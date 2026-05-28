@@ -19,9 +19,10 @@ T13 SQLAlchemy 합류 후 동일 Protocol 의 SQL 구현체.
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 __all__ = [
@@ -259,7 +260,7 @@ class FakeWatchlistRepository(WatchlistRepository):
     # ---- helpers ----
 
     def _now(self) -> datetime:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
 
     def _validate_folder_name(self, name: str) -> None:
         if not name or not name.strip():
@@ -478,7 +479,7 @@ class FakeScreenerSetRepository(ScreenerSetRepository):
             raise WatchlistDataError(
                 f"name exceeds {_MAX_FOLDER_NAME_LENGTH} chars"
             )
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         s = ScreenerSet(
             id=uuid4(),
             user_id=user_id,

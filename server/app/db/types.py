@@ -20,7 +20,7 @@ Note (test 한정 이슈가 아닌 이유):
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime
 from sqlalchemy.engine.interfaces import Dialect
@@ -70,7 +70,7 @@ class UTCDateTime(TypeDecorator[datetime]):
         # 의 `_validate_utc_datetime` 가 이미 UTC offset=0 강제이지만, fact
         # 테이블 (PriceRecord.created_at 등) 의 timestamp 도 layer 경계에서 동일
         # 보장.
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)
 
     def process_result_value(
         self,
@@ -82,6 +82,6 @@ class UTCDateTime(TypeDecorator[datetime]):
             return None
         if value.tzinfo is None:
             # SQLite ISO 8601 round-trip 후 tz-naive 로 복원되는 path.
-            return value.replace(tzinfo=timezone.utc)
+            return value.replace(tzinfo=UTC)
         # PostgreSQL — 이미 tz-aware. UTC 가 아닐 경우 UTC 로 정규화 (도메인 일관성).
-        return value.astimezone(timezone.utc)
+        return value.astimezone(UTC)

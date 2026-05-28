@@ -8,7 +8,7 @@
 3. **Multi-id 무결성** — canonical_id / uuid 중복 검사 (ADR-0002 D2 의 3-tier
    identity 시스템 무결성).
 4. **금지 어휘 검사** — factor name / description 이 ADR-0007 D4 의 어휘를
-   포함하지 않음 (예: 빌트인 factor 이름에 "추천 종목" 같은 표현 차단).
+   포함하지 않음 (빌트인 factor 이름의 advisory vocabulary 차단).
 5. **Citation 의무** — 각 factor 또는 pack level 에 citation. ADR-0002 D3 의
    Source Citation 의 Pack 단계 implementation.
 
@@ -37,7 +37,10 @@ from typing import Any, Final
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from app.services._jcs import canonicalize_jcs, compute_content_hash
+from app.services._jcs import (
+    canonicalize_jcs,  # noqa: F401  re-export — tests/test_factor_pack.py 의존
+    compute_content_hash,
+)
 from app.services.forbidden_words import CheckScope, assert_clean
 
 # =============================================================================
@@ -200,7 +203,7 @@ def validate_citation(body: dict[str, Any]) -> None:
 def validate_forbidden_vocab(body: dict[str, Any]) -> None:
     """Factor name / description / alt_names 가 금지 어휘를 포함하지 않음 — ADR-0007 D4.
 
-    빌트인 pack 의 author 가 실수로 "추천 종목" 같은 표현을 넣는 것을 차단.
+    빌트인 pack 의 author 가 실수로 advisory vocabulary 를 넣는 것을 차단.
     factor name 은 SYSTEM scope — 가장 엄격.
     """
     for factor in body["factors"]:
@@ -271,7 +274,7 @@ def load_pack(path: Path) -> LoadedPack:
 
 
 def load_builtin_pack(version: str = "1.0.0") -> LoadedPack:
-    """빌트인 pack 의 short-cut. 운영 코드에서 fetch.
+    """빌트인 pack 의 단축 export. 운영 코드에서 fetch.
 
     Args:
         version: 'speculum-builtin-v{version}.json' 의 version 부분.
@@ -285,7 +288,7 @@ def load_builtin_pack(version: str = "1.0.0") -> LoadedPack:
 # =============================================================================
 #
 # M0 single-pack 가정: 운영 시 본 builtin pack 만 active. M2 community pack
-# 진입 시 `PackRegistry` 도입 + 본 singleton 의미 재정의 (oracle T30 자문 결정 8).
+# 도입 시 `PackRegistry` 추가 + 본 singleton 의미 재정의 (oracle T30 자문 결정 8).
 # snapshot_versions.py 가 본 singleton 의 content_hash / pack_slug / version 참조.
 
 DEFAULT_PACK: Final[LoadedPack] = load_builtin_pack("1.0.0")

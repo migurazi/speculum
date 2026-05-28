@@ -99,7 +99,14 @@ For non-Korean users: Speculum data is sourced from Korean Financial Supervisory
 
 ## License
 
-TBD — to be decided before M0 release. Sister projects use MIT (Norma) and Apache 2.0 (Tessera).
+**MIT** ([LICENSE](LICENSE)) — applies to the source code.
+
+**Data licensing** — the market data exposed through Speculum (KRX listings,
+DART filings, ECOS macro series) remains subject to the licenses of the
+original providers. Speculum does not redistribute the underlying data set.
+Per-source posture is documented in
+[ADR-0006 §D5](docs/adr/adr-0006-legal-review.md) and rendered in the
+application footer.
 
 ---
 

@@ -11,7 +11,8 @@ T13 합류 — `SqlCitationRepository` 추가 (SQLAlchemy 2 sync session).
 
 from __future__ import annotations
 
-from typing import Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from sqlalchemy import select

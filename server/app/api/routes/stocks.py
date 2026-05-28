@@ -18,8 +18,7 @@ endpoint 본체만 swap.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Final, Sequence
+from typing import Final
 
 from fastapi import APIRouter, HTTPException, Path, Query
 
@@ -29,17 +28,14 @@ from app.api.dependencies.repositories import (
     FactorEvaluatorDep,
     StocksRepoDep,
 )
-from app.repositories.pit_protocols import StockMasterRecord
 from app.schemas.stocks import (
     DEFAULT_DISPLAY_FACTORS,
     FactorValueOut,
     StockCompareOut,
     StockDetailOut,
     StockSearchPageOut,
-    StockStatus,
     StockSummaryOut,
 )
-from app.services.screen_run import normalize_stock_codes
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 

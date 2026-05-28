@@ -1,0 +1,65 @@
+# Speculum client CI — typecheck / lint / test / build.
+#
+# M0_PLAN T41 의 5 종 CI 게이트 중 frontend 통합. 매 push/PR 마다 client
+# 코드 변경의 빌드·타입·테스트·lint 회귀를 자동 차단.
+#
+# 의존성:
+#   - Node 20 (Next.js 14 LTS 권장)
+#   - pnpm 9 (lockfile = pnpm-lock.yaml)
+#
+# 관련 ADR / 문서:
+# - ADR-0007 D4.4 — eslint-rules/no-forbidden-words 강제
+# - M0_PLAN T41 — CI 5 게이트 (forbidden words + typecheck/lint/test/build
+#   + disclaimer coverage)
+
+name: client-ci
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "client/**"
+      - ".github/workflows/client-ci.yml"
+  pull_request:
+    paths:
+      - "client/**"
+      - ".github/workflows/client-ci.yml"
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        # ESLint flat config — speculum/no-forbidden-words rule.
+        run: pnpm lint
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build (Next.js)
+        # NEXT_PUBLIC_API_BASE_URL 은 빌드 타임 inline. CI 는 default 사용.
+        run: pnpm build

@@ -44,4 +44,9 @@
 
 ## License
 
-TBD — M0 작성 시 결정 (자매 프로젝트는 MIT)
+**MIT** ([LICENSE](LICENSE)) — 코드에 한합니다.
+
+**데이터 라이선스** — Speculum 이 노출하는 시장 데이터 (KRX 상장, DART 공시,
+ECOS 거시 시계열 등) 는 1차 자료 제공자의 라이선스를 따릅니다. Speculum 은
+원본 데이터셋을 재배포하지 않으며, 출처는 어플리케이션 footer 와
+[ADR-0006 §D5](docs/adr/adr-0006-legal-review.md) 에 명시되어 있습니다.

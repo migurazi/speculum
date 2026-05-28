@@ -40,7 +40,7 @@ source (Yahoo Finance, Naver) wrap 라 1차 자료 아님 — pykrx 와 cross-ch
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Final
 from uuid import UUID, uuid4
@@ -361,7 +361,7 @@ class FdrAdapter(DataSourceAdapter):
             id=uuid4(),
             source=SourceKind.FDR,
             identifier=identifier,
-            retrieved_at=datetime.now(timezone.utc),
+            retrieved_at=datetime.now(UTC),
             effective_date=effective_date,
             adapter_version=self.ADAPTER_VERSION,
             batch_id=batch_id,

@@ -23,7 +23,7 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Date, Index, Integer, JSON, String, Uuid
+from sqlalchemy import JSON, Date, Index, Integer, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 

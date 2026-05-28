@@ -26,7 +26,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Query, Response, status
+from fastapi import Depends, Query, Response
 
 from app.services.as_of_policy import (
     AsOfInFutureError,

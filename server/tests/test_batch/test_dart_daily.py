@@ -18,13 +18,12 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 import pytest
 
 from app.adapters.base import (
-    AdapterError,
     FinancialStatementRow,
     IfrsType,
 )
@@ -36,11 +35,9 @@ from app.services.corp_code_mapping import (
     CorpCodeMappingError,
 )
 from batch.dart_daily import (
-    DartBatchSummary,
     DartDailyBatch,
     _convert_to_financial_records,
 )
-
 
 # =============================================================================
 # Helpers
@@ -416,9 +413,10 @@ def test_empty_citations_raises_adapter_error() -> None:
     DartAdapter 직접 호출 시 invariant 보장이지만 mock / test double 이 빈
     citations 반환하면 명시 AdapterError + 운영 alert 명확화.
     """
+    from unittest.mock import MagicMock
+
     from app.adapters.base import FetchResult
     from app.adapters.dart_adapter import DartAdapter
-    from unittest.mock import MagicMock
 
     # adapter 의 fetch_financial_statement 만 직접 mock — citations=() 반환.
     mock_adapter = MagicMock(spec=DartAdapter)

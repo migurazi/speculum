@@ -21,7 +21,7 @@ oracle 자문 R2 / 2 차 리뷰 C5 의 "동일 contract test suite 통과" 의�
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime, timezone
 from decimal import Decimal
 from typing import Final
 from uuid import UUID, uuid4
@@ -41,7 +41,6 @@ from app.models.source_citation import (
     SourceKind,
 )
 from app.repositories.citation_repository import (
-    FakeCitationRepository,
     SqlCitationRepository,
 )
 from app.repositories.fakes import (
@@ -66,7 +65,6 @@ from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
 )
 
-
 _DUMMY_CITATION_ID: Final[UUID] = UUID("00000000-0000-0000-0000-00000000ffff")
 _DUMMY_LINEAGE_ID: Final[UUID] = UUID("00000000-0000-0000-0000-0000000000aa")
 _DUMMY_BATCH_ID: Final[UUID] = UUID("00000000-0000-0000-0000-0000000000bb")
@@ -85,12 +83,12 @@ def _make_citation(
         id=cid,
         source=SourceKind.DART,
         identifier=f"20240520000{cid.int % 1000:03d}",
-        retrieved_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        retrieved_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
         effective_date=effective_date,
         adapter_version="1.0.0",
         batch_id=_DUMMY_BATCH_ID,
         url=None,
-        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
     )
 
 
@@ -114,7 +112,7 @@ def _price(
         citation_id=_DUMMY_CITATION_ID,
         created_at=datetime(
             effective_date.year, effective_date.month, effective_date.day,
-            17, 0, tzinfo=timezone.utc,
+            17, 0, tzinfo=UTC,
         ),
     )
 
@@ -142,7 +140,7 @@ def _fin(
         ifrs_type="consolidated",
         citation_id=_DUMMY_CITATION_ID,
         superseded_by=superseded_by,
-        created_at=created_at or datetime(2024, 1, 1, tzinfo=timezone.utc),
+        created_at=created_at or datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 
@@ -171,7 +169,7 @@ def _ca(
         superseded_by=superseded_by,
         created_at=created_at or datetime(
             announced_date.year, announced_date.month, announced_date.day,
-            9, 0, tzinfo=timezone.utc,
+            9, 0, tzinfo=UTC,
         ),
     )
 
@@ -305,7 +303,7 @@ def test_sql_financial_repository_resolves_supersede_chain(
         fiscal_period="2024Q1",
         value=100,
         effective_date=date(2024, 4, 15),
-        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=UTC),
         superseded_by=v2_id,
         record_id=v1_id,
     )
@@ -313,7 +311,7 @@ def test_sql_financial_repository_resolves_supersede_chain(
         fiscal_period="2024Q1",
         value=110,
         effective_date=date(2024, 5, 20),
-        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
         record_id=v2_id,
     )
     # insert v2 먼저 (self-FK — v1 이 v2 를 참조하므로 v2 가 먼저 존재해야).
@@ -584,7 +582,7 @@ def test_sql_financial_repository_account_filter_matches_fake(
         account="net_income_consolidated",
         value=100,
         effective_date=date(2024, 4, 15),
-        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 15, 9, 0, tzinfo=UTC),
         superseded_by=v2_id,
         record_id=v1_id,
     )
@@ -593,7 +591,7 @@ def test_sql_financial_repository_account_filter_matches_fake(
         account="net_income_consolidated_ifrs",
         value=110,
         effective_date=date(2024, 5, 20),
-        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
         record_id=v2_id,
     )
     db_session.add(financial_record_to_orm(v2))
@@ -642,7 +640,7 @@ def test_sql_price_repository_rejects_duplicate_id(
         volume=1_000_000,
         close_adjusted=Decimal("70000"),
         citation_id=_DUMMY_CITATION_ID,
-        created_at=datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 15, 17, 0, tzinfo=UTC),
     )
     # 같은 id, 다른 (code, effective_date) — composite PK 는 만족, id UNIQUE 위반.
     p2 = PriceRecord(
@@ -657,7 +655,7 @@ def test_sql_price_repository_rejects_duplicate_id(
         volume=2_000_000,
         close_adjusted=Decimal("80000"),
         citation_id=_DUMMY_CITATION_ID,
-        created_at=datetime(2024, 1, 15, 17, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 1, 15, 17, 0, tzinfo=UTC),
     )
     db_session.add(price_record_to_orm(p1))
     db_session.flush()
@@ -684,12 +682,12 @@ def test_utc_datetime_normalizes_non_utc_tz(db_session: Session) -> None:
         # KST 시각 — UTCDateTime 의 process_bind_param 이 UTC 로 정규화.
         # 단 SourceCitation 자체는 UTC offset=0 강제 → 본 테스트는 모델 우회 위해
         # tz-aware 그대로 통과시키되 모델 검증이 raise 하지 않도록 미리 UTC 변환.
-        retrieved_at=kst_time.astimezone(timezone.utc),
+        retrieved_at=kst_time.astimezone(UTC),
         effective_date=date(2024, 5, 20),
         adapter_version="1.0.0",
         batch_id=_DUMMY_BATCH_ID,
         url=None,
-        created_at=kst_time.astimezone(timezone.utc),
+        created_at=kst_time.astimezone(UTC),
     )
 
     repo = SqlCitationRepository(db_session)

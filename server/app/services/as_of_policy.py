@@ -34,7 +34,6 @@ from typing import Final
 
 from app.services.krx_calendar import (
     DEFAULT_CALENDAR,
-    CalendarError,
     CalendarRangeError,
     TradingCalendar,
     kst_today,

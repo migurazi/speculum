@@ -79,7 +79,7 @@ class WatchlistFolderOut(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_domain(cls, folder: WatchlistFolder) -> "WatchlistFolderOut":
+    def from_domain(cls, folder: WatchlistFolder) -> WatchlistFolderOut:
         return cls(
             id=folder.id,
             parent_id=folder.parent_id,
@@ -137,7 +137,7 @@ class WatchlistItemOut(BaseModel):
     added_at: datetime
 
     @classmethod
-    def from_domain(cls, item: WatchlistItem) -> "WatchlistItemOut":
+    def from_domain(cls, item: WatchlistItem) -> WatchlistItemOut:
         return cls(
             id=item.id,
             watchlist_id=item.watchlist_id,
@@ -184,7 +184,7 @@ class ScreenerSetOut(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_domain(cls, s: ScreenerSet) -> "ScreenerSetOut":
+    def from_domain(cls, s: ScreenerSet) -> ScreenerSetOut:
         return cls(
             id=s.id,
             name=s.name,

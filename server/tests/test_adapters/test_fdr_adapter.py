@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import builtins
 import sys
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
@@ -33,7 +33,6 @@ import pytest
 from app.adapters.base import AdapterError, AdapterRetryError, FetchResult
 from app.adapters.fdr_adapter import FdrAdapter
 from app.models.source_citation import SourceKind
-
 
 # =============================================================================
 # Helpers — FDR DataFrame fixtures
@@ -455,5 +454,5 @@ def test_citation_seven_tuple_for_ohlcv() -> None:
     # retrieved_at = UTC tz-aware.
     assert cit.retrieved_at.tzinfo is not None
     assert cit.retrieved_at.utcoffset() == datetime(
-        2024, 1, 1, tzinfo=timezone.utc,
+        2024, 1, 1, tzinfo=UTC,
     ).utcoffset()

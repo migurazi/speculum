@@ -23,10 +23,8 @@ from app.services.as_of_policy import (
     AsOfOutOfRangeError,
     AsOfPolicy,
     AsOfPolicyError,
-    NormalizedAsOf,
 )
 from app.services.krx_calendar import DEFAULT_CALENDAR
-
 
 # =============================================================================
 # 1. None default fill

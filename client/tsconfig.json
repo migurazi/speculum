@@ -3,7 +3,11 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitReturns": true,
@@ -12,10 +16,44 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": false,
-    "types": ["vitest/globals", "node"]
+    "jsx": "preserve",
+    "incremental": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    },
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "types": [
+      "vitest/globals",
+      "node",
+      "@testing-library/jest-dom"
+    ],
+    "allowJs": true,
+    "noEmit": true
   },
-  "include": ["lib/**/*.ts", "lib/**/*.tsx"],
-  "exclude": ["node_modules", ".next", "dist"]
+  "include": [
+    "next-env.d.ts",
+    "lib/**/*.ts",
+    "lib/**/*.tsx",
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "app/**/*",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "state/**/*.ts",
+    "state/**/*.tsx",
+    ".next/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    ".next",
+    "dist"
+  ]
 }

@@ -31,8 +31,8 @@ Note (성능):
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
 from datetime import date
-from typing import Sequence
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session

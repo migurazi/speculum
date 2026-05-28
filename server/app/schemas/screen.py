@@ -32,7 +32,7 @@ _STRICT_MODEL_CONFIG = ConfigDict(strict=True, extra="forbid", frozen=True)
 
 # Factor canonical_id 형식 — factor-pack-v1.json 의 pattern 과 일관.
 # `[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)+` — e.g., "per:ttm-consolidated-ifrs".
-# request body 의 text injection (예: factor="추천종목") 차단 (oracle Risk-X1).
+# request body 의 text injection (예: factor 가 advisory vocabulary 포함) 차단 (oracle Risk-X1).
 _FACTOR_ID_PATTERN: Final[str] = r"^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)+$"
 
 # Value 형식 — 숫자 string 또는 boolean-like. 본 사이클은 단순 str 길이 제한만.
@@ -143,7 +143,7 @@ class ScreenRunSnapshotOut(BaseModel):
     selected_factors: tuple[str, ...]
 
     @classmethod
-    def from_domain(cls, snap: ScreenRunSnapshot) -> "ScreenRunSnapshotOut":
+    def from_domain(cls, snap: ScreenRunSnapshot) -> ScreenRunSnapshotOut:
         """도메인 → wire 단방향 factory."""
         return cls(
             id=snap.id,

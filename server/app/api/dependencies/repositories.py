@@ -45,6 +45,11 @@ from app.repositories.screen_run_repository import (
     ScreenRunRepository,
 )
 from app.repositories.sql_repositories import SqlStocksMasterRepository
+from app.repositories.sql_user_repositories import (
+    SqlScreenerSetRepository,
+    SqlScreenRunRepository,
+    SqlWatchlistRepository,
+)
 from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
     StocksMasterRepository,
@@ -148,38 +153,64 @@ def get_active_pack() -> LoadedPack:
     return DEFAULT_PACK
 
 
-def get_runs_repository(request: Request) -> ScreenRunRepository:
-    """Screen Run snapshot repository — `request.app.state.runs_repo`.
+def get_runs_repository(
+    request: Request,
+    session: _SessionOrNoneDep,
+) -> ScreenRunRepository:
+    """Screen Run snapshot repository — SQL/Fake auto-swap (T13 Phase C).
 
-    M0 default = FakeScreenRunRepository (in-memory). T13 Phase B 진행 전이라
-    SQL 미지원 — 항상 Fake.
+    우선순위:
+        1. 테스트 명시 주입 (`app.state.runs_repo_override` 또는 `runs_repo`).
+        2. SQL wiring 활성 → SqlScreenRunRepository.
+        3. 그 외 → FakeScreenRunRepository.
     """
-    repo = getattr(request.app.state, "runs_repo", None)
-    if repo is None:
-        return FakeScreenRunRepository()
-    return repo
+    override = getattr(request.app.state, "runs_repo_override", None)
+    if override is not None:
+        return override
+    legacy = getattr(request.app.state, "runs_repo", None)
+    if legacy is not None:
+        return legacy
+    if session is not None:
+        return SqlScreenRunRepository(session)
+    return FakeScreenRunRepository()
 
 
-def get_watchlist_repository(request: Request) -> WatchlistRepository:
-    """Watchlist CRUD repository — `request.app.state.watchlist_repo`.
+def get_watchlist_repository(
+    request: Request,
+    session: _SessionOrNoneDep,
+) -> WatchlistRepository:
+    """Watchlist CRUD repository — SQL/Fake auto-swap (T13 Phase B).
 
-    M0 default = FakeWatchlistRepository. T13 Phase B 진행 전이라 SQL 미지원.
+    우선순위:
+        1. 테스트 명시 주입 (`app.state.watchlist_repo` 또는 override).
+        2. SQL wiring 활성 (db_sessionmaker 존재) → SqlWatchlistRepository.
+        3. 그 외 → FakeWatchlistRepository.
     """
-    repo = getattr(request.app.state, "watchlist_repo", None)
-    if repo is None:
-        return FakeWatchlistRepository()
-    return repo
+    override = getattr(request.app.state, "watchlist_repo_override", None)
+    if override is not None:
+        return override
+    legacy = getattr(request.app.state, "watchlist_repo", None)
+    if legacy is not None:
+        return legacy
+    if session is not None:
+        return SqlWatchlistRepository(session)
+    return FakeWatchlistRepository()
 
 
-def get_screener_set_repository(request: Request) -> ScreenerSetRepository:
-    """ScreenerSet (조건셋) repository — `request.app.state.screener_set_repo`.
-
-    T13 Phase B 진행 전이라 SQL 미지원.
-    """
-    repo = getattr(request.app.state, "screener_set_repo", None)
-    if repo is None:
-        return FakeScreenerSetRepository()
-    return repo
+def get_screener_set_repository(
+    request: Request,
+    session: _SessionOrNoneDep,
+) -> ScreenerSetRepository:
+    """ScreenerSet (조건셋) repository — SQL/Fake auto-swap (T13 Phase B)."""
+    override = getattr(request.app.state, "screener_set_repo_override", None)
+    if override is not None:
+        return override
+    legacy = getattr(request.app.state, "screener_set_repo", None)
+    if legacy is not None:
+        return legacy
+    if session is not None:
+        return SqlScreenerSetRepository(session)
+    return FakeScreenerSetRepository()
 
 
 StocksRepoDep = Annotated[StocksMasterRepository, Depends(get_stocks_repository)]

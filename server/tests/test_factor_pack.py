@@ -41,7 +41,6 @@ from app.services.factor_pack import (
     validate_schema,
 )
 
-
 _BUILTIN_PATH = (
     Path(__file__).resolve().parents[1]
     / "builtin-packs"
@@ -115,7 +114,7 @@ def test_canonicalize_jcs_preserves_unicode() -> None:
     """ensure_ascii=False — 한글 그대로."""
     out = canonicalize_jcs({"name": "추천"})
     # 'name' 의 value 가 escape 없이 한글로 보존.
-    assert "추천".encode("utf-8") in out
+    assert "추천".encode() in out
 
 
 def test_canonicalize_jcs_rejects_nan_infinity() -> None:

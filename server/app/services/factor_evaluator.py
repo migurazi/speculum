@@ -34,19 +34,20 @@ T22 의 자연스러운 완성. `factor_pack.py` 가 정의·검증·hash 만 �
 - 8 기둥 §2.1 Fidelity (inputs_used 보존), §2.10 Reproducibility
 
 Out-of-scope:
-- Schema v2 의 op-별 oneOf 분리 (C1 장기, M2 진입 시점)
+- Schema v2 의 op-별 oneOf 분리 (C1 장기, M2 시점)
 - Unit propagation 검증 (`mul(krw, ratio) → krw` 등 type rules) — community
-  pack (M2) 진입 시점
+  pack (M2) 시점
 - Series 평균 별도 op (`avg_series`) — M2+
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, DivisionByZero, InvalidOperation, ROUND_HALF_EVEN, localcontext
-from typing import Any, Final, Literal, Mapping, Protocol, Sequence, runtime_checkable
+from decimal import ROUND_HALF_EVEN, Decimal, DivisionByZero, InvalidOperation, localcontext
+from typing import Any, Final, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 __all__ = [
@@ -275,7 +276,7 @@ class FactorEvaluator:
             ) from exc
 
         # AST 의 field 참조가 formula.inputs 에 명시되어야 함 (oracle 결정 6 / C4).
-        # 정적 walk 로 evaluation 전에 검증 — N/A short-circuit 으로 인한 우회 차단.
+        # 정적 walk 로 evaluation 전에 검증 — N/A 단축 평가로 인한 우회 차단.
         ast_fields = _collect_ast_fields(ast, canonical_id=canonical_id,
                                           max_depth=self.max_ast_depth)
         unexpected_fields = ast_fields - declared_inputs
@@ -500,7 +501,7 @@ def _collect_ast_fields(
     """AST 에 등장하는 모든 field 이름 추출 — evaluation 없이 정적 walk.
 
     inputs ↔ AST field 일치 검증 (oracle C4) 의 무결성 검증을 evaluation 의 N/A
-    short-circuit 영향에서 분리. 위반 시 evaluator 가 fail-fast.
+    단축 평가 영향에서 분리. 위반 시 evaluator 가 fail-fast.
     """
     if _depth > max_depth:
         raise MalformedFormulaError(
@@ -570,7 +571,7 @@ def _apply_binary(
         본 evaluator 는 양쪽 모두 raw ratio (left / right) 반환. `ratio_pct` 의
         unit hint (×100 표시) 는 표시 layer 가 factor.unit == "percent" 보고 적용.
         EvaluationResult 자체에 unit_hint 노출은 후속 사이클 (M2+ community pack
-        진입 전 결정). 본 사이클에서는 양 op 의 동작 동일이 명시적 정책.
+        합류 전 결정). 본 사이클에서는 양 op 의 동작 동일이 명시적 정책.
     """
     if op == "add":
         return left + right

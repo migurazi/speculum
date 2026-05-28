@@ -28,7 +28,6 @@ from app.repositories.pit_protocols import (
     StockSnapshotRecord,
 )
 
-
 # 본 게이트가 검증할 Record dataclass list — 새 record 도입 시 본 list 갱신 의무.
 # M0 의 4 종 record cover. StockSnapshotRecord 의 citation_id 는 "결과의 대표
 # citation" (derived) — 같은 invariant 적용 (oracle 2 차 L5 — derived 의 의미는

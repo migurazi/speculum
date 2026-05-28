@@ -23,7 +23,7 @@ T31 migration cost 최소화 (oracle 자문 결정 5).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Annotated, Final
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import Depends

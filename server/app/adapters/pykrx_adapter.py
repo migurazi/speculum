@@ -48,7 +48,7 @@ ADR-0003 D2 의 canonical schema 변환 + D3 의 Source Citation 자동 채움.
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Final
 from uuid import UUID, uuid4
@@ -487,7 +487,7 @@ class PykrxAdapter(DataSourceAdapter):
             id=uuid4(),
             source=SourceKind.PYKRX,
             identifier=identifier,
-            retrieved_at=datetime.now(timezone.utc),
+            retrieved_at=datetime.now(UTC),
             effective_date=effective_date,
             adapter_version=self.ADAPTER_VERSION,
             batch_id=batch_id,

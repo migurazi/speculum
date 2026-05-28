@@ -27,11 +27,12 @@ ADR-0003 D1~D8 의 implementation. 모든 외부 출처 adapter 는 본 base 의
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from enum import Enum
-from typing import Generic, Sequence, TypeVar
+from typing import Generic, TypeVar
 
 from app.models.source_citation import SourceCitation
 

@@ -33,10 +33,13 @@ cycle). 책임:
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
+
+from sqlalchemy.orm import Session
 
 from app.adapters.base import (
     AdapterError,
@@ -53,6 +56,7 @@ from app.services.conflict_detector import (
     ConflictDetector,
 )
 from app.services.krx_calendar import TradingCalendar
+from batch.alerts import BatchAlertHandler, NullAlertHandler
 
 __all__ = ["BatchSummary", "KrxDailyBatch"]
 
@@ -74,6 +78,8 @@ class BatchSummary:
             시 빈 list.
         market_cap_rows: 수집된 시가총액 row (Phase B 의 DB write 대기). 호출자
             가 추후 save_market_caps (별도 cycle) 로 처리.
+        dry_run: True 면 본 batch 가 DB write skip — fetch + 검증만. 운영
+            verification / staging 의 release 직전 sanity check 패턴.
         started_at: batch 시작 시각 (UTC).
         ended_at: batch 종료 시각 (UTC).
     """
@@ -88,6 +94,7 @@ class BatchSummary:
     failures: Sequence[tuple[str, str]]
     conflicts: Sequence[ConflictDetectionResult]
     market_cap_rows: Sequence[MarketCapRow]
+    dry_run: bool
     started_at: datetime
     ended_at: datetime
 
@@ -106,6 +113,13 @@ class KrxDailyBatch:
         price_repo: PriceRecord persistence (citation 의존).
         throttle_seconds: 종목 호출 사이 sleep (sec). 0 = 즉시 (test). 운영
             기본 1.5 (ADR-0003 D6).
+        session: SQLAlchemy session — 있으면 종목별 SAVEPOINT 활성화
+            (oracle T18 M1). DB write 중간 실패 시 SAVEPOINT ROLLBACK 으로
+            partial commit 차단. Fake 모드 (in-memory repo) 는 None —
+            savepoint 의미 X.
+        alert_handler: BatchAlertHandler. None 이면 NullAlertHandler — alert
+            no-op. 운영 시 LoggingAlertHandler 또는 SentryAlertHandler 주입
+            (T43 / AC-O-02).
     """
 
     def __init__(
@@ -118,6 +132,8 @@ class KrxDailyBatch:
         citation_repo: CitationRepository,
         price_repo: PriceRepository,
         throttle_seconds: float = 1.5,
+        session: Session | None = None,
+        alert_handler: BatchAlertHandler | None = None,
     ) -> None:
         self._primary = primary_adapter
         self._verify = verify_adapter
@@ -130,33 +146,45 @@ class KrxDailyBatch:
         self._citation_repo = citation_repo
         self._price_repo = price_repo
         self._throttle = throttle_seconds
+        self._session = session
+        # None → NullAlertHandler — batch 본체에서 None-check 회피 (alert call
+        # site 가 무조건 메서드 호출 OK). Protocol contract.
+        self._alert: BatchAlertHandler = (
+            alert_handler if alert_handler is not None else NullAlertHandler()
+        )
 
     def run(
         self,
         *,
         as_of: date,
         market: str = "KOSPI",
+        dry_run: bool = False,
     ) -> BatchSummary:
         """1 영업일 = 1 시장의 batch 실행.
 
         Args:
             as_of: 처리 대상일 (KST). 휴장일이면 skip.
             market: "KOSPI" | "KOSDAQ".
+            dry_run: True 면 fetch + 충돌 검증만 수행, citation/price DB write
+                skip. 운영 verification (release 전 sanity check) / staging
+                rehearsal 패턴. summary 의 success_count / conflicts /
+                market_cap_rows 는 실 commit 과 동일 — DB 만 unchanged.
 
         Returns:
-            BatchSummary — 모든 결과 집계 (성공/실패/충돌).
+            BatchSummary — 모든 결과 집계 (성공/실패/충돌 + dry_run flag).
 
         Note:
             본 메서드는 raise 하지 않음 — universe fetch 실패도 summary 의
             failures 로 반환. 호출자 (운영 script) 가 summary 를 logging /
-            Sentry 로 처리.
+            Sentry 로 처리. alert_handler 가 주입되어 있으면 conflict /
+            failure / complete 시점에 호출됨.
         """
         batch_id = uuid4()
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
-        # 1. 휴장일 skip.
+        # 1. 휴장일 skip — on_complete 만 호출 (failure / conflict 없음).
         if not self._calendar.is_business_day(as_of):
-            return self._make_summary(
+            summary = self._make_summary(
                 batch_id=batch_id,
                 as_of=as_of,
                 market=market,
@@ -166,16 +194,22 @@ class KrxDailyBatch:
                 failures=(),
                 conflicts=(),
                 market_cap_rows=(),
+                dry_run=dry_run,
                 started_at=started_at,
             )
+            self._alert.on_complete(summary)
+            return summary
 
-        # 2. Universe fetch — primary (pykrx).
+        # 2. Universe fetch — primary (pykrx). 실패 시 on_failure + 즉시 종료.
         try:
             universe_result = self._primary.fetch_universe(
                 as_of=as_of, market=market, batch_id=batch_id,
             )
         except AdapterError as exc:
-            return self._make_summary(
+            # universe fetch 실패 = batch 단위 실패. code 가 단일 종목이 아니나
+            # alert 채널 통일 위해 sentinel "universe" 사용 — 호출자가 분기.
+            self._alert.on_failure("universe", str(exc))
+            summary = self._make_summary(
                 batch_id=batch_id,
                 as_of=as_of,
                 market=market,
@@ -185,11 +219,15 @@ class KrxDailyBatch:
                 failures=(),
                 conflicts=(),
                 market_cap_rows=(),
+                dry_run=dry_run,
                 started_at=started_at,
             )
+            self._alert.on_complete(summary)
+            return summary
 
-        # universe citation 도 영구화.
-        self._save_citations(universe_result.citations)
+        # universe citation 영구화 — dry_run 이면 skip.
+        if not dry_run:
+            self._save_citations(universe_result.citations)
         universe = universe_result.data
 
         # 3. 종목별 처리 — failure isolation.
@@ -199,30 +237,59 @@ class KrxDailyBatch:
         market_cap_rows: list[MarketCapRow] = []
 
         for code in universe:
+            # oracle T18 M1 — 종목당 SAVEPOINT. session 있으면 begin_nested()
+            # 가 SAVEPOINT 발행 → exception 시 SAVEPOINT 까지 rollback (다른
+            # 종목의 in-flight write 는 보존). Fake 모드 (session=None) 는
+            # nullcontext — no-op. dry_run 도 nullcontext — DB write 없음.
+            savepoint: AbstractContextManager[object] = (
+                self._session.begin_nested()
+                if self._session is not None and not dry_run
+                else nullcontext()
+            )
             try:
-                price_rows, mc_rows, conflict_result = self._process_code(
-                    code=code, as_of=as_of, batch_id=batch_id,
-                )
-                # Price 영구화 — citation 먼저 save 한 후 price (FK 만족).
-                if price_rows:
-                    self._price_repo.save_prices(price_rows)
-                if mc_rows:
-                    market_cap_rows.extend(mc_rows)
-                if conflict_result is not None:
-                    conflicts.append(conflict_result)
-                successes += 1
+                with savepoint:
+                    price_rows, mc_rows, conflict_result = self._process_code(
+                        code=code,
+                        as_of=as_of,
+                        batch_id=batch_id,
+                        dry_run=dry_run,
+                    )
+                    # Price 영구화 — dry_run 이면 skip. citation 은 _process_code
+                    # 안에서 dry_run 분기 (fetch-then-save 순서 유지).
+                    if price_rows and not dry_run:
+                        self._price_repo.save_prices(price_rows)
+                    if mc_rows:
+                        market_cap_rows.extend(mc_rows)
+                    if conflict_result is not None:
+                        conflicts.append(conflict_result)
+                        # conflict report 가 비어있지 않을 때만 alert — empty
+                        # ConflictDetectionResult 는 정상 (false-positive 회피
+                        # 의 의미). missing_in_* 도 신호 가치 → 포함.
+                        if (
+                            conflict_result.conflicts
+                            or conflict_result.missing_in_primary
+                            or conflict_result.missing_in_verify
+                        ):
+                            self._alert.on_conflict(conflict_result)
+                    successes += 1
             except AdapterError as exc:
+                # SAVEPOINT 가 with 종료 시 rollback 완료 — citation/price 등
+                # 본 종목의 write 모두 무효화 (non-dry_run 한정).
                 failures.append((code, str(exc)))
+                self._alert.on_failure(code, str(exc))
             except Exception as exc:  # noqa: BLE001
                 # 예상치 못한 예외 — failure isolation 유지하되 운영 logging
                 # 단서 보존. 호출자가 stacktrace 정밀 조사.
-                failures.append((code, f"unexpected: {type(exc).__name__}: {exc}"))
+                reason = f"unexpected: {type(exc).__name__}: {exc}"
+                failures.append((code, reason))
+                self._alert.on_failure(code, reason)
 
-            # rate limit — 운영 시 throttle, test 시 0.
+            # rate limit — 운영 시 throttle, test 시 0. dry_run 도 운영 시뮬레이션
+            # 의미 보존 위해 동일 throttle.
             if self._throttle > 0:
                 time.sleep(self._throttle)
 
-        return self._make_summary(
+        summary = self._make_summary(
             batch_id=batch_id,
             as_of=as_of,
             market=market,
@@ -232,8 +299,11 @@ class KrxDailyBatch:
             failures=tuple(sorted(failures)),
             conflicts=tuple(conflicts),
             market_cap_rows=tuple(market_cap_rows),
+            dry_run=dry_run,
             started_at=started_at,
         )
+        self._alert.on_complete(summary)
+        return summary
 
     # =========================================================================
     # 내부 helper — 종목별 처리
@@ -245,6 +315,7 @@ class KrxDailyBatch:
         code: str,
         as_of: date,
         batch_id: UUID,
+        dry_run: bool = False,
     ) -> tuple[
         Sequence[PriceRecord],
         Sequence[MarketCapRow],
@@ -259,6 +330,11 @@ class KrxDailyBatch:
             2. 모든 fetch 가 성공한 후에 citation save → price record 빌드.
             3. price save 는 호출자 (run) 가 수행 — citation save 와 같은
                session 내 sequential.
+
+        Args:
+            dry_run: True 면 citation save skip (DB write 없음). PriceRecord
+                는 빌드되어 반환 (호출자가 dry_run 분기로 save_prices skip).
+                conflict detection 은 동일 수행 — alert 의도 보존.
 
         Returns:
             (price_records, market_cap_rows, conflict_result_or_None).
@@ -286,12 +362,15 @@ class KrxDailyBatch:
                 verify_ohlcv = None
 
         # 2. 모든 fetch 성공 → 이제 DB write 시작 (citation save 순서).
-        # 본 단계 이후 raise 시 partial commit 가능성 — orchestrator 의 명시적
-        # transaction savepoint 는 별도 cycle (oracle 리뷰 C1 P1 backlog).
-        self._save_citations(primary_ohlcv.citations)
-        self._save_citations(primary_mc.citations)
-        if verify_ohlcv is not None:
-            self._save_citations(verify_ohlcv.citations)
+        # 호출자 (KrxDailyBatch.run) 가 종목별 SAVEPOINT 안에서 호출 — DB
+        # write 중간 실패 시 본 종목의 모든 citation/price 가 SAVEPOINT
+        # ROLLBACK 으로 무효화 (oracle T18 M1 적용 완료). dry_run 이면 citation
+        # save skip — 검증 의도만 보존.
+        if not dry_run:
+            self._save_citations(primary_ohlcv.citations)
+            self._save_citations(primary_mc.citations)
+            if verify_ohlcv is not None:
+                self._save_citations(verify_ohlcv.citations)
 
         # 3. PriceRecord 빌드 — oracle 리뷰 L7: citations[0] guard.
         if not primary_ohlcv.citations:
@@ -331,7 +410,7 @@ class KrxDailyBatch:
         # lineage_id 는 stocks_master 가 lineage 단위 entity 이므로 본 cycle
         # 에서는 placeholder UUID (code 별 deterministic). T13 Phase B 에서
         # 실제 lineage 매핑.
-        from uuid import uuid5, NAMESPACE_OID
+        from uuid import NAMESPACE_OID, uuid5
 
         return tuple(
             PriceRecord(
@@ -347,7 +426,7 @@ class KrxDailyBatch:
                 # T20 미적용 — raw 와 동일. 후속 일배치가 update.
                 close_adjusted=row.close,
                 citation_id=citation_id,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
             for row in ohlcv_rows
         )
@@ -378,6 +457,7 @@ class KrxDailyBatch:
         failures: Sequence[tuple[str, str]],
         conflicts: Sequence[ConflictDetectionResult],
         market_cap_rows: Sequence[MarketCapRow],
+        dry_run: bool,
         started_at: datetime,
     ) -> BatchSummary:
         return BatchSummary(
@@ -391,6 +471,7 @@ class KrxDailyBatch:
             failures=tuple(failures),
             conflicts=tuple(conflicts),
             market_cap_rows=tuple(market_cap_rows),
+            dry_run=dry_run,
             started_at=started_at,
-            ended_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(UTC),
         )

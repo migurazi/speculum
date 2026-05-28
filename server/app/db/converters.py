@@ -23,13 +23,17 @@ Note:
 from __future__ import annotations
 
 from datetime import date
+from types import MappingProxyType
 from typing import Any
 
 from app.db.orm.corporate_actions import CorporateActionORM
 from app.db.orm.financials import FinancialORM
 from app.db.orm.prices_daily import PriceDailyORM
+from app.db.orm.screen_runs import ScreenRunSnapshotORM
+from app.db.orm.screener_sets import ScreenerSetORM
 from app.db.orm.source_citations import SourceCitationORM
 from app.db.orm.stocks_master import StocksMasterORM
+from app.db.orm.watchlists import WatchlistFolderORM, WatchlistItemORM
 from app.models.source_citation import SourceCitation, SourceKind
 from app.repositories.pit_protocols import (
     CodeHistoryEntry,
@@ -38,6 +42,12 @@ from app.repositories.pit_protocols import (
     PriceRecord,
     StockMasterRecord,
 )
+from app.repositories.watchlist_repository import (
+    ScreenerSet,
+    WatchlistFolder,
+    WatchlistItem,
+)
+from app.services.screen_run import ScreenRunQuery, ScreenRunSnapshot
 
 __all__ = [
     "citation_orm_to_record",
@@ -48,8 +58,16 @@ __all__ = [
     "financial_record_to_orm",
     "price_orm_to_record",
     "price_record_to_orm",
+    "screen_run_orm_to_record",
+    "screen_run_record_to_orm",
+    "screener_set_orm_to_record",
+    "screener_set_record_to_orm",
     "stocks_master_orm_to_record",
     "stocks_master_record_to_orm",
+    "watchlist_folder_orm_to_record",
+    "watchlist_folder_record_to_orm",
+    "watchlist_item_orm_to_record",
+    "watchlist_item_record_to_orm",
 ]
 
 
@@ -266,4 +284,172 @@ def _dict_to_code_history_entry(entry: dict[str, Any]) -> CodeHistoryEntry:
         valid_from=date.fromisoformat(entry["valid_from"]),
         valid_to=date.fromisoformat(valid_to_raw) if valid_to_raw else None,
         reason=entry["reason"],
+    )
+
+
+# =============================================================================
+# WatchlistFolder / WatchlistItem — T13 Phase B
+# =============================================================================
+
+def watchlist_folder_record_to_orm(
+    record: WatchlistFolder,
+) -> WatchlistFolderORM:
+    """frozen dataclass → ORM."""
+    return WatchlistFolderORM(
+        id=record.id,
+        user_id=record.user_id,
+        parent_id=record.parent_id,
+        name=record.name,
+        display_order=record.display_order,
+        is_default=record.is_default,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def watchlist_folder_orm_to_record(
+    orm: WatchlistFolderORM,
+) -> WatchlistFolder:
+    """ORM → frozen dataclass."""
+    return WatchlistFolder(
+        id=orm.id,
+        user_id=orm.user_id,
+        parent_id=orm.parent_id,
+        name=orm.name,
+        display_order=orm.display_order,
+        is_default=orm.is_default,
+        created_at=orm.created_at,
+        updated_at=orm.updated_at,
+    )
+
+
+def watchlist_item_record_to_orm(record: WatchlistItem) -> WatchlistItemORM:
+    """frozen dataclass → ORM."""
+    return WatchlistItemORM(
+        id=record.id,
+        watchlist_id=record.watchlist_id,
+        code_lineage_id=record.code_lineage_id,
+        note=record.note,
+        display_order=record.display_order,
+        added_at=record.added_at,
+    )
+
+
+def watchlist_item_orm_to_record(orm: WatchlistItemORM) -> WatchlistItem:
+    """ORM → frozen dataclass."""
+    return WatchlistItem(
+        id=orm.id,
+        watchlist_id=orm.watchlist_id,
+        code_lineage_id=orm.code_lineage_id,
+        note=orm.note,
+        display_order=orm.display_order,
+        added_at=orm.added_at,
+    )
+
+
+# =============================================================================
+# ScreenerSet — T13 Phase B
+# =============================================================================
+
+def screener_set_record_to_orm(record: ScreenerSet) -> ScreenerSetORM:
+    """frozen dataclass → ORM. conditions/selected_factors tuple → list."""
+    return ScreenerSetORM(
+        id=record.id,
+        user_id=record.user_id,
+        name=record.name,
+        conditions=[dict(c) for c in record.conditions],
+        selected_factors=list(record.selected_factors),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def screener_set_orm_to_record(orm: ScreenerSetORM) -> ScreenerSet:
+    """ORM → frozen dataclass. conditions list → tuple of dict."""
+    return ScreenerSet(
+        id=orm.id,
+        user_id=orm.user_id,
+        name=orm.name,
+        conditions=tuple(
+            dict(c) for c in (orm.conditions or [])
+        ),
+        selected_factors=tuple(orm.selected_factors or []),
+        created_at=orm.created_at,
+        updated_at=orm.updated_at,
+    )
+
+
+# =============================================================================
+# ScreenRunSnapshot — T13 Phase C
+# =============================================================================
+#
+# nested query 직렬화 — ScreenRunQuery 의 conditions/selected_factors/
+# presentation_order 가 단일 JSON object 로 묶임. MappingProxyType (immutable
+# Mapping) 의 round-trip 은 fetch 시 새 view 로 wrap.
+
+
+def screen_run_record_to_orm(record: ScreenRunSnapshot) -> ScreenRunSnapshotORM:
+    """frozen dataclass → ORM. nested query / result_codes / data_versions 직렬화.
+
+    Notes:
+        ScreenRunQuery.conditions 의 각 Mapping 은 dict 로 변환 (MappingProxyType
+        은 JSON 직렬화 불가). presentation_order tuple 은 list. data_versions
+        Mapping (MappingProxyType 가능) 도 dict.
+    """
+    query_json: dict[str, Any] = {
+        "conditions": [dict(c) for c in record.query.conditions],
+        "selected_factors": list(record.query.selected_factors),
+        # presentation_order None 도 JSON null 로 round-trip.
+        "presentation_order": (
+            list(record.query.presentation_order)
+            if record.query.presentation_order is not None
+            else None
+        ),
+    }
+    return ScreenRunSnapshotORM(
+        id=record.id,
+        user_id=record.user_id,
+        query=query_json,
+        as_of=record.as_of,
+        result_codes=list(record.result_codes),
+        result_hash=record.result_hash,
+        data_versions=dict(record.data_versions),
+        computed_at=record.computed_at,
+    )
+
+
+def screen_run_orm_to_record(orm: ScreenRunSnapshotORM) -> ScreenRunSnapshot:
+    """ORM → frozen dataclass. JSON → nested dataclass + MappingProxyType view.
+
+    Notes:
+        conditions 의 각 dict 는 `MappingProxyType` 로 wrap 하여 read-only view
+        — service / endpoint 에서 mutation 차단 (ScreenRunQuery 의 frozen 의미
+        보존).
+    """
+    raw_query = orm.query or {}
+    presentation_raw = raw_query.get("presentation_order")
+    # oracle 리뷰 M2 — SQLite 의 JSON 컬럼이 숫자를 float 로 반환할 수 있음
+    # (numeric 친화성). presentation_order 의 type 선언 `tuple[int, ...]` 보장
+    # 위해 명시 int cast. Pydantic 응답 직렬화 시점의 type drift 차단.
+    query = ScreenRunQuery(
+        conditions=tuple(
+            MappingProxyType(dict(c)) for c in raw_query.get("conditions", [])
+        ),
+        selected_factors=tuple(raw_query.get("selected_factors", [])),
+        presentation_order=(
+            tuple(int(x) for x in presentation_raw)
+            if presentation_raw is not None
+            else None
+        ),
+    )
+    return ScreenRunSnapshot(
+        id=orm.id,
+        user_id=orm.user_id,
+        query=query,
+        as_of=orm.as_of,
+        result_codes=tuple(orm.result_codes or []),
+        result_hash=orm.result_hash,
+        # data_versions 도 read-only view 로 wrap (frozen 의미 보존).
+        data_versions=MappingProxyType(dict(orm.data_versions or {})),
+        computed_at=orm.computed_at,
     )

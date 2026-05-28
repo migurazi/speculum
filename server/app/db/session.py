@@ -10,7 +10,7 @@ PostgreSQL (psycopg3) 또는 SQLite (built-in `sqlite3`) URL 모두 받아들이
 
 1. **sync session 선택** — 기존 Repository Protocol (`pit_protocols.py`, 등) 이
    모두 sync `def` 시그니처. Protocol 변경 없이 SQL 구현체 드롭인 위해 sync
-   유지. ARCHITECTURE.md §3.1 의 "(Async)" 는 M1+ 진입 시 별도 사이클로 전환.
+   유지. ARCHITECTURE.md §3.1 의 "(Async)" 는 M1+ 합류 시 별도 사이클로 전환.
 
 2. **engine 은 사용자 책임 (lifespan)** — 본 모듈은 factory 만 제공. 운영
    `main.create_app()` 또는 테스트 `conftest` 가 명시적으로 engine 생성·dispose.

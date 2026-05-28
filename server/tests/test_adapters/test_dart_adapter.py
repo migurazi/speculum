@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -32,7 +32,6 @@ from app.adapters.base import (
     AdapterError,
     AdapterRetryError,
     FetchResult,
-    FinancialStatementRow,
     IfrsType,
 )
 from app.adapters.dart_account_mapper import (
@@ -42,7 +41,6 @@ from app.adapters.dart_account_mapper import (
 )
 from app.adapters.dart_adapter import DartAdapter
 from app.models.source_citation import SourceKind
-
 
 # =============================================================================
 # DART JSON fixture builder
@@ -519,7 +517,7 @@ def test_citation_seven_tuple() -> None:
     assert "rcpNo=20240501000123" in cit.url
     # retrieved_at = UTC tz-aware.
     assert cit.retrieved_at.utcoffset() == datetime(
-        2024, 1, 1, tzinfo=timezone.utc,
+        2024, 1, 1, tzinfo=UTC,
     ).utcoffset()
 
 

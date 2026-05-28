@@ -9,7 +9,7 @@
 1. **Standalone** — DB / 외부망 의존 X. 단위 테스트가 격리 가능.
 2. **Immutable verified data** — JSON 파일이 single source of truth. 운영 코드
    path 와 build/sync 도구 path 가 분리. pykrx 등의 외부 source 는 데이터 갱신
-   build 스크립트에서만 사용 (운영 import graph 에 진입 X). `content_hash`
+   build 스크립트에서만 사용 (운영 import graph 에 포함 X). `content_hash`
    (factor_pack 과 동일 의미론) 로 변조 감지.
 3. **Fidelity 우선** — verified 범위 밖 요청은 silent 하게 추정하지 않고
    `CalendarRangeError` 로 명시적 fail. 데이터 없음 ≠ 데이터 부정확. 사용자는
@@ -43,11 +43,12 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Final, Iterator, Literal, Mapping
+from typing import Any, Final, Literal
 from zoneinfo import ZoneInfo
 
 from jsonschema import Draft202012Validator

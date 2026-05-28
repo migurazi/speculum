@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -170,7 +170,7 @@ def test_openapi_schema_does_not_block(client: TestClient) -> None:
     """OpenAPI schema 가 middleware 에 BLOCK 안 됨 — 본 사이클 docstring 검증."""
     res = client.get("/openapi.json")
     assert res.status_code == 200
-    body_str = str(res.json())
+    _body_str = str(res.json())
     # OpenAPI docstring 의 우리 vocabulary 가 안전한지 확인 (편의).
     # 본 test 는 강한 invariant 아닌 sanity check — 만약 fail 시 docstring lint
     # 필요.

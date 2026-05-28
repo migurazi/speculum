@@ -1,0 +1,19 @@
+/* Speculum global styles — Tailwind base + custom tokens.
+ *
+ * T31 scaffold minimum. shadcn/ui 합류 시 색상 token / CSS variable 추가.
+ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    /* Pretendard / system fallback 은 tailwind.config 의 fontFamily 가 적용. */
+    font-family: theme("fontFamily.sans");
+  }
+
+  body {
+    @apply bg-white text-neutral-900 antialiased;
+  }
+}

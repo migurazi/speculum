@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any, Final
 from uuid import UUID, uuid4
@@ -478,7 +478,7 @@ class DartAdapter(DataSourceAdapter):
             id=uuid4(),
             source=SourceKind.DART,
             identifier=identifier,
-            retrieved_at=datetime.now(timezone.utc),
+            retrieved_at=datetime.now(UTC),
             effective_date=effective_date,
             adapter_version=self.ADAPTER_VERSION,
             batch_id=batch_id,

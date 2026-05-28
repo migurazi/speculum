@@ -34,10 +34,11 @@ Out-of-scope (후속):
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from types import MappingProxyType
-from typing import Any, Final, Mapping, Sequence
+from typing import Any, Final
 from uuid import UUID
 
 from app.services._jcs import compute_content_hash
@@ -68,11 +69,12 @@ def _resolve_system_user_id() -> UUID:
     if override:
         try:
             return UUID(override)
-        except ValueError:
-            # silent fallback X — type 에러는 명시적 fail.
+        except ValueError as exc:
+            # silent fallback X — type 에러는 명시적 fail. raise ... from exc
+            # 으로 원본 ValueError chain 유지 (B904).
             raise ValueError(
                 f"SPECULUM_USER_ID 환경변수 값 '{override}' 가 valid UUID 아님"
-            )
+            ) from exc
     return _DEFAULT_SYSTEM_USER_UUID
 
 
@@ -250,7 +252,7 @@ class ScreenRunSnapshot:
 # =============================================================================
 
 class ScreenRunBuilder:
-    """Screen Run snapshot 생성의 단일 진입점.
+    """Screen Run snapshot 생성의 단일 export 클래스.
 
     State-less — static method 만. Builder 패턴이지만 객체 누적 없이 한 번에 build.
     """
@@ -325,7 +327,7 @@ class ScreenRunBuilder:
         result_hash = compute_content_hash(hash_input, exclude_key=None)
 
         # 6. computed_at — default 현재 UTC.
-        ts = computed_at if computed_at is not None else datetime.now(timezone.utc)
+        ts = computed_at if computed_at is not None else datetime.now(UTC)
 
         return ScreenRunSnapshot(
             id=run_id,

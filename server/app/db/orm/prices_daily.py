@@ -40,7 +40,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.db.types import UTCDateTime
 
-
 # OHLC + adjusted close 의 Numeric precision/scale.
 # 한국 주식 가격 최대 ~9백만원 (LGenergy 부근) → 8자리 정수부 + 4자리 소수부
 # (split 후 fractional share 미지원이나 향후 ADR ETF 대응).

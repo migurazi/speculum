@@ -12,8 +12,8 @@ import 하지 않도록 `__all__` 명시 (oracle 2 차 리뷰 M2 / L1).
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import date
-from typing import Sequence
 from uuid import UUID
 
 from app.repositories.pit_protocols import (

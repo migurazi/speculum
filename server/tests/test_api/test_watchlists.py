@@ -14,8 +14,8 @@
 
 from __future__ import annotations
 
-from typing import Iterator
-from uuid import UUID, uuid4
+from collections.abc import Iterator
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient

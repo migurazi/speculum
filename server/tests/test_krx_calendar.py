@@ -19,7 +19,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -36,7 +36,6 @@ from app.services.krx_calendar import (
     _load_calendar,
     kst_today,
 )
-
 
 _DATA_PATH = (
     Path(__file__).resolve().parents[2] / "shared" / "data" / "calendar"

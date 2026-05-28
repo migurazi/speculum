@@ -58,7 +58,22 @@ target-version = "py312"
 [tool.ruff.lint]
 # 의도적으로 보수적 선택 — M0 단계에서 lint 폭증 방지.
 select = ["E", "F", "W", "I", "N", "B", "UP"]
-ignore = ["E501"]  # line-length 은 formatter 가 처리
+ignore = [
+  "E501",   # line-length — formatter 책임.
+  # Domain 의도적 명명 — N818 의 "Error suffix" 강제는 factor_pack 의
+  # IdentityViolation 같은 의미상 명사형 도메인 예외에 부적합.
+  "N818",
+  # str + Enum 다중 상속 — Python 3.11+ 의 StrEnum 마이그레이션은 별도 cycle.
+  # ADR-0007 / ADR-0002 의 enum 정의가 현재 패턴 의존.
+  "UP042",
+  # Generic class — Python 3.12 PEP 695 syntax 도입은 점진적. M0 = legacy 유지.
+  "UP046",
+  # Sessionmaker 같은 SQLAlchemy convention 변수명 — N806/N802 의 PEP-8 와 불일치.
+  "N802",
+  "N806",
+  # `_fdr` 같은 의도적 namespace import — ADR-0003 의 adapter 별 명명.
+  "N813",
+]
 
 [tool.mypy]
 python_version = "3.12"

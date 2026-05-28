@@ -44,7 +44,6 @@ from app.repositories.screen_run_repository import (
     ScreenRunRepository,
 )
 from app.repositories.stocks_master_repository import (
-    FakeStocksMasterRepository,
     StocksMasterRepository,
 )
 from app.repositories.watchlist_repository import (

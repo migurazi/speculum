@@ -25,12 +25,12 @@ keyword-only required 로 받아 호출자가 PIT 의도를 type-level 로 명�
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Mapping, Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 from uuid import NAMESPACE_OID, UUID, uuid5
-
 
 # =============================================================================
 # Common PIT Record Protocols

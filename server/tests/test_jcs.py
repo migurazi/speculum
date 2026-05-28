@@ -8,8 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.services._jcs import canonicalize_jcs, compute_content_hash, HASH_PREFIX
-
+from app.services._jcs import HASH_PREFIX, canonicalize_jcs, compute_content_hash
 
 # =============================================================================
 # 1. JCS canonicalize basic
@@ -27,7 +26,7 @@ def test_canonicalize_strips_whitespace() -> None:
 
 def test_canonicalize_preserves_unicode() -> None:
     out = canonicalize_jcs({"name": "추천"})
-    assert "추천".encode("utf-8") in out
+    assert "추천".encode() in out
 
 
 def test_canonicalize_rejects_nan() -> None:

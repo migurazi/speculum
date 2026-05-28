@@ -20,7 +20,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Final
 from uuid import UUID, uuid4
@@ -33,15 +33,11 @@ from app.services.price_adjuster import (
     CORPORATE_ACTION_POLICY_VERSION,
     POLICY_CONTENT_HASH,
     POLICY_LABEL,
-    AdjustedPriceRecord,
-    AdjustedPriceSeries,
     AdjusterDataError,
     AdjusterError,
-    AdjustmentEvent,
     InconsistentTheoreticalPriceError,
     PriceAdjuster,
 )
-
 
 _DUMMY_CITATION: Final[UUID] = UUID("00000000-0000-0000-0000-00000000ffff")
 _DUMMY_LINEAGE: Final[UUID] = UUID("00000000-0000-0000-0000-0000000000aa")
@@ -60,7 +56,7 @@ def _price(
         volume=volume,
         close_adjusted=p,  # placeholder — Adjuster 가 재계산.
         citation_id=_DUMMY_CITATION,
-        created_at=datetime(d.year, d.month, d.day, 17, 0, tzinfo=timezone.utc),
+        created_at=datetime(d.year, d.month, d.day, 17, 0, tzinfo=UTC),
     )
 
 
@@ -87,7 +83,7 @@ def _action(
         citation_id=_DUMMY_CITATION,
         superseded_by=superseded_by,
         created_at=datetime(announced.year, announced.month, announced.day,
-                            9, 0, tzinfo=timezone.utc),
+                            9, 0, tzinfo=UTC),
     )
 
 
@@ -535,7 +531,7 @@ def test_multiple_codes_in_price_list_raises() -> None:
         low_raw=Decimal("100"), close_raw=Decimal("100"),
         volume=1, close_adjusted=Decimal("100"),
         citation_id=_DUMMY_CITATION,
-        created_at=datetime(2024, 4, 2, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 2, tzinfo=UTC),
     )
     with pytest.raises(AdjusterDataError, match="multiple codes"):
         adjuster.adjust([p1, p2_other], [], as_of=date(2024, 4, 20))
@@ -627,7 +623,7 @@ def test_all_ohlc_columns_get_adjusted() -> None:
         low_raw=Decimal("49500"), close_raw=Decimal("50500"),
         volume=1_000_000, close_adjusted=Decimal("50500"),
         citation_id=_DUMMY_CITATION,
-        created_at=datetime(2024, 4, 1, 17, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 4, 1, 17, 0, tzinfo=UTC),
     )
     actions = [_action(
         action_type="split", announced=date(2024, 3, 1),

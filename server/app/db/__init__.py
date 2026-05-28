@@ -9,9 +9,9 @@ sqlite3). Cross-dialect 호환을 위해 JSONB → JSON (SQLAlchemy `JSON` 타�
 Decimal → Numeric(precision, scale) 사용.
 
 **sync 결정 (T13)**: 기존 Repository Protocol 이 모두 sync `def` 시그니처 — 본
-모듈도 sync. M1+ 멀티-사용자 진입 시 async 전환을 단일 cycle 로 분리.
+모듈도 sync. M1+ 멀티-사용자 합류 시 async 전환을 단일 cycle 로 분리.
 
-본 layer 의 외부 진입점:
+본 layer 의 외부 export:
 
 - `app.db.base.Base` — Declarative base. ORM 모델 정의는 `app/db/orm/*` 에 위치하지만
   Base 자체는 본 모듈 import.

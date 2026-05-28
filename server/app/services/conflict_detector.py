@@ -37,10 +37,11 @@ Out-of-scope (다음 cycle):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
-from typing import Final, Sequence
+from typing import Final
 
 from app.adapters.base import FetchResult, OHLCVRow
 

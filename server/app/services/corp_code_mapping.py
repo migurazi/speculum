@@ -33,9 +33,9 @@ DART OpenAPI 의 corp_code 는 8 자리 numeric (예: "00126380" — 삼성전�
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping
 
 __all__ = ["CorpCodeMapping", "CorpCodeMappingError"]
 

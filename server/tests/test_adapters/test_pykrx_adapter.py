@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
@@ -34,7 +34,6 @@ from app.adapters.base import (
 )
 from app.adapters.pykrx_adapter import PykrxAdapter
 from app.models.source_citation import SourceKind
-
 
 # =============================================================================
 # Helpers — fixture DataFrame 생성
@@ -137,7 +136,7 @@ def test_fetch_ohlcv_citation_seven_tuple(monkeypatch: pytest.MonkeyPatch) -> No
     adapter = PykrxAdapter(pykrx_module=_make_pykrx_mock(ohlcv_df=df))
 
     # retrieved_at 결정성 — datetime.now() patch.
-    fixed_now = datetime(2024, 5, 20, 9, 30, tzinfo=timezone.utc)
+    fixed_now = datetime(2024, 5, 20, 9, 30, tzinfo=UTC)
     monkeypatch.setattr(
         "app.adapters.pykrx_adapter.datetime",
         type("_dt", (), {"now": staticmethod(lambda tz=None: fixed_now)})(),

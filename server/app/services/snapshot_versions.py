@@ -31,8 +31,9 @@ Import topology (oracle 2 차 M4 — circular import 위험 monitor):
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import Final
 
 from app.services.as_of_policy import PIT_POLICY_VERSION
 from app.services.factor_evaluator import EVALUATOR_POLICY_VERSION
@@ -41,6 +42,8 @@ from app.services.krx_calendar import DEFAULT_CALENDAR
 from app.services.price_adjuster import (
     ADJUSTMENT_POLICY_VERSION,
     CORPORATE_ACTION_POLICY_VERSION,
+)
+from app.services.price_adjuster import (
     POLICY_CONTENT_HASH as PRICE_ADJUSTMENT_POLICY_HASH,
 )
 

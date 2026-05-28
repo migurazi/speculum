@@ -9,13 +9,12 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-
 
 _VALID_SET = {
     "name": "Cheap stocks",
@@ -156,9 +155,9 @@ def test_screener_set_idor_protection(client: TestClient, monkeypatch) -> None:
 
 def test_list_orders_by_updated_at_desc(client: TestClient) -> None:
     """가장 최근에 만든 게 먼저."""
-    r1 = client.post("/api/screener-sets",
+    _r1 = client.post("/api/screener-sets",
                       json={**_VALID_SET, "name": "first"})
-    r2 = client.post("/api/screener-sets",
+    _r2 = client.post("/api/screener-sets",
                       json={**_VALID_SET, "name": "second"})
     res = client.get("/api/screener-sets")
     items = res.json()["items"]

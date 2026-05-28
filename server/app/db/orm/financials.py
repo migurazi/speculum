@@ -37,7 +37,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db.base import Base
 from app.db.types import UTCDateTime
 
-
 # 한국 대기업 자산총계 = 수십조원 (~10^13). precision 38 = PG NUMERIC 한도 호환
 # + 안전 마진. scale 4 = 비율 지표 (ROE, 부채비율) 도 같은 컬럼에서 표현.
 _FINANCIAL_NUMERIC = Numeric(precision=38, scale=4)

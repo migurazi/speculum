@@ -20,13 +20,11 @@ import pytest
 from app.services.forbidden_words import (
     CheckScope,
     ForbiddenKind,
-    Match,
     assert_clean,
     normalize,
     scan_api_response,
     scan_text,
 )
-
 
 # =============================================================================
 # 1. 한국어 절대 금지 매트릭스
@@ -274,7 +272,7 @@ def test_scan_api_response_excludes_in_nested_lists() -> None:
 def test_scan_api_response_without_exclude_catches_stock_name() -> None:
     """exclude_paths 안 주면 종목명에서 false positive 발생."""
     payload = {"stock_name": "이베스트투자증권"}
-    matches = scan_api_response(payload)
+    _matches = scan_api_response(payload)
     # 이베스트 는 화이트리스트에 있으므로 통과
     # 다른 가상 종목명으로 검증:
     payload2 = {"some_field": "추천 종목"}

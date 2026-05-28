@@ -14,9 +14,8 @@
 
 from __future__ import annotations
 
-import os
+from collections.abc import Iterator
 from datetime import date
-from typing import Iterator
 from uuid import UUID
 
 import pytest
@@ -26,7 +25,6 @@ from fastapi.testclient import TestClient
 from app.api.dependencies.as_of import NormalizedAsOfDep, get_normalized_as_of
 from app.api.dependencies.auth import CurrentUserDep, UserContext, get_current_user
 from app.api.exception_handlers import register_exception_handlers
-
 
 # =============================================================================
 # Helpers — per-test app instance (oracle R4 — dependency_overrides leakage 회피)
@@ -126,7 +124,6 @@ def test_as_of_missing_within_range_uses_default(monkeypatch: pytest.MonkeyPatch
 
     def _override_default():
         # today=2024-05-10 (calendar 내) 으로 normalize.
-        from fastapi import Response
         # 본 override 는 endpoint 가 직접 호출하므로 response 주입 불가 — 단순화로
         # AsOfPolicy._normalize_with_today 만 사용해 결과만 확인.
         return AsOfPolicy._normalize_with_today(None, today=date(2024, 5, 10))
@@ -280,8 +277,9 @@ def test_get_normalized_as_of_function_with_today_holiday_default(
     호출. Response mock 으로 header 누락/포함 검증.
     """
     from unittest.mock import MagicMock
-    from app.services.as_of_policy import AsOfPolicy, NormalizedAsOf
+
     from app.services._jcs import HASH_PREFIX  # noqa: F401 (참조용)
+    from app.services.as_of_policy import AsOfPolicy, NormalizedAsOf
 
     # Default fill 의 simulated result — was_defaulted + was_snapped + original=None
     simulated = NormalizedAsOf(

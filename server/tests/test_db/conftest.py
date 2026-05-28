@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -28,8 +28,12 @@ from app.db.orm import (  # noqa: F401  ← Base.metadata 등록 side-effect
     CorporateActionORM,
     FinancialORM,
     PriceDailyORM,
+    ScreenerSetORM,
+    ScreenRunSnapshotORM,
     SourceCitationORM,
     StocksMasterORM,
+    WatchlistFolderORM,
+    WatchlistItemORM,
 )
 
 
@@ -46,6 +50,15 @@ def db_engine() -> Iterator[Engine]:
         poolclass=StaticPool,
         future=True,
     )
+
+    # SQLite 는 PRAGMA foreign_keys=ON 이 connection 단위 default OFF — ON 강제
+    # 하여 운영 PG 와 동일한 FK behavior (특히 ondelete CASCADE) 보장.
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_fk(dbapi_connection, _conn_record):  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(engine)
     try:
         yield engine

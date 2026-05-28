@@ -11,12 +11,11 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 from enum import Enum
 from typing import Final
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 from app.repositories.pit_protocols import StockMasterRecord
 from app.services.factor_evaluator import EvaluationResult
@@ -92,7 +91,7 @@ class StockSummaryOut(BaseModel):
     @classmethod
     def from_master(
         cls, master: StockMasterRecord, *, as_of: date,
-    ) -> "StockSummaryOut":
+    ) -> StockSummaryOut:
         """도메인 → wire 단방향 factory.
 
         `current_code` 가 None (폐지) 이면 lineage 의 마지막 historical code 로
@@ -133,7 +132,7 @@ class FactorValueOut(BaseModel):
         *,
         factor_name: str,
         factor_unit: str,
-    ) -> "FactorValueOut":
+    ) -> FactorValueOut:
         return cls(
             canonical_id=result.factor_canonical_id,
             name=factor_name,
@@ -169,7 +168,7 @@ class StockDetailOut(BaseModel):
         factors: tuple[FactorValueOut, ...],
         *,
         as_of: date,
-    ) -> "StockDetailOut":
+    ) -> StockDetailOut:
         return cls(
             id=master.id,
             code=_resolve_display_code(master),

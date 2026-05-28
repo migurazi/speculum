@@ -43,15 +43,15 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_HALF_EVEN, localcontext
+from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation, localcontext
 from types import MappingProxyType
-from typing import Any, Callable, Final, Literal, Mapping, Sequence
+from typing import Any, Final, Literal
 
 from app.repositories.pit_protocols import CorporateActionRecord, PriceRecord
 from app.services._jcs import canonicalize_jcs as _canonicalize_jcs_shared
-from app.services.as_of_policy import PIT_POLICY_VERSION
 from app.services.pit_enforcer import PITEnforcer
 
 __all__ = [

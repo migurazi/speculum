@@ -6,9 +6,9 @@
    `code` 필드로 frontend 가 분기 가능 (ADR-0007 D4.4 의 BLOCK 응답 `{"detail",
    "code"}` 와 일관).
 2. **`RequestValidationError` input sanitize** — FastAPI 의 default 422 응답이
-   query/body 값을 echo. 사용자가 `as_of=추천종목` 같은 입력 시 응답 본문이
-   금지 어휘 echo → middleware BLOCK → 500. 본 handler 가 입력 값을 sanitize
-   후 generic message 만 반환.
+   query/body 값을 echo. 사용자가 `as_of=<dirty>` 같은 advisory vocabulary
+   포함 입력 시 응답 본문이 forbidden echo → middleware BLOCK → 500. 본
+   handler 가 입력 값을 sanitize 후 generic message 만 반환.
 3. **middleware 통과 보장** — 본 handler 의 응답이 `ForbiddenWordsGuardMiddleware`
    를 통과해야 함. 응답 메시지의 vocabulary 는 의도적으로 안전 어휘만 사용.
 
@@ -93,10 +93,10 @@ def register_exception_handlers(app: FastAPI) -> None:
         """FastAPI 의 422 → input echo 제거 + generic message (oracle R1).
 
         Default FastAPI handler 는 입력값 `ctx.input` 을 응답 body 에 그대로
-        echo. 사용자가 `as_of=추천종목` 같은 dirty input 시 응답이 금지 어휘
-        포함 → ForbiddenWordsGuardMiddleware 가 BLOCK 으로 swap → 사용자가
-        진짜 원인 (잘못된 형식) 못 봄. 본 handler 가 input 을 노출하지 않는
-        generic message 만 반환.
+        echo. 사용자가 `as_of=<dirty>` 같은 advisory vocabulary 가 포함된 input
+        시 응답이 그 vocabulary 포함 → ForbiddenWordsGuardMiddleware 가 BLOCK
+        으로 swap → 사용자가 잘못된 형식이 진짜 원인임을 못 봄. 본 handler
+        가 input 을 노출하지 않는 generic message 만 반환.
         """
         # error location 만 보존 — value 는 노출 X.
         # FastAPI errors 형식: [{"loc": [...], "msg": "...", "type": "..."}]
@@ -123,7 +123,7 @@ def _sanitize_msg(msg: str) -> str:
     """Validation error message 의 input echo 부분을 제거.
 
     Pydantic / FastAPI 의 default msg 가 `Input should be a valid date, ...,
-    input_value='추천종목'` 같은 형태. 단순히 `input_value=...` 이후를 잘라냄.
+    input_value='<dirty>'` 같은 형태. 단순히 `input_value=...` 이후를 잘라냄.
     완벽한 sanitize 보다는 통상 echo 패턴 차단.
     """
     # 가장 흔한 echo 패턴 — `input_value=`, `input_type=`.

@@ -10,7 +10,8 @@ PIT-aware Repository (pit_protocols.py) 와 달리 Screen Run 은 자기 자체�
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Protocol, Sequence, runtime_checkable
+from collections.abc import Sequence
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
 from app.services.screen_run import ScreenRunSnapshot

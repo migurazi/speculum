@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from enum import Enum
 from typing import Final, Protocol, runtime_checkable
 from uuid import UUID
@@ -153,7 +153,7 @@ class SourceCitation:
     # default = 호출 시점 UTC. adapter boilerplate 회피 (oracle 2 차 M5). 단
     # deterministic test 필요 시 명시 주입.
     created_at: datetime = field(
-        default_factory=lambda: datetime.now(timezone.utc)
+        default_factory=lambda: datetime.now(UTC)
     )
 
     def __post_init__(self) -> None:

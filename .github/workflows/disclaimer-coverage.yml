@@ -1,0 +1,40 @@
+# Disclaimer + Consent 의무 component 가 root layout 에 mount 되었는지 검사.
+#
+# ADR-0006 D2 (동의 모달) + ADR-0007 D2 (footer disclaimer) 의 file-system
+# level 강제. tools/check_disclaimer_coverage.py 의 standalone Python 스크립트
+# (의존성 표준 라이브러리만).
+#
+# 관련 ADR / 문서:
+# - ADR-0006 D2 — 동의 모달 의무
+# - ADR-0007 D2 — footer disclaimer 의무
+# - M0_PLAN T41 — CI 5 게이트 (disclaimer coverage)
+
+name: disclaimer-coverage
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "client/app/layout.tsx"
+      - "tools/check_disclaimer_coverage.py"
+      - ".github/workflows/disclaimer-coverage.yml"
+  pull_request:
+    paths:
+      - "client/app/layout.tsx"
+      - "tools/check_disclaimer_coverage.py"
+      - ".github/workflows/disclaimer-coverage.yml"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run disclaimer coverage check
+        run: python tools/check_disclaimer_coverage.py

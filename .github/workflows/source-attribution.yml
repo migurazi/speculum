@@ -1,0 +1,42 @@
+# Source attribution 의무 가드 — factor value 가 SourceAttribution wrap 거쳤는지.
+#
+# ADR-0007 D2 + 8 기둥 §2.1 Fidelity 의 file-system level 강제. tools/
+# check_source_attribution.py 의 standalone Python 스크립트 (의존성 표준
+# 라이브러리만).
+#
+# 관련 ADR / 문서:
+# - ADR-0007 D2 — 모든 지표 값에 식·출처·기준일
+# - 8 기둥 §2.1 Fidelity
+# - M0_PLAN T41 — CI 5 게이트 (source attribution)
+
+name: source-attribution
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "client/**/*.ts"
+      - "client/**/*.tsx"
+      - "tools/check_source_attribution.py"
+      - ".github/workflows/source-attribution.yml"
+  pull_request:
+    paths:
+      - "client/**/*.ts"
+      - "client/**/*.tsx"
+      - "tools/check_source_attribution.py"
+      - ".github/workflows/source-attribution.yml"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run source attribution check
+        run: python tools/check_source_attribution.py

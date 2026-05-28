@@ -24,11 +24,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Final, Sequence
-from uuid import UUID
+from typing import Final
 
 import pytest
 
@@ -37,11 +37,9 @@ from app.services.factor_evaluator import (
     EvaluationResult,
     FactorEvaluator,
     FactorEvaluatorError,
-    FieldProvider,
     MalformedFormulaError,
     UnknownFieldError,
 )
-
 
 _BUILTIN_PACK_PATH: Final[Path] = (
     Path(__file__).resolve().parents[1]

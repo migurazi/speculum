@@ -1,0 +1,56 @@
+# Backend integration tests — pykrx / FDR / DART OpenAPI 실 호출.
+#
+# ADR-0003 D8 + M0_PLAN T43. 외부 출처에 의존하므로 push/PR 마다 실행 시
+# 비결정성 + 외부 rate limit + DART API 비용. cron 야간 (KST 02:00 = UTC
+# 17:00) + 수동 trigger 만.
+#
+# DART 테스트는 `secrets.DART_API_KEY` 가 설정된 경우만 실행. fork PR /
+# secret 미주입 환경에서는 conftest 가 자동 skip.
+#
+# 의존성:
+#   - pykrx (KRX 정보데이터시스템 + Naver finance crawl)
+#   - FinanceDataReader (Yahoo / Naver crawl)
+#   - httpx (DART OpenAPI)
+#
+# 관련 ADR / 문서:
+# - ADR-0003 D8 — Adapter 의 외부 호출은 integration marker
+# - M0_PLAN T43
+
+name: integration-nightly
+
+on:
+  schedule:
+    # UTC 17:00 = KST 02:00. KRX 휴장 시간대 + DART rate limit 안전.
+    - cron: "0 17 * * *"
+  workflow_dispatch:  # 수동 실행 가능 (release 직전 sanity check)
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: server/pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install -U pip
+          python -m pip install -e ".[test]"
+
+      - name: Integration tests
+        env:
+          # DART_API_KEY 가 secret 으로 주입된 경우만 dart test 활성. 없으면
+          # conftest 의 `dart_api_key` fixture 가 None → 해당 test 가 skip.
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+        # `-m integration` — 본 marker 가진 test 만 실행 (default `not
+        # integration` 은 server-ci.yml).
+        run: pytest tests/integration -m integration -v

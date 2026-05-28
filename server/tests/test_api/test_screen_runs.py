@@ -17,8 +17,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date
-from typing import Iterator
 from uuid import UUID
 
 import pytest
@@ -28,7 +28,6 @@ from app.main import create_app
 from app.repositories.pit_protocols import CodeHistoryEntry, StockMasterRecord
 from app.repositories.screen_run_repository import FakeScreenRunRepository
 from app.repositories.stocks_master_repository import FakeStocksMasterRepository
-
 
 _SAMSUNG = StockMasterRecord(
     id=UUID("00000000-0000-0000-0000-000000000001"),

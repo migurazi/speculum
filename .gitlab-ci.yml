@@ -1,0 +1,94 @@
+# GitLab CI — speculum (origin = gitlab.com 대안).
+#
+# M0_PLAN T41 의 5 종 CI 게이트 — GitHub Actions 와 동일 stage 를 GitLab pipeline
+# 에서도 실행 (mirror). ADR-0007 §D4 의 forbidden words 게이트는 모든 platform
+# 에서 동작해야 함.
+#
+# Stage 구조:
+#   1. check  — forbidden words + disclaimer coverage (Python 만, 빠른 시간)
+#   2. test   — server pytest + client typecheck/lint/test/build
+
+stages:
+  - check
+  - test
+
+# -----------------------------------------------------------------------------
+# Stage: check — 정적 정책 게이트 (의존성 가장 적음)
+# -----------------------------------------------------------------------------
+
+check-forbidden-words:
+  stage: check
+  image: python:3.12-slim
+  script:
+    - python tools/check_forbidden_words.py .
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+check-disclaimer-coverage:
+  stage: check
+  image: python:3.12-slim
+  script:
+    - python tools/check_disclaimer_coverage.py
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+check-source-attribution:
+  stage: check
+  image: python:3.12-slim
+  script:
+    - python tools/check_source_attribution.py
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+check-pit-bypass:
+  stage: check
+  image: python:3.12-slim
+  script:
+    - python tools/check_pit_bypass.py
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# -----------------------------------------------------------------------------
+# Stage: test — unit test + build (의존성 큰 stage)
+# -----------------------------------------------------------------------------
+
+server-test:
+  stage: test
+  image: python:3.12-slim
+  before_script:
+    - cd server
+    - python -m pip install -U pip
+    - python -m pip install -e ".[test]" "ruff>=0.7,<1.0"
+  script:
+    - ruff check .
+    - pytest -m "not integration"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+client-test:
+  stage: test
+  image: node:20
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@9 --activate
+    - cd client
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm typecheck
+    - pnpm lint
+    - pnpm test
+    - pnpm build
+  rules:
+    - if: $CI_COMMIT_BRANCH == "develop"
+    - if: $CI_COMMIT_BRANCH == "main"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"

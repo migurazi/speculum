@@ -18,8 +18,7 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import date, datetime, timedelta, timezone
-from typing import Final
+from datetime import UTC, date, datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
 import pytest
@@ -35,8 +34,7 @@ from app.repositories.citation_repository import (
     FakeCitationRepository,
 )
 
-
-_UTC = timezone.utc
+_UTC = UTC
 _KST = timezone(timedelta(hours=9))
 
 

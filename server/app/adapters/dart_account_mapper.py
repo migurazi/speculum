@@ -26,8 +26,9 @@ service / repository / factor evaluator 는 canonical key (e.g.,
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Final, Mapping
+from typing import Final
 
 __all__ = [
     "UNMAPPED_PREFIX",

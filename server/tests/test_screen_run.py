@@ -17,8 +17,7 @@
 from __future__ import annotations
 
 import dataclasses
-import os
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -30,15 +29,12 @@ from app.repositories.screen_run_repository import (
 from app.services.screen_run import (
     SYSTEM_USER_ID,
     ScreenRunBuilder,
-    ScreenRunQuery,
-    ScreenRunSnapshot,
     normalize_stock_codes,
 )
 
-
 _USER_A = UUID("00000000-0000-0000-0000-0000000000aa")
 _USER_B = UUID("00000000-0000-0000-0000-0000000000bb")
-_NOW = datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
+_NOW = datetime(2024, 5, 1, 12, 0, tzinfo=UTC)
 
 
 # =============================================================================
@@ -209,8 +205,8 @@ def test_result_hash_does_not_depend_on_computed_at() -> None:
         as_of=date(2024, 5, 1), result_codes=["005930"],
         data_versions={"a": "1"},
     )
-    snap1 = ScreenRunBuilder.build(**common, computed_at=datetime(2024, 1, 1, tzinfo=timezone.utc))
-    snap2 = ScreenRunBuilder.build(**common, computed_at=datetime(2024, 12, 31, tzinfo=timezone.utc))
+    snap1 = ScreenRunBuilder.build(**common, computed_at=datetime(2024, 1, 1, tzinfo=UTC))
+    snap2 = ScreenRunBuilder.build(**common, computed_at=datetime(2024, 12, 31, tzinfo=UTC))
     assert snap1.result_hash == snap2.result_hash
 
 
@@ -411,7 +407,7 @@ def test_repo_fetch_recent_orders_by_computed_at_desc() -> None:
             run_id=uuid4(), user_id=_USER_A,
             conditions=[], selected_factors=[],
             as_of=date(2024, 5, 1), result_codes=[],
-            computed_at=datetime(2024, 5, i + 1, tzinfo=timezone.utc),
+            computed_at=datetime(2024, 5, i + 1, tzinfo=UTC),
         )
         repo.save(snap)
     runs = repo.fetch_recent(user_id=_USER_A, limit=10)
@@ -426,7 +422,7 @@ def test_repo_fetch_recent_respects_limit() -> None:
             run_id=uuid4(), user_id=_USER_A,
             conditions=[], selected_factors=[],
             as_of=date(2024, 5, 1), result_codes=[],
-            computed_at=datetime(2024, 5, i + 1, tzinfo=timezone.utc),
+            computed_at=datetime(2024, 5, i + 1, tzinfo=UTC),
         )
         repo.save(snap)
     runs = repo.fetch_recent(user_id=_USER_A, limit=2)

@@ -25,7 +25,9 @@ write.
 설계 결정 (T18 패턴 재사용):
 1. **sync orchestration** — codebase 일관.
 2. **scheduler 미통합** — manual entry. CLI/script 가 호출.
-3. **per-company savepoint X** — T18 의 M1 backlog 와 동일 한계 (M0 출하 전).
+3. **per-company SAVEPOINT 활성화** — session 주입 시 `begin_nested()` 로
+   회사별 transactional integrity 강제 (oracle T19 M1 적용). DB write 중간
+   실패 시 SAVEPOINT ROLLBACK 으로 partial commit 차단. Fake 모드는 None.
 
 관련 ADR:
 - ADR-0003 D2 (canonical), D6 (rate limit)
@@ -37,10 +39,13 @@ write.
 from __future__ import annotations
 
 import time
+from collections.abc import Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from typing import Sequence
+from datetime import UTC, datetime
 from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
+
+from sqlalchemy.orm import Session
 
 from app.adapters.base import (
     AdapterError,
@@ -55,6 +60,7 @@ from app.repositories.pit_protocols import (
     FinancialRepository,
 )
 from app.services.corp_code_mapping import CorpCodeMapping
+from batch.alerts import BatchAlertHandler, NullAlertHandler
 
 __all__ = ["DartBatchSummary", "DartDailyBatch"]
 
@@ -73,7 +79,11 @@ class DartBatchSummary:
         skipped_count: corp_code 매핑 누락으로 skip 한 회사 수.
         failures: (stock_code, reason) 결정적 정렬.
         skipped_codes: 매핑 누락된 stock_code list (운영 alerting).
-        total_rows_saved: financial 레코드 누적 저장 수 (CFS+OFS 합).
+        total_rows_saved: financial 레코드 누적 저장 수 (CFS+OFS 합). dry_run
+            모드면 fetch 된 row 수 — 실제 DB persist 와 의미 분리 위해 호출자가
+            `dry_run` 플래그 함께 해석.
+        dry_run: True 면 본 batch 가 DB write skip — fetch + corp_code 매핑
+            검증만. 운영 release 전 sanity check.
         started_at / ended_at: UTC tz-aware.
     """
 
@@ -87,6 +97,7 @@ class DartBatchSummary:
     failures: Sequence[tuple[str, str]]
     skipped_codes: Sequence[str]
     total_rows_saved: int
+    dry_run: bool
     started_at: datetime
     ended_at: datetime
 
@@ -103,6 +114,8 @@ class DartDailyBatch:
             ADR-0005 의 dual variant 정책.
         throttle_seconds: 회사 호출 사이 sleep. ADR-0003 D6 의 DART 분당
             throttling. test=0, 운영 default 6.0 (일 10,000 호출 안전 마진).
+        alert_handler: BatchAlertHandler. None 이면 NullAlertHandler — alert
+            no-op. KrxDailyBatch 와 동일 인터페이스 (T43 / AC-O-02).
     """
 
     def __init__(
@@ -114,6 +127,8 @@ class DartDailyBatch:
         financial_repo: FinancialRepository,
         ifrs_types: Sequence[IfrsType] = (IfrsType.CFS, IfrsType.OFS),
         throttle_seconds: float = 6.0,
+        session: Session | None = None,
+        alert_handler: BatchAlertHandler | None = None,
     ) -> None:
         self._adapter = adapter
         self._mapping = corp_mapping
@@ -121,6 +136,13 @@ class DartDailyBatch:
         self._financial_repo = financial_repo
         self._ifrs_types = tuple(ifrs_types)
         self._throttle = throttle_seconds
+        # oracle T19 M1 — session 있으면 회사별 SAVEPOINT 활성. DB write
+        # 중간 실패 시 partial commit 차단. Fake 모드는 None.
+        self._session = session
+        # KrxDailyBatch 와 일관 — None → NullAlertHandler.
+        self._alert: BatchAlertHandler = (
+            alert_handler if alert_handler is not None else NullAlertHandler()
+        )
 
     def run(
         self,
@@ -128,6 +150,7 @@ class DartDailyBatch:
         stock_codes: Sequence[str],
         fiscal_year: int,
         fiscal_quarter: int,
+        dry_run: bool = False,
     ) -> DartBatchSummary:
         """1 회사 list × (year, quarter) batch 실행.
 
@@ -136,16 +159,19 @@ class DartDailyBatch:
                 또는 사용자 watchlist.
             fiscal_year: 사업연도 (2000~2100).
             fiscal_quarter: 1~4 (4=연간/사업보고서).
+            dry_run: True 면 fetch + corp_code 매핑만 수행, citation/financial
+                DB write skip. 운영 release 전 sanity check 패턴.
 
         Returns:
-            DartBatchSummary — 회사별 성공/실패/skip 집계.
+            DartBatchSummary — 회사별 성공/실패/skip 집계 + dry_run flag.
 
         Note:
             본 메서드는 raise 하지 않음 — universe 전체 실패도 summary 로 반환.
             adapter 가 api_key 미설정 등 영구 실패 시 모든 회사가 failure 로 분류.
+            alert_handler 가 주입되어 있으면 failure / complete 시점에 호출.
         """
         batch_id = uuid4()
-        started_at = datetime.now(timezone.utc)
+        started_at = datetime.now(UTC)
 
         successes = 0
         failures: list[tuple[str, str]] = []
@@ -155,31 +181,48 @@ class DartDailyBatch:
         for stock_code in stock_codes:
             corp_code = self._mapping.to_corp_code(stock_code)
             if corp_code is None:
-                # corp_code 매핑 누락 — skip + alert.
+                # corp_code 매핑 누락 — skip + alert (failure 와 다른 카테고리).
+                # 운영 의미: corp_mapping 갱신 필요 신호. failure (fetch 오류)
+                # 와 구분 위해 별도 reason prefix.
                 skipped.append(stock_code)
+                self._alert.on_failure(
+                    stock_code, "skipped: corp_code mapping missing",
+                )
                 continue
 
+            # oracle T19 M1 — 회사별 SAVEPOINT. session 있으면 begin_nested()
+            # → 회사 처리 중 raise 시 SAVEPOINT ROLLBACK 으로 partial commit
+            # 차단. Fake 모드 (session=None) 는 nullcontext. dry_run 도
+            # nullcontext — DB write 자체 없음.
+            savepoint: AbstractContextManager[object] = (
+                self._session.begin_nested()
+                if self._session is not None and not dry_run
+                else nullcontext()
+            )
             try:
-                rows_saved = self._process_company(
-                    stock_code=stock_code,
-                    corp_code=corp_code,
-                    fiscal_year=fiscal_year,
-                    fiscal_quarter=fiscal_quarter,
-                    batch_id=batch_id,
-                )
-                total_rows += rows_saved
-                successes += 1
+                with savepoint:
+                    rows_saved = self._process_company(
+                        stock_code=stock_code,
+                        corp_code=corp_code,
+                        fiscal_year=fiscal_year,
+                        fiscal_quarter=fiscal_quarter,
+                        batch_id=batch_id,
+                        dry_run=dry_run,
+                    )
+                    total_rows += rows_saved
+                    successes += 1
             except AdapterError as exc:
                 failures.append((stock_code, str(exc)))
+                self._alert.on_failure(stock_code, str(exc))
             except Exception as exc:  # noqa: BLE001
-                failures.append(
-                    (stock_code, f"unexpected: {type(exc).__name__}: {exc}"),
-                )
+                reason = f"unexpected: {type(exc).__name__}: {exc}"
+                failures.append((stock_code, reason))
+                self._alert.on_failure(stock_code, reason)
 
             if self._throttle > 0:
                 time.sleep(self._throttle)
 
-        return DartBatchSummary(
+        summary = DartBatchSummary(
             batch_id=batch_id,
             fiscal_year=fiscal_year,
             fiscal_quarter=fiscal_quarter,
@@ -190,9 +233,12 @@ class DartDailyBatch:
             failures=tuple(sorted(failures)),
             skipped_codes=tuple(sorted(skipped)),
             total_rows_saved=total_rows,
+            dry_run=dry_run,
             started_at=started_at,
-            ended_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(UTC),
         )
+        self._alert.on_complete(summary)
+        return summary
 
     # =========================================================================
     # 내부 — 회사별 처리 (T18 fetch-then-save 패턴 재사용)
@@ -206,14 +252,19 @@ class DartDailyBatch:
         fiscal_year: int,
         fiscal_quarter: int,
         batch_id: UUID,
+        dry_run: bool = False,
     ) -> int:
         """단일 회사의 CFS + OFS fetch + DB write.
 
         fetch-then-save (T18 oracle 리뷰 C1 패턴) — 모든 fetch 가 성공한 후에만
         DB write 시작. 중간 실패 시 어떤 row 도 영구화 안 됨.
 
+        Args:
+            dry_run: True 면 fetch 만 수행, citation/financial save skip.
+                반환 rows_saved 는 dry_run 일 때 "fetch 된 row 수" 의미.
+
         Returns:
-            저장된 FinancialRecord 수.
+            저장된 (또는 dry_run 시 fetch 된) FinancialRecord 수.
 
         Raises:
             AdapterError: 어느 한 IFRS type 의 fetch 도 실패. 운영 의미상 두
@@ -245,16 +296,18 @@ class DartDailyBatch:
                     f"corp={corp_code} {fiscal_year}Q{fiscal_quarter} — "
                     f"FetchResult invariant violation"
                 )
-            # citation 먼저 (FK 만족).
-            for c in result.citations:
-                self._citation_repo.save(c)
-            # adapter row → DB record 변환 후 bulk save.
+            # citation 먼저 (FK 만족) — dry_run 이면 skip.
+            if not dry_run:
+                for c in result.citations:
+                    self._citation_repo.save(c)
+            # adapter row → DB record 변환 후 bulk save (dry_run 시 skip).
             db_records = _convert_to_financial_records(
                 rows=result.data,
                 citation_id=result.citations[0].id,
             )
             if db_records:
-                self._financial_repo.save_financials(db_records)
+                if not dry_run:
+                    self._financial_repo.save_financials(db_records)
                 rows_saved += len(db_records)
 
         return rows_saved
@@ -279,7 +332,7 @@ def _convert_to_financial_records(
     - superseded_by: 본 cycle 미설정 (정정공시 처리는 별도 cycle).
     """
     db_records: list[FinancialRecord] = []
-    created_at = datetime.now(timezone.utc)
+    created_at = datetime.now(UTC)
     for row in rows:
         fiscal_period = f"{row.fiscal_year}Q{row.fiscal_quarter}"
         lineage_id = uuid5(NAMESPACE_OID, f"lineage|{row.code}")

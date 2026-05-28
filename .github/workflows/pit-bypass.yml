@@ -1,0 +1,39 @@
+# PIT bypass 가드 — repository fetch_* 메서드의 as_of 강제.
+#
+# ADR-0008 D5 (PIT Enforcer) + ADR-0002 D3 (Source Citation) 의 file-system
+# 강제. tools/check_pit_bypass.py 의 AST 기반 검사 — 표준 라이브러리만.
+#
+# 관련 ADR / 문서:
+# - ADR-0008 D5 — PIT Enforcer 인터페이스
+# - ADR-0002 D3 — Source Citation effective_date
+# - M0_PLAN T41 — CI 5 게이트 (PIT bypass)
+
+name: pit-bypass
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "server/app/repositories/**"
+      - "tools/check_pit_bypass.py"
+      - ".github/workflows/pit-bypass.yml"
+  pull_request:
+    paths:
+      - "server/app/repositories/**"
+      - "tools/check_pit_bypass.py"
+      - ".github/workflows/pit-bypass.yml"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run PIT bypass check
+        run: python tools/check_pit_bypass.py

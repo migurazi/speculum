@@ -24,8 +24,9 @@ from __future__ import annotations
 
 import unicodedata
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import date
-from typing import Protocol, Sequence, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from app.repositories.pit_protocols import StockMasterRecord
 

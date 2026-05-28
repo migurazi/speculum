@@ -27,10 +27,10 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import (
+    JSON,
     Date,
     ForeignKey,
     Index,
-    JSON,
     Numeric,
     String,
     Uuid,
@@ -40,7 +40,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.db.types import UTCDateTime
-
 
 _CA_NUMERIC = Numeric(precision=20, scale=8)
 

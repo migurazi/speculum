@@ -31,8 +31,9 @@ SQLAlchemy 구현체 (T13 합류 후) 가 같은 의미를 query optimization �
 
 from __future__ import annotations
 
+from collections.abc import Callable, Hashable, Sequence
 from datetime import date
-from typing import Callable, Final, Hashable, Sequence, TypeVar
+from typing import Final, TypeVar
 from uuid import UUID
 
 from app.repositories.pit_protocols import PITRecord, SupersedableRecord

@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import UTC, date
 from typing import Final
 from uuid import UUID, uuid4
 
@@ -35,11 +35,9 @@ from app.db.orm import (  # noqa: F401  ← Base.metadata 등록 side-effect
 )
 from app.main import create_app
 from app.repositories.pit_protocols import CodeHistoryEntry, StockMasterRecord
-from app.repositories.sql_repositories import SqlStocksMasterRepository
 from app.repositories.stocks_master_repository import (
     FakeStocksMasterRepository,
 )
-
 
 _SAMSUNG: Final[StockMasterRecord] = StockMasterRecord(
     id=UUID("00000000-0000-0000-0000-000000000001"),
@@ -235,11 +233,11 @@ def test_session_commits_writes_on_success(
     의 save 가 add+flush 만 호출하므로 commit 없으면 close 시 rollback → 데이터
     영구 손실. 본 test 가 commit 작동을 검증.
     """
+    from datetime import datetime
+
     from app.api.dependencies.repositories import get_db_session_or_none
-    from app.repositories.citation_repository import SqlCitationRepository
     from app.models.source_citation import SourceCitation, SourceKind
-    from datetime import datetime, timezone
-    from uuid import uuid4
+    from app.repositories.citation_repository import SqlCitationRepository
 
     Sm = sessionmaker(bind=sqlite_engine_with_samsung, expire_on_commit=False)
 
@@ -258,12 +256,12 @@ def test_session_commits_writes_on_success(
         id=cid,
         source=SourceKind.DART,
         identifier="commit_test",
-        retrieved_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        retrieved_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
         effective_date=date(2024, 5, 20),
         adapter_version="1.0.0",
         batch_id=uuid4(),
         url=None,
-        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
     )
     SqlCitationRepository(session).save(citation)
     # generator 종료 — `else: commit` + `finally: close`.
@@ -284,11 +282,11 @@ def test_session_rolls_back_writes_on_exception(
 
     `get_db_session_or_none` 의 `except: rollback` path 검증.
     """
+    from datetime import datetime
+
     from app.api.dependencies.repositories import get_db_session_or_none
-    from app.repositories.citation_repository import SqlCitationRepository
     from app.models.source_citation import SourceCitation, SourceKind
-    from datetime import datetime, timezone
-    from uuid import uuid4
+    from app.repositories.citation_repository import SqlCitationRepository
 
     Sm = sessionmaker(bind=sqlite_engine_with_samsung, expire_on_commit=False)
 
@@ -306,12 +304,12 @@ def test_session_rolls_back_writes_on_exception(
         id=cid,
         source=SourceKind.DART,
         identifier="rollback_test",
-        retrieved_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        retrieved_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
         effective_date=date(2024, 5, 20),
         adapter_version="1.0.0",
         batch_id=uuid4(),
         url=None,
-        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=timezone.utc),
+        created_at=datetime(2024, 5, 20, 9, 0, tzinfo=UTC),
     )
     SqlCitationRepository(session).save(citation)
     # exception 주입 — generator 가 rollback 후 raise.

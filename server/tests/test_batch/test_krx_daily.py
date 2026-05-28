@@ -14,20 +14,17 @@
 
 from __future__ import annotations
 
-import math
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
-from typing import Any, Sequence
+from typing import Any
 from unittest.mock import MagicMock
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pandas as pd
 import pytest
 
 from app.adapters.base import (
-    AdapterError,
     FetchResult,
-    MarketCapRow,
     OHLCVRow,
 )
 from app.adapters.fdr_adapter import FdrAdapter
@@ -35,13 +32,10 @@ from app.adapters.pykrx_adapter import PykrxAdapter
 from app.repositories.citation_repository import FakeCitationRepository
 from app.repositories.fakes import FakePriceRepository
 from app.services.conflict_detector import (
-    ConflictDetectionResult,
     ConflictDetector,
-    ConflictReport,
 )
-from app.services.krx_calendar import DEFAULT_CALENDAR, TradingCalendar
-from batch.krx_daily import BatchSummary, KrxDailyBatch
-
+from app.services.krx_calendar import DEFAULT_CALENDAR
+from batch.krx_daily import KrxDailyBatch
 
 # =============================================================================
 # Fixtures
