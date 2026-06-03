@@ -19,8 +19,12 @@ cycle). 책임:
 
 1. **sync orchestration** — codebase 정책 일관. async 전환은 M1+ backlog.
 2. **scheduler 미통합** — M0 cycle scope. CLI / 운영 script 가 manual 호출.
-3. **MarketCap 미저장** — Phase B (별도 cycle). 본 cycle 은 fetch 만 + citation
-   save. summary 에 raw rows 포함하여 호출자가 처리.
+3. **MarketCap 저장 (Phase B 합류)** — `market_cap_repo` 주입 시 fetch 한
+   market_cap row 를 MarketCapRecord 로 변환하여 영구화. citation 은 prices 와
+   동일하게 종목별 SAVEPOINT 안에서 먼저 save → market_cap row 의 citation_id
+   FK 연결. `market_cap_repo` None (Fake-only 호환) 이면 fetch 만 + summary 에
+   raw rows 포함 (기존 동작). 자사주 (shares_treasury) 는 pykrx None 그대로
+   영구화 — 절대 0 으로 가정 안 함 (DART 보강 별도 cycle, T48c).
 4. **신규/폐지 detection 미구현** — universe diff 는 별도 stocks_master.upsert
    사이클 (T13 Phase B 와 묶음).
 
@@ -49,8 +53,18 @@ from app.adapters.base import (
 )
 from app.adapters.fdr_adapter import FdrAdapter
 from app.adapters.pykrx_adapter import PykrxAdapter
+from app.db.orm.batch_runs import BATCH_STATUS_SKIPPED, BATCH_STATUS_SUCCESS
+from app.repositories.batch_run_repository import (
+    BatchRunRepository,
+    SqlBatchRunRepository,
+)
 from app.repositories.citation_repository import CitationRepository
-from app.repositories.pit_protocols import PriceRecord, PriceRepository
+from app.repositories.pit_protocols import (
+    MarketCapRecord,
+    MarketCapRepository,
+    PriceRecord,
+    PriceRepository,
+)
 from app.services.conflict_detector import (
     ConflictDetectionResult,
     ConflictDetector,
@@ -111,6 +125,9 @@ class KrxDailyBatch:
             DEFAULT_CALENDAR, test 는 fixture.
         citation_repo: SourceCitation persistence.
         price_repo: PriceRecord persistence (citation 의존).
+        market_cap_repo: MarketCapRecord persistence (citation 의존). None 이면
+            (Fake-only 호환 / 명시 미주입) market_cap 영구화 skip — fetch 만 +
+            summary 에 raw rows 포함 (기존 Phase A 동작).
         throttle_seconds: 종목 호출 사이 sleep (sec). 0 = 즉시 (test). 운영
             기본 1.5 (ADR-0003 D6).
         session: SQLAlchemy session — 있으면 종목별 SAVEPOINT 활성화
@@ -120,6 +137,10 @@ class KrxDailyBatch:
         alert_handler: BatchAlertHandler. None 이면 NullAlertHandler — alert
             no-op. 운영 시 LoggingAlertHandler 또는 SentryAlertHandler 주입
             (T43 / AC-O-02).
+        batch_run_repo: M1 T48a 의 batch_runs 영속화 repository. None + session
+            있으면 `SqlBatchRunRepository(session)` 를 default 로 구성 (배치
+            종료 시 BatchSummary → batch_runs INSERT). session 도 None 이면
+            (Fake 모드) batch_runs 영속화 skip. dry_run 도 skip.
     """
 
     def __init__(
@@ -131,9 +152,11 @@ class KrxDailyBatch:
         calendar: TradingCalendar,
         citation_repo: CitationRepository,
         price_repo: PriceRepository,
+        market_cap_repo: MarketCapRepository | None = None,
         throttle_seconds: float = 1.5,
         session: Session | None = None,
         alert_handler: BatchAlertHandler | None = None,
+        batch_run_repo: BatchRunRepository | None = None,
     ) -> None:
         self._primary = primary_adapter
         self._verify = verify_adapter
@@ -145,12 +168,21 @@ class KrxDailyBatch:
         self._calendar = calendar
         self._citation_repo = citation_repo
         self._price_repo = price_repo
+        self._market_cap_repo = market_cap_repo
         self._throttle = throttle_seconds
         self._session = session
         # None → NullAlertHandler — batch 본체에서 None-check 회피 (alert call
         # site 가 무조건 메서드 호출 OK). Protocol contract.
         self._alert: BatchAlertHandler = (
             alert_handler if alert_handler is not None else NullAlertHandler()
+        )
+        # M1 T48a — batch_runs 영속화. 명시 주입 없으면 session 있을 때
+        # SqlBatchRunRepository 를 default 로 구성. session 없으면 (Fake 모드)
+        # None 유지하여 영속화 skip.
+        self._batch_run_repo: BatchRunRepository | None = (
+            batch_run_repo
+            if batch_run_repo is not None
+            else (SqlBatchRunRepository(session) if session is not None else None)
         )
 
     def run(
@@ -182,6 +214,15 @@ class KrxDailyBatch:
         batch_id = uuid4()
         started_at = datetime.now(UTC)
 
+        # M1 T48a — batch_runs row 를 배치 시작 시 INSERT (status='running').
+        # source_citations.batch_id FK 가 종목별 SAVEPOINT RELEASE 시점에 검사
+        # (SQLite) 되므로 citation 보다 먼저 존재해야 함. dry_run / Fake 모드는
+        # no-op. 종료 시 _finalize_batch_run 이 success/skipped 로 UPDATE.
+        self._start_batch_run(
+            batch_id=batch_id, market=market, started_at=started_at,
+            dry_run=dry_run,
+        )
+
         # 1. 휴장일 skip — on_complete 만 호출 (failure / conflict 없음).
         if not self._calendar.is_business_day(as_of):
             summary = self._make_summary(
@@ -197,6 +238,7 @@ class KrxDailyBatch:
                 dry_run=dry_run,
                 started_at=started_at,
             )
+            self._finalize_batch_run(summary)
             self._alert.on_complete(summary)
             return summary
 
@@ -222,6 +264,7 @@ class KrxDailyBatch:
                 dry_run=dry_run,
                 started_at=started_at,
             )
+            self._finalize_batch_run(summary)
             self._alert.on_complete(summary)
             return summary
 
@@ -248,7 +291,9 @@ class KrxDailyBatch:
             )
             try:
                 with savepoint:
-                    price_rows, mc_rows, conflict_result = self._process_code(
+                    (
+                        price_rows, mc_rows, mc_records, conflict_result,
+                    ) = self._process_code(
                         code=code,
                         as_of=as_of,
                         batch_id=batch_id,
@@ -258,6 +303,15 @@ class KrxDailyBatch:
                     # 안에서 dry_run 분기 (fetch-then-save 순서 유지).
                     if price_rows and not dry_run:
                         self._price_repo.save_prices(price_rows)
+                    # MarketCap 영구화 (Phase B) — repo 주입 + not dry_run 일 때.
+                    # citation 은 _process_code 가 이미 save (citation → market_cap
+                    # 순서). repo None (Fake-only) 이면 fetch 만 + summary raw rows.
+                    if (
+                        mc_records
+                        and not dry_run
+                        and self._market_cap_repo is not None
+                    ):
+                        self._market_cap_repo.save_market_caps(mc_records)
                     if mc_rows:
                         market_cap_rows.extend(mc_rows)
                     if conflict_result is not None:
@@ -302,8 +356,60 @@ class KrxDailyBatch:
             dry_run=dry_run,
             started_at=started_at,
         )
+        self._finalize_batch_run(summary)
         self._alert.on_complete(summary)
         return summary
+
+    # =========================================================================
+    # 내부 helper — batch_runs 영속화 (M1 T48a)
+    # =========================================================================
+
+    def _start_batch_run(
+        self,
+        *,
+        batch_id: UUID,
+        market: str,
+        started_at: datetime,
+        dry_run: bool,
+    ) -> None:
+        """배치 시작 시 batch_runs row INSERT (status='running').
+
+        조건: `batch_run_repo` 존재 AND not dry_run. dry_run / Fake 모드
+        (session=None → repo None) 는 skip. citation 보다 먼저 row 가 존재해야
+        종목별 SAVEPOINT RELEASE 시점의 FK 검사를 통과 (orm/batch_runs.py
+        docstring).
+        """
+        if self._batch_run_repo is None or dry_run:
+            return
+        self._batch_run_repo.start(
+            run_id=batch_id,
+            market=market,
+            source="KRX",
+            started_at=started_at,
+        )
+
+    def _finalize_batch_run(self, summary: BatchSummary) -> None:
+        """배치 종료 시 batch_runs row finalize (UPDATE).
+
+        조건: `batch_run_repo` 존재 AND not dry_run.
+
+        status 매핑: `skipped_reason` 이 있으면 (휴장일 / universe fetch 실패 →
+        데이터 미생산) "skipped", 정상 실행은 "success". T48b 의
+        collect_batch_versions 는 "success" 만 freeze 후보로 사용.
+        """
+        if self._batch_run_repo is None or summary.dry_run:
+            return
+        status = (
+            BATCH_STATUS_SKIPPED
+            if summary.skipped_reason is not None
+            else BATCH_STATUS_SUCCESS
+        )
+        self._batch_run_repo.finalize(
+            run_id=summary.batch_id,
+            ended_at=summary.ended_at,
+            success_count=summary.success_count,
+            status=status,
+        )
 
     # =========================================================================
     # 내부 helper — 종목별 처리
@@ -319,6 +425,7 @@ class KrxDailyBatch:
     ) -> tuple[
         Sequence[PriceRecord],
         Sequence[MarketCapRow],
+        Sequence[MarketCapRecord],
         ConflictDetectionResult | None,
     ]:
         """단일 종목의 OHLCV + market_cap fetch + (옵션) FDR conflict 검출.
@@ -337,7 +444,10 @@ class KrxDailyBatch:
                 conflict detection 은 동일 수행 — alert 의도 보존.
 
         Returns:
-            (price_records, market_cap_rows, conflict_result_or_None).
+            (price_records, market_cap_rows, market_cap_records,
+             conflict_result_or_None). `market_cap_rows` 는 summary 의 raw 집계
+            (Phase A 호환), `market_cap_records` 는 citation_id FK 연결 완료된
+            영구화 대상 (`market_cap_repo` 가 있으면 호출자가 save).
 
         Raises:
             AdapterError: fetch 실패. 호출자가 failure 분류. 본 단계 raise
@@ -383,6 +493,18 @@ class KrxDailyBatch:
             citation_id=primary_ohlcv.citations[0].id,
         )
 
+        # market_cap record 빌드 — citation_id FK 연결 (prices 와 동일 패턴).
+        # primary_mc.citations[0] guard — FetchResult invariant.
+        if not primary_mc.citations:
+            raise AdapterError(
+                f"primary market_cap fetch returned no citation for "
+                f"code={code} — FetchResult invariant violation"
+            )
+        market_cap_records = self._build_market_cap_records(
+            market_cap_rows=primary_mc.data,
+            citation_id=primary_mc.citations[0].id,
+        )
+
         # 4. Conflict detection — fetch 가 모두 성공한 경우만.
         conflict_result: ConflictDetectionResult | None = None
         if verify_ohlcv is not None and self._detector is not None:
@@ -393,7 +515,21 @@ class KrxDailyBatch:
                 verify_source=self._verify.SOURCE_KIND,
             )
 
-        return price_records, primary_mc.data, conflict_result
+        return (
+            price_records, primary_mc.data, market_cap_records, conflict_result,
+        )
+
+    @staticmethod
+    def _lineage_id_for_code(code: str) -> UUID:
+        """code → code_lineage_id (deterministic placeholder).
+
+        stocks_master 가 lineage 단위 entity 이므로 본 cycle 에서는 code 별
+        deterministic placeholder UUID. T13 Phase B 에서 실제 lineage 매핑.
+        prices / market_cap 이 동일 lineage 해소를 공유 (work order Phase B 요구).
+        """
+        from uuid import NAMESPACE_OID, uuid5
+
+        return uuid5(NAMESPACE_OID, f"lineage|{code}")
 
     def _build_price_records(
         self,
@@ -407,16 +543,11 @@ class KrxDailyBatch:
         보정 엔진 미적용). close_raw 와 동일 값 채움 — T20 일배치 합류 시
         업데이트 (M2 backlog: snapshot 이력화).
         """
-        # lineage_id 는 stocks_master 가 lineage 단위 entity 이므로 본 cycle
-        # 에서는 placeholder UUID (code 별 deterministic). T13 Phase B 에서
-        # 실제 lineage 매핑.
-        from uuid import NAMESPACE_OID, uuid5
-
         return tuple(
             PriceRecord(
                 id=uuid4(),
                 code=row.code,
-                code_lineage_id=uuid5(NAMESPACE_OID, f"lineage|{row.code}"),
+                code_lineage_id=self._lineage_id_for_code(row.code),
                 effective_date=row.trade_date,
                 open_raw=row.open,
                 high_raw=row.high,
@@ -433,6 +564,34 @@ class KrxDailyBatch:
                 created_at=datetime.now(UTC),
             )
             for row in ohlcv_rows
+        )
+
+    def _build_market_cap_records(
+        self,
+        *,
+        market_cap_rows: Sequence[MarketCapRow],
+        citation_id: UUID,
+    ) -> tuple[MarketCapRecord, ...]:
+        """MarketCapRow (canonical) → MarketCapRecord (DB schema) 변환.
+
+        prices 와 동일 lineage 해소 (`_lineage_id_for_code`) 재사용. 자사주
+        (shares_treasury) 는 pykrx None 그대로 보존 — 절대 0 으로 가정 안 함
+        (silent 오류 회피, DART 보강 별도 cycle, T48c).
+        """
+        return tuple(
+            MarketCapRecord(
+                id=uuid4(),
+                code=row.code,
+                code_lineage_id=self._lineage_id_for_code(row.code),
+                effective_date=row.trade_date,
+                market_cap=row.market_cap,
+                shares_outstanding=row.shares_outstanding,
+                # pykrx None 그대로 — DART 보강 전까지 N/A (0 가정 금지).
+                shares_treasury=row.shares_treasury,
+                citation_id=citation_id,
+                created_at=datetime.now(UTC),
+            )
+            for row in market_cap_rows
         )
 
     def _save_citations(self, citations: Sequence) -> None:

@@ -33,10 +33,33 @@ export interface ScreenCondition {
   readonly value: string;
 }
 
+/**
+ * SecurityType — backend `app.schemas.screen.SecurityTypeEnum` 와 동일.
+ * 허용 4종: common(보통주) · preferred(우선주) · etf(ETF) · reit(리츠).
+ * 빈 배열·미지원값은 backend 422.
+ */
+export type SecurityType = "common" | "preferred" | "etf" | "reit";
+
+/** 허용 자산군 4종 — UI 체크박스 순서. ADR-0023 D4 동등 가시성. */
+export const SECURITY_TYPE_OPTIONS: ReadonlyArray<SecurityType> = [
+  "common",
+  "preferred",
+  "etf",
+  "reit",
+];
+
+/** 기본 선택: 보통주만 (ADR-0023 D4 / D7 — M0~M1 universe 연속성 보존). */
+export const DEFAULT_SECURITY_TYPES: ReadonlyArray<SecurityType> = ["common"];
+
 /** ScreenRunQueryIn — POST /api/screen body. */
 export interface ScreenQuery {
   readonly conditions: ReadonlyArray<ScreenCondition>;
   readonly selected_factors: ReadonlyArray<string>;
+  /**
+   * 자산군 필터. 미지정 시 backend 가 `["common"]` 으로 해소.
+   * ADR-0023 D7 — screen query 일부 → result_hash 자동 freeze.
+   */
+  readonly security_types?: ReadonlyArray<SecurityType>;
 }
 
 /** ScreenResultOut — POST /api/screen 200 응답. */

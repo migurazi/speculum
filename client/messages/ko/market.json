@@ -1,0 +1,29 @@
+{
+  "pageTitle": "시장 통계",
+  "asOfLabel": "기준 일자:",
+  "errorLoad": "데이터 로드 실패: {message}",
+  "universeHeading": "유니버스 요약",
+  "universeEmpty": "해당 기준일에 상장 종목이 없습니다.",
+  "universeTotalBadge": "전체 {count}종목",
+  "factorHeading": "지표 분포",
+  "factorEmpty": "표시할 지표 데이터가 없습니다.",
+  "col": {
+    "factorName": "지표명",
+    "stockCount": "종목수",
+    "mean": "평균",
+    "median": "중앙값",
+    "p25": "25%",
+    "p75": "75%",
+    "min": "최솟값",
+    "max": "최댓값"
+  },
+  "macroHeading": "매크로 지표",
+  "macroEmpty": "표시할 매크로 지표 데이터가 없습니다.",
+  "macroDisclaimer": "관측시점은 당사 시스템이 ECOS에서 수집한 시점이며, 정확한 한국은행 공표일과 다를 수 있습니다.",
+  "macroCol": {
+    "name": "지표명",
+    "value": "값",
+    "referenceDate": "기준일",
+    "vintageDate": "관측시점"
+  }
+}

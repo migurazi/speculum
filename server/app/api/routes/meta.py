@@ -14,6 +14,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies.repositories import ActivePackDep
 from app.services.snapshot_versions import collect_active_policy_versions
 
 router = APIRouter(prefix="/api", tags=["meta"])
@@ -57,3 +58,31 @@ async def get_policy_versions() -> dict:
     (11 키 Mapping[str, str]).
     """
     return dict(collect_active_policy_versions())
+
+
+@router.get("/factors")
+async def get_factors(pack: ActivePackDep) -> dict:
+    """활성 factor pack 의 factor 목록 — Screener 의 factor 선택 UI source.
+
+    frontend 가 canonical_id 를 직접 타이핑하지 않고 드롭다운으로 고를 수 있도록
+    `(canonical_id, name, unit, tags)` 를 노출. canonical_id 는 조건/표시 입력의
+    실제 값, name 은 사람이 읽는 라벨, tags 는 카테고리 그룹핑용(valuation 등).
+
+    Response body:
+        pack_slug / pack_version: 활성 pack 식별 (UI 캐시 무효화 키).
+        factors: `[{canonical_id, name, unit, tags}]` — pack 정의 순서.
+    """
+    factors = [
+        {
+            "canonical_id": f["canonical_id"],
+            "name": f["name"],
+            "unit": f["unit"],
+            "tags": list(f.get("tags", ())),
+        }
+        for f in pack.body["factors"]
+    ]
+    return {
+        "pack_slug": pack.pack_slug,
+        "pack_version": pack.version,
+        "factors": factors,
+    }

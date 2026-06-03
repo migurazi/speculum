@@ -60,6 +60,11 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: i18n keys (T67)
+        # 코드의 t('...') 참조 키가 messages/ko/*.json 카탈로그에 존재하는지 검증.
+        # 누락 = fail (키 오타/카탈로그 누락 차단). 미사용 = warn(동적 참조 false positive).
+        run: pnpm check:i18n
+
       - name: Build (Next.js)
         # NEXT_PUBLIC_API_BASE_URL 은 빌드 타임 inline. CI 는 default 사용.
         run: pnpm build

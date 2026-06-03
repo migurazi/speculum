@@ -71,7 +71,13 @@ async def get_set(
     return ScreenerSetOut.from_domain(s)
 
 
-@router.delete("/{set_id}", status_code=status.HTTP_204_NO_CONTENT)
+# response_model=None 명시 — 204 No Content 는 body 불가. 최신 FastAPI 는 `-> None`
+# 반환 annotation 을 NoneType response_model 로 추론해 truthy 가 되면서
+# "Status code 204 must not have a response body" assert 발화 (routing.py
+# `if self.response_model`). 명시 None 으로 추론 비활성 (FastAPI 버전 무관 안전).
+@router.delete(
+    "/{set_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None,
+)
 async def delete_set(
     set_id: UUID,
     user: CurrentUserDep,

@@ -1,3 +1,5 @@
+"use client";
+
 /**
  * CodeHistory — 종목 lineage 의 종목코드 변경 history.
  *
@@ -11,6 +13,8 @@
  * - ADR-0009 D6 (lineage code_history JSONB).
  * - M0_PLAN T37.
  */
+
+import { useTranslations } from "next-intl";
 
 import type { CodeHistoryItem } from "@/lib/api/stocks";
 import { cn } from "@/lib/utils";
@@ -31,6 +35,8 @@ export function CodeHistory({
   history,
   className,
 }: CodeHistoryProps): JSX.Element | null {
+  const t = useTranslations("stock");
+
   // 단일 entry 의 lineage 는 의미 적음 — 미렌더.
   if (history.length <= 1) {
     return null;
@@ -39,15 +45,15 @@ export function CodeHistory({
   return (
     <section className={cn("rounded-lg border border-neutral-200 bg-white p-4", className)}>
       <h2 className="text-sm font-medium text-neutral-700">
-        종목코드 변경 history
+        {t("codeHistory.heading")}
       </h2>
       <table className="mt-3 w-full text-xs">
         <thead className="text-neutral-500">
           <tr>
-            <th className="text-left font-medium">코드</th>
-            <th className="text-left font-medium">사유</th>
-            <th className="text-left font-medium">시작</th>
-            <th className="text-left font-medium">종료</th>
+            <th className="text-left font-medium">{t("codeHistory.colCode")}</th>
+            <th className="text-left font-medium">{t("codeHistory.colReason")}</th>
+            <th className="text-left font-medium">{t("codeHistory.colFrom")}</th>
+            <th className="text-left font-medium">{t("codeHistory.colTo")}</th>
           </tr>
         </thead>
         <tbody>

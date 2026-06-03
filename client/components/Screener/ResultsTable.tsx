@@ -21,6 +21,8 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
+import { useTranslations } from "next-intl";
+import { useMemo } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -33,35 +35,46 @@ interface CodeRow {
   readonly code: string;
 }
 
-const COLUMNS: ReadonlyArray<ColumnDef<CodeRow>> = [
-  {
-    id: "code",
-    accessorKey: "code",
-    header: () => <span>종목코드</span>,
-    cell: (info) => (
-      <span className="font-mono tabular-nums">
-        {String(info.getValue())}
-      </span>
-    ),
-  },
-];
-
 export function ResultsTable({
   codes,
   className,
 }: ResultsTableProps): JSX.Element {
-  const data: ReadonlyArray<CodeRow> = codes.map((code) => ({ code }));
+  const t = useTranslations("screener");
+
+  // TanStack Table 권장 — data 는 stable reference 여야 함(매 렌더 새 배열이면
+  // 불필요한 row model 재계산/리렌더). codes 변경 시에만 재생성.
+  const data = useMemo<CodeRow[]>(
+    () => codes.map((code) => ({ code })),
+    [codes],
+  );
+
+  // columns 는 t 에 의존하므로 컴포넌트 내부에서 생성.
+  const columns = useMemo<ColumnDef<CodeRow>[]>(
+    () => [
+      {
+        id: "code",
+        accessorKey: "code",
+        header: () => <span>{t("resultsTable.codeHeader")}</span>,
+        cell: (info) => (
+          <span className="font-mono tabular-nums">
+            {String(info.getValue())}
+          </span>
+        ),
+      },
+    ],
+    [t],
+  );
+
   const table = useReactTable<CodeRow>({
-    // TanStack Table 은 readonly array 직접 미지원 — local copy.
-    data: data as CodeRow[],
-    columns: COLUMNS as ColumnDef<CodeRow>[],
+    data,
+    columns,
     getCoreRowModel: getCoreRowModel(),
   });
 
   if (codes.length === 0) {
     return (
       <p className={cn("text-sm text-neutral-500", className)}>
-        조건을 만족하는 종목이 없습니다.
+        {t("resultsTable.noResults")}
       </p>
     );
   }

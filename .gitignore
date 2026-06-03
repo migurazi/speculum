@@ -56,6 +56,10 @@ pnpm-debug.log*
 # Database (local dev)
 *.sqlite
 *.sqlite3
+# dev 데모 seed (scripts/seed_demo.py) 의 기본 SQLite 파일.
+*.db
+speculum_dev.db
+speculum_dev_test.db
 postgres-data/
 
 # Test coverage

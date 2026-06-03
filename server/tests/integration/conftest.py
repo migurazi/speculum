@@ -44,13 +44,35 @@ def _package_installed(name: str) -> bool:
     return importlib.util.find_spec(name) is not None
 
 
+def _krx_credentials_present() -> bool:
+    """KRX 정보데이터시스템 자격증명(KRX_ID/KRX_PW) 환경변수 존재 여부.
+
+    최신 KRX 정보데이터시스템은 일부 데이터(OHLCV 거래대금 등)에 로그인을 요구한다.
+    pykrx 는 자격증명이 없으면 로그인 실패 후 **불완전 DataFrame** 을 반환하고,
+    adapter 가 거기서 '거래대금' 등 컬럼에 접근하다 `KeyError` 를 던진다 — 이는
+    AdapterError 로 변환되지 않아 test 의 `except AdapterError` skip 가드를
+    우회하여 fail 로 폭증한다. 자격증명을 가용성 조건에 포함해 미설정 시 사전
+    skip 한다(dart_api_key 패턴과 동일 — secret 미주입 local/CI 환경에서 안전).
+    """
+    return bool(
+        os.environ.get("KRX_ID", "").strip()
+        and os.environ.get("KRX_PW", "").strip()
+    )
+
+
 @pytest.fixture(scope="session")
 def pykrx_endpoint_available() -> bool:
-    """pykrx 사용 가능 여부 — 패키지 설치 + KRX host 도달.
+    """pykrx 사용 가능 여부 — 패키지 설치 + KRX host 도달 + KRX 자격증명.
 
-    pykrx 는 내부적으로 KRX 정보데이터시스템 + Naver finance crawling.
+    pykrx 는 내부적으로 KRX 정보데이터시스템 + Naver finance crawling. KRX 가
+    일부 데이터에 로그인을 요구하므로 KRX_ID/KRX_PW 미설정 시 비가용으로 간주해
+    skip(상세: `_krx_credentials_present`). nightly secret 주입 환경에서만 실행.
     """
-    return _package_installed("pykrx") and _can_resolve("data.krx.co.kr")
+    return (
+        _package_installed("pykrx")
+        and _can_resolve("data.krx.co.kr")
+        and _krx_credentials_present()
+    )
 
 
 @pytest.fixture(scope="session")

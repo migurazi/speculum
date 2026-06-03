@@ -9,9 +9,10 @@
  *   5. SourceAttribution — KRX (market-cap) vs DART (per) 분기
  */
 
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { renderWithIntl } from "@/test-utils/intl";
 import { CompareGrid } from "../CompareGrid";
 import type { FactorValue, StockDetail } from "@/lib/api/stocks";
 
@@ -65,7 +66,7 @@ function makeStock(
 
 describe("CompareGrid", () => {
   it("renders placeholder when stocks array empty", () => {
-    render(<CompareGrid stocks={[]} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={[]} asOf="2024-09-30" />);
     expect(screen.getByText("표시할 종목이 없습니다.")).toBeInTheDocument();
   });
 
@@ -84,7 +85,7 @@ describe("CompareGrid", () => {
         factors: [PER],
       }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     expect(screen.getByText("삼성전자")).toBeInTheDocument();
     expect(screen.getByText("SK하이닉스")).toBeInTheDocument();
     expect(screen.getByText("005930")).toBeInTheDocument();
@@ -100,7 +101,7 @@ describe("CompareGrid", () => {
         factors: [{ ...PER, value: "8.91" }],
       }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     // factor name in row header (한 번).
     expect(screen.getByText("PER")).toBeInTheDocument();
     // 양 종목 값.
@@ -113,7 +114,7 @@ describe("CompareGrid", () => {
       makeStock({ id: "s1", code: "005930", factors: [ROE_NA] }),
       makeStock({ id: "s2", code: "000660", factors: [ROE_NA] }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     // 두 종목 모두 N/A.
     expect(screen.getAllByText("N/A").length).toBe(2);
     expect(screen.getAllByText("자기자본 음수").length).toBe(2);
@@ -124,7 +125,7 @@ describe("CompareGrid", () => {
       makeStock({ id: "s1", code: "005930", factors: [MARKET_CAP] }),
       makeStock({ id: "s2", code: "000660", factors: [MARKET_CAP] }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     // SourceAttribution inline suffix.
     expect(screen.getAllByText(/KRX · 2024-09-30/).length).toBeGreaterThanOrEqual(1);
   });
@@ -134,7 +135,7 @@ describe("CompareGrid", () => {
       makeStock({ id: "s1", code: "005930", factors: [PER] }),
       makeStock({ id: "s2", code: "000660", factors: [PER] }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     expect(screen.getAllByText(/DART · 2024-09-30/).length).toBeGreaterThanOrEqual(1);
   });
 
@@ -144,7 +145,7 @@ describe("CompareGrid", () => {
       makeStock({ id: "s1", code: "005930", factors: [PER, MARKET_CAP] }),
       makeStock({ id: "s2", code: "000660", factors: [PER] }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
@@ -158,7 +159,7 @@ describe("CompareGrid", () => {
         factors: [PER],
       }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     expect(screen.getByText("거래 중")).toBeInTheDocument();
     expect(screen.getByText("상장폐지")).toBeInTheDocument();
   });
@@ -168,7 +169,7 @@ describe("CompareGrid", () => {
     const factorsAlpha = [PER, MARKET_CAP]; // canonical: per:* / market-cap:*
     const factorsReversed = [MARKET_CAP, PER];
 
-    const { unmount } = render(
+    const { unmount } = renderWithIntl(
       <CompareGrid
         stocks={[
           makeStock({ id: "s1", code: "005930", factors: factorsAlpha }),
@@ -182,7 +183,7 @@ describe("CompareGrid", () => {
     ).map((el) => el.querySelector(".font-mono")?.textContent ?? "");
     unmount();
 
-    render(
+    renderWithIntl(
       <CompareGrid
         stocks={[
           makeStock({ id: "s1", code: "005930", factors: factorsReversed }),
@@ -209,7 +210,7 @@ describe("CompareGrid", () => {
       makeStock({ id: "s1", code: "005930", factors: [PER] }),
       makeStock({ id: "s2", code: "000660", factors: [PER] }),
     ];
-    render(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
     const colHeaders = document.querySelectorAll(
       "thead th[scope='col']",
     );

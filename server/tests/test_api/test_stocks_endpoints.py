@@ -18,14 +18,24 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import date
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.repositories.pit_protocols import CodeHistoryEntry, StockMasterRecord
+from app.repositories.fakes import (
+    FakeCorporateActionRepository,
+    FakeFinancialRepository,
+)
+from app.repositories.pit_protocols import (
+    CodeHistoryEntry,
+    CorporateActionRecord,
+    FinancialRecord,
+    StockMasterRecord,
+)
 from app.repositories.stocks_master_repository import FakeStocksMasterRepository
 
 _SAMSUNG = StockMasterRecord(
@@ -187,6 +197,13 @@ def test_search_prefix_match_sorted_first(client: TestClient) -> None:
 # 5. /{code} — Stock Detail
 # =============================================================================
 
+# M1 T50 — FieldProvider 실연결 후 N/A na_reason 의 정상 taxonomy.
+# 본 fixture 는 price / financial repository 미주입 (빈 Fake) → 모든 default
+# factor 가 N/A 이나, M0 stub 의 단일 "pipeline_not_yet_wired" 가 아니라
+# evaluator 의 실제 taxonomy (해소 못 한 field 별 사유).
+_NA_REASON_PREFIXES = ("missing_input:", "insufficient_series:", "division_by_zero")
+
+
 def test_get_stock_detail_returns_full_info(client: TestClient) -> None:
     res = client.get("/api/stocks/005930?as_of=2024-05-07")
     assert res.status_code == 200
@@ -196,12 +213,12 @@ def test_get_stock_detail_returns_full_info(client: TestClient) -> None:
     assert body["market"] == "KOSPI"
     assert body["status"] == "active"
     assert len(body["code_history"]) == 1
-    # default factors 모두 stub (M0 — pipeline 미합류).
+    # default factors — fixture 가 fact repository 미주입이라 모두 N/A.
+    # evaluator 의 실제 taxonomy 사용 (M1 T50 — stub 제거).
     assert len(body["factors"]) == 5
     for f in body["factors"]:
         assert f["is_na"] is True
-        # evaluator taxonomy 와 일관 (missing_input:* 형식).
-        assert f["na_reason"].startswith("missing_input:")
+        assert f["na_reason"].startswith(_NA_REASON_PREFIXES)
 
 
 # =============================================================================
@@ -525,8 +542,287 @@ def test_compare_empty_codes_returns_422(client: TestClient) -> None:
     assert res.status_code == 422
 
 
+# =============================================================================
+# 재무 시계열 + corporate action — 테스트 공통 fixture
+# =============================================================================
+
+_NOW = datetime(2024, 1, 1, tzinfo=UTC)
+_BASE_CITATION = UUID("aaaaaaaa-0000-0000-0000-000000000001")
+_CA_CITATION   = UUID("bbbbbbbb-0000-0000-0000-000000000001")
+
+def _fin(
+    code: str,
+    account: str,
+    fiscal_period: str,
+    value: str,
+    effective_date: date,
+    *,
+    superseded_by: UUID | None = None,
+    ifrs_type: str = "consolidated",
+    unit: str = "krw",
+) -> FinancialRecord:
+    """FinancialRecord 생성 헬퍼 — 반복 코드 최소화."""
+    from uuid import uuid4
+    return FinancialRecord(
+        id=uuid4(),
+        code=code,
+        code_lineage_id=UUID("00000000-0000-0000-0000-000000000001"),
+        effective_date=effective_date,
+        fiscal_period=fiscal_period,
+        account=account,
+        value=Decimal(value),
+        unit=unit,
+        ifrs_type=ifrs_type,
+        citation_id=_BASE_CITATION,
+        superseded_by=superseded_by,
+        created_at=_NOW,
+    )
+
+
+def _ca(
+    code: str,
+    action_type: str,
+    announced_date: date,
+    effective_date: date,
+    *,
+    ratio: str | None = None,
+    superseded_by: UUID | None = None,
+) -> CorporateActionRecord:
+    """CorporateActionRecord 생성 헬퍼."""
+    from uuid import uuid4
+    return CorporateActionRecord(
+        id=uuid4(),
+        code=code,
+        code_lineage_id=UUID("00000000-0000-0000-0000-000000000001"),
+        action_type=action_type,
+        announced_date=announced_date,
+        effective_date=effective_date,
+        payment_date=None,
+        ratio=Decimal(ratio) if ratio is not None else None,
+        cash_amount=None,
+        details={},
+        citation_id=_CA_CITATION,
+        superseded_by=superseded_by,
+        created_at=_NOW,
+    )
+
+
+# =============================================================================
+# T57 Phase 1 — 재무 시계열 `GET /{code}/financials`
+# =============================================================================
+
+class TestFinancials:
+    """재무 시계열 endpoint 통합 테스트."""
+
+    def _client_with_financials(
+        self, records: list[FinancialRecord],
+    ) -> TestClient:
+        repo = FakeStocksMasterRepository(records=_FIXTURE)
+        fin_repo = FakeFinancialRepository(records=records)
+        app = create_app(
+            stocks_repository=repo,
+            financial_repository=fin_repo,
+        )
+        return TestClient(app)
+
+    # ① 다분기 account 시계열 — periods 정렬·values 정합
+    def test_multi_period_series_sorted_and_aligned(self) -> None:
+        """revenue 2 분기 적재 → periods 오름차순, values 정합."""
+        records = [
+            _fin("005930", "revenue", "2023Q3", "10000", date(2023, 11, 15)),
+            _fin("005930", "revenue", "2023Q4", "12000", date(2024, 2, 1)),
+        ]
+        client = self._client_with_financials(records)
+        res = client.get("/api/stocks/005930/financials?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["code"] == "005930"
+        # periods 오름차순 정렬 확인.
+        assert body["periods"] == ["2023Q3", "2023Q4"]
+        # revenue item 의 values 정합 확인.
+        revenue_item = next(i for i in body["items"] if i["account"] == "revenue")
+        assert revenue_item["name"] == "매출액"
+        assert revenue_item["values"] == ["10000", "12000"]
+
+    # ② 결손 분기 None — 일부 분기에 account 없는 경우
+    def test_missing_period_returns_none_in_values(self) -> None:
+        """revenue 는 2023Q3·2023Q4, operating_income 은 2023Q4 만 → revenue Q3 값 자리에 None."""
+        records = [
+            _fin("005930", "revenue", "2023Q3", "10000", date(2023, 11, 15)),
+            _fin("005930", "revenue", "2023Q4", "12000", date(2024, 2, 1)),
+            _fin("005930", "operating_income", "2023Q4", "3000", date(2024, 2, 1)),
+        ]
+        client = self._client_with_financials(records)
+        res = client.get("/api/stocks/005930/financials?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        # periods 합집합 = ["2023Q3", "2023Q4"].
+        assert set(body["periods"]) == {"2023Q3", "2023Q4"}
+        # operating_income 은 2023Q3 자리가 None.
+        oi_item = next(i for i in body["items"] if i["account"] == "operating_income")
+        q3_idx = body["periods"].index("2023Q3")
+        q4_idx = body["periods"].index("2023Q4")
+        assert oi_item["values"][q3_idx] is None
+        assert oi_item["values"][q4_idx] == "3000"
+
+    # ③ 적재 없는 account 제외
+    def test_account_with_no_data_excluded_from_items(self) -> None:
+        """revenue 만 있고 나머지 account 는 적재 없음 → items 에 revenue 만."""
+        records = [
+            _fin("005930", "revenue", "2023Q4", "12000", date(2024, 2, 1)),
+        ]
+        client = self._client_with_financials(records)
+        res = client.get("/api/stocks/005930/financials?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        accounts_in_response = [i["account"] for i in body["items"]]
+        assert accounts_in_response == ["revenue"]
+
+    # ④ PIT — effective_date > as_of 인 분기 제외
+    def test_pit_excludes_future_effective_date(self) -> None:
+        """as_of=2024-03-01. 2023Q4 effective_date=2024-03-31 은 as_of 이후 → 제외."""
+        records = [
+            _fin("005930", "revenue", "2023Q3", "10000", date(2023, 11, 15)),
+            # effective_date 가 as_of 이후 → fetch_financials 가 PIT 필터로 제외.
+            _fin("005930", "revenue", "2023Q4", "12000", date(2024, 3, 31)),
+        ]
+        client = self._client_with_financials(records)
+        res = client.get("/api/stocks/005930/financials?as_of=2024-03-01")
+        assert res.status_code == 200
+        body = res.json()
+        # 2023Q4 는 effective_date>as_of → periods 에서 제외.
+        assert "2023Q4" not in body["periods"]
+        assert "2023Q3" in body["periods"]
+
+    # ⑤ 빈 데이터 → 200 + 빈 periods/items
+    def test_no_data_returns_200_with_empty_periods_and_items(self) -> None:
+        """적재 데이터 없으면 200 + periods=[] + items=[]."""
+        client = self._client_with_financials([])
+        res = client.get("/api/stocks/005930/financials?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["periods"] == []
+        assert body["items"] == []
+
+    # unit 필드 전달 확인
+    def test_unit_propagated_from_record(self) -> None:
+        """basic_eps 의 unit 이 올바르게 wire 로 전달되는지 확인."""
+        records = [
+            _fin("005930", "basic_eps", "2023Q4", "1500", date(2024, 2, 1), unit="krw"),
+        ]
+        client = self._client_with_financials(records)
+        res = client.get("/api/stocks/005930/financials?as_of=2024-05-07")
+        body = res.json()
+        eps_item = next(i for i in body["items"] if i["account"] == "basic_eps")
+        assert eps_item["unit"] == "krw"
+        assert eps_item["name"] == "기본 EPS"
+
+
+# =============================================================================
+# T57 Phase 1 — prices corporate action 추가 (`GET /{code}/prices`)
+# =============================================================================
+
+class TestPricesWithCorporateActions:
+    """prices endpoint 의 corporate action 통합 테스트."""
+
+    def _client_with_actions(
+        self, ca_records: list[CorporateActionRecord],
+    ) -> TestClient:
+        repo = FakeStocksMasterRepository(records=_FIXTURE)
+        ca_repo = FakeCorporateActionRepository(records=ca_records)
+        app = create_app(
+            stocks_repository=repo,
+            corporate_action_repository=ca_repo,
+        )
+        return TestClient(app)
+
+    # ⑥ as_of 범위 내 action 포함 / 범위 밖·미래 effective_date 제외
+    def test_action_within_range_included(self) -> None:
+        """effective_date 가 [start, as_of] 범위 내 → actions 에 포함."""
+        # days=365 기본값 → start = 2024-05-07 - 365 = 2023-05-07
+        records = [
+            _ca(
+                "005930", "split",
+                announced_date=date(2023, 12, 1),
+                effective_date=date(2023, 12, 15),
+                ratio="5.0",
+            ),
+        ]
+        client = self._client_with_actions(records)
+        res = client.get("/api/stocks/005930/prices?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        assert len(body["actions"]) == 1
+        action = body["actions"][0]
+        assert action["action_type"] == "split"
+        assert action["effective_date"] == "2023-12-15"
+        assert action["ratio"] == "5.0"
+
+    def test_action_outside_price_range_excluded(self) -> None:
+        """effective_date 가 start 이전 → actions 에 제외."""
+        # days=30 → start = 2024-05-07 - 30 = 2024-04-07
+        # effective_date=2024-03-01 → start(2024-04-07) 이전 → 제외.
+        records = [
+            _ca(
+                "005930", "dividend",
+                announced_date=date(2024, 3, 1),
+                effective_date=date(2024, 3, 1),  # start 이전
+            ),
+        ]
+        client = self._client_with_actions(records)
+        res = client.get("/api/stocks/005930/prices?as_of=2024-05-07&days=30")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["actions"] == []
+
+    def test_action_future_effective_date_excluded(self) -> None:
+        """effective_date > as_of → 범위 밖이므로 제외.
+
+        fetch_actions 는 announced_date<=as_of 기준이라 effective_date 가
+        미래인 사건도 반환할 수 있음. endpoint 가 [start, as_of] 필터 적용.
+        """
+        records = [
+            _ca(
+                "005930", "merger",
+                announced_date=date(2024, 4, 1),   # announced <= as_of: repo 가 반환
+                effective_date=date(2024, 6, 1),   # > as_of(2024-05-07): 제외
+            ),
+        ]
+        client = self._client_with_actions(records)
+        res = client.get("/api/stocks/005930/prices?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["actions"] == []
+
+    # ⑦ action 없으면 빈 tuple
+    def test_no_actions_returns_empty_tuple(self) -> None:
+        """corporate action 미적재 → actions=[]."""
+        client = self._client_with_actions([])
+        res = client.get("/api/stocks/005930/prices?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["actions"] == []
+
+    def test_action_ratio_none_when_not_applicable(self) -> None:
+        """ratio 없는 dividend action → ratio 필드 None."""
+        records = [
+            _ca(
+                "005930", "dividend",
+                announced_date=date(2024, 3, 1),
+                effective_date=date(2024, 3, 15),
+                ratio=None,
+            ),
+        ]
+        client = self._client_with_actions(records)
+        res = client.get("/api/stocks/005930/prices?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        assert len(body["actions"]) == 1
+        assert body["actions"][0]["ratio"] is None
+
+
 def test_compare_includes_factor_stubs(client: TestClient) -> None:
-    """각 item 의 factors 가 default 5 개 (T25 의 stub 패턴 동일)."""
+    """각 item 의 factors 가 default 5 개. fact 미주입 fixture 라 N/A."""
     res = client.get(
         "/api/stocks/compare?codes=005930,000660&as_of=2024-05-07"
     )
@@ -535,7 +831,7 @@ def test_compare_includes_factor_stubs(client: TestClient) -> None:
         assert len(item["factors"]) == 5
         for f in item["factors"]:
             assert f["is_na"] is True
-            assert f["na_reason"].startswith("missing_input:")
+            assert f["na_reason"].startswith(_NA_REASON_PREFIXES)
 
 
 def test_compare_x_asof_header_set(client: TestClient) -> None:
@@ -612,12 +908,296 @@ def test_compare_dirty_codes_no_echo(client: TestClient) -> None:
 
 
 def test_factor_stub_na_reason_uses_evaluator_taxonomy(client: TestClient) -> None:
-    """oracle 2 차 C3 — stub 의 na_reason 이 evaluator taxonomy 와 일관 (missing_input:* 형식)."""
+    """na_reason 이 evaluator 의 실제 taxonomy 와 일관 (M1 T50 — stub 제거).
+
+    fixture 가 fact repository 미주입이라 N/A 이나, 사유는 field 별 실제 결손
+    (`missing_input:<field>` 또는 series 결손 `insufficient_series:<field>:...`).
+    """
     res = client.get("/api/stocks/005930?as_of=2024-05-07")
     body = res.json()
     for factor in body["factors"]:
         assert factor["is_na"] is True
-        # evaluator 의 정상 na_reason 형식 ("missing_input:..." prefix).
-        assert factor["na_reason"].startswith("missing_input:"), (
+        assert factor["na_reason"].startswith(_NA_REASON_PREFIXES), (
             f"unexpected na_reason: {factor['na_reason']}"
         )
+
+
+# =============================================================================
+# 17. M1 T50 — FieldProvider 실연결 (실값 반환, stub 아님)
+# =============================================================================
+
+def _wired_client() -> TestClient:
+    """price / financial repository 를 주입한 client — 실 factor 산출 가능.
+
+    삼성전자 (005930) 의 4 분기 basic_eps 재무 fact 를 채워 EPS (TTM) factor 가
+    실값으로 산출되도록. as_of=2024-05-07 시점 active.
+    """
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from app.repositories.fakes import FakeFinancialRepository, FakePriceRepository
+    from app.repositories.pit_protocols import FinancialRecord, PriceRecord
+
+    cid = UUID("00000000-0000-0000-0000-0000000000bb")
+    lineage = UUID("00000000-0000-0000-0000-000000000001")
+
+    def _eps(fiscal_period: str, value: str, eff: date) -> FinancialRecord:
+        return FinancialRecord(
+            id=uuid4(), code="005930", code_lineage_id=lineage,
+            effective_date=eff, fiscal_period=fiscal_period,
+            account="basic_eps", value=Decimal(value), unit="krw",
+            ifrs_type="consolidated", citation_id=cid, superseded_by=None,
+            created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+
+    financials = [
+        _eps("2023Q1", "500", date(2023, 5, 15)),
+        _eps("2023Q2", "600", date(2023, 8, 14)),
+        _eps("2023Q3", "700", date(2023, 11, 14)),
+        _eps("2023Q4", "800", date(2024, 3, 30)),
+    ]
+    price = PriceRecord(
+        id=uuid4(), code="005930", code_lineage_id=lineage,
+        effective_date=date(2024, 4, 30),
+        open_raw=Decimal("71000"), high_raw=Decimal("71000"),
+        low_raw=Decimal("71000"), close_raw=Decimal("71000"),
+        volume=1000, trading_value=Decimal("1000000"),
+        close_adjusted=Decimal("71000"), citation_id=cid,
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+    repo = FakeStocksMasterRepository(records=_FIXTURE)
+    app = create_app(
+        stocks_repository=repo,
+        financial_repository=FakeFinancialRepository(records=financials),
+        price_repository=FakePriceRepository(records=[price]),
+    )
+    return TestClient(app)
+
+
+def test_detail_returns_real_factor_value_not_stub() -> None:
+    """EPS (TTM) factor 가 실 산출값 — stub 아님 (M1 T50 AC-M1-F-10)."""
+    with _wired_client() as c:
+        res = c.get("/api/stocks/005930?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        eps = next(
+            f for f in body["factors"]
+            if f["canonical_id"] == "eps:basic-ttm-consolidated-ifrs"
+        )
+        assert eps["is_na"] is False
+        assert eps["na_reason"] is None
+        # 500+600+700+800 = 2600.
+        assert eps["value"] == "2600"
+
+
+def test_compare_returns_real_factor_value_not_stub() -> None:
+    """compare 도 종목별 실평가 — 005930 EPS 실값, 000660 은 fact 없어 N/A."""
+    with _wired_client() as c:
+        res = c.get("/api/stocks/compare?codes=005930,000660&as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        by_code = {item["code"]: item for item in body["items"]}
+        samsung_eps = next(
+            f for f in by_code["005930"]["factors"]
+            if f["canonical_id"] == "eps:basic-ttm-consolidated-ifrs"
+        )
+        assert samsung_eps["is_na"] is False
+        assert samsung_eps["value"] == "2600"
+        # 000660 은 fact 미주입 → N/A.
+        sk_eps = next(
+            f for f in by_code["000660"]["factors"]
+            if f["canonical_id"] == "eps:basic-ttm-consolidated-ifrs"
+        )
+        assert sk_eps["is_na"] is True
+
+
+def test_detail_pit_excludes_lookahead_quarter() -> None:
+    """PIT — as_of 이전 시점이면 미공시 분기 미사용 → EPS N/A.
+
+    as_of=2024-02-01 시점은 2023Q4 (공시 2024-03-30) 미공시 → 3 분기만 → N/A.
+    (테스트 calendar 가 2024 만 cover 하므로 2024-02-01 사용.)
+    """
+    with _wired_client() as c:
+        res = c.get("/api/stocks/005930?as_of=2024-02-01")
+        assert res.status_code == 200
+        body = res.json()
+        eps = next(
+            f for f in body["factors"]
+            if f["canonical_id"] == "eps:basic-ttm-consolidated-ifrs"
+        )
+        # 2023Q4 미공시 (eff 2024-03-30 > as_of) → 3 분기 → strict N/A.
+        assert eps["is_na"] is True
+        assert eps["na_reason"].startswith("insufficient_series:")
+
+
+def _per_pbr_wired_client() -> TestClient:
+    """PER/PBR 파생 필드 (market_cap_ex_treasury) 실평가용 fully-wired client.
+
+    삼성전자 (005930) 에 4 분기 net_income + equity + 종가 + 발행주식수 +
+    자사주를 모두 주입. as_of=2024-05-07 시점에 PER/PBR 카드가 실값이 되도록.
+    market_cap_ex_treasury 는 provider 의 derived_factor 해소 (Option B) 가 동일
+    evaluator 로 market-cap:ex-treasury 를 평가해 공급.
+    """
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from app.repositories.fakes import (
+        FakeFinancialRepository,
+        FakeMarketCapRepository,
+        FakePriceRepository,
+        FakeTreasurySharesRepository,
+    )
+    from app.repositories.pit_protocols import (
+        FinancialRecord,
+        MarketCapRecord,
+        PriceRecord,
+        TreasurySharesRecord,
+    )
+
+    cid = UUID("00000000-0000-0000-0000-0000000000bb")
+    lineage = UUID("00000000-0000-0000-0000-000000000001")
+    created = datetime(2024, 1, 1, tzinfo=UTC)
+
+    def _fin(account: str, fp: str, value: str, eff: date) -> FinancialRecord:
+        return FinancialRecord(
+            id=uuid4(), code="005930", code_lineage_id=lineage,
+            effective_date=eff, fiscal_period=fp, account=account,
+            value=Decimal(value), unit="krw", ifrs_type="consolidated",
+            citation_id=cid, superseded_by=None, created_at=created,
+        )
+
+    financials = [
+        _fin("net_income_attributable_to_owners", "2023Q1", "1000000000",
+             date(2023, 5, 15)),
+        _fin("net_income_attributable_to_owners", "2023Q2", "1000000000",
+             date(2023, 8, 14)),
+        _fin("net_income_attributable_to_owners", "2023Q3", "1000000000",
+             date(2023, 11, 14)),
+        _fin("net_income_attributable_to_owners", "2023Q4", "1000000000",
+             date(2024, 3, 30)),
+        _fin("equity_attributable_to_owners", "2023Q4", "30000000000",
+             date(2024, 3, 30)),
+    ]
+    price = PriceRecord(
+        id=uuid4(), code="005930", code_lineage_id=lineage,
+        effective_date=date(2024, 4, 30),
+        open_raw=Decimal("50000"), high_raw=Decimal("50000"),
+        low_raw=Decimal("50000"), close_raw=Decimal("50000"),
+        volume=1000, trading_value=Decimal("1000000"),
+        close_adjusted=Decimal("50000"), citation_id=cid, created_at=created,
+    )
+    market_cap = MarketCapRecord(
+        id=uuid4(), code="005930", code_lineage_id=lineage,
+        effective_date=date(2024, 4, 30), market_cap=Decimal("50000000000"),
+        shares_outstanding=1_000_000, shares_treasury=None,
+        citation_id=cid, created_at=created,
+    )
+    treasury = TreasurySharesRecord(
+        id=uuid4(), code="005930", code_lineage_id=lineage,
+        effective_date=date(2024, 3, 30), fiscal_period="2023Q4",
+        shares_treasury=100_000, citation_id=cid, superseded_by=None,
+        created_at=created,
+    )
+
+    repo = FakeStocksMasterRepository(records=_FIXTURE)
+    app = create_app(
+        stocks_repository=repo,
+        financial_repository=FakeFinancialRepository(records=financials),
+        price_repository=FakePriceRepository(records=[price]),
+        market_cap_repository=FakeMarketCapRepository(records=[market_cap]),
+        treasury_repository=FakeTreasurySharesRepository(records=[treasury]),
+    )
+    return TestClient(app)
+
+
+def test_detail_per_pbr_real_values_via_derived_field() -> None:
+    """end-to-end — Stock Detail 의 PER/PBR 카드가 full 데이터 시 실값.
+
+    market_cap_ex_treasury = (1_000_000 - 100_000) × 50000 = 45_000_000_000.
+    PER = market_cap_ex_treasury / sum(net_income 4Q=4_000_000_000) = 11.25.
+    PBR = market_cap_ex_treasury / equity(30_000_000_000) = 1.5.
+    파생 필드 (derived_factor) 가 provider 에서 market-cap:ex-treasury 를 동일
+    evaluator 로 평가해 공급 (Option B). 카드가 stub 이 아닌 실값임을 검증.
+    """
+    from decimal import Decimal
+
+    with _per_pbr_wired_client() as c:
+        res = c.get("/api/stocks/005930?as_of=2024-05-07")
+        assert res.status_code == 200
+        body = res.json()
+        by_id = {f["canonical_id"]: f for f in body["factors"]}
+
+        mcap = by_id["market-cap:ex-treasury"]
+        assert mcap["is_na"] is False
+        assert Decimal(mcap["value"]) == Decimal("45000000000")
+
+        per = by_id["per:ttm-consolidated-ifrs"]
+        assert per["is_na"] is False
+        assert per["na_reason"] is None
+        assert Decimal(per["value"]) == Decimal("11.25")
+
+        pbr = by_id["pbr:consolidated-ifrs"]
+        assert pbr["is_na"] is False
+        assert pbr["na_reason"] is None
+        assert Decimal(pbr["value"]) == Decimal("1.5")
+
+
+# =============================================================================
+# 가격 시계열 — GET /api/stocks/{code}/prices (가격 차트 backend)
+# =============================================================================
+
+def _price_bar(code: str, lineage, cid, d: date, close: str):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from app.repositories.pit_protocols import PriceRecord
+    return PriceRecord(
+        id=uuid4(), code=code, code_lineage_id=lineage,
+        effective_date=d,
+        open_raw=Decimal(close), high_raw=Decimal(close),
+        low_raw=Decimal(close), close_raw=Decimal(close),
+        volume=1000, trading_value=Decimal("1000000"),
+        close_adjusted=Decimal(close), citation_id=cid,
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+
+def test_get_stock_prices_returns_pit_filtered_ascending_series() -> None:
+    """가격 시계열 — effective_date<=as_of 범위 일봉(asc), as_of 이후 제외, OHLC str."""
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from app.repositories.fakes import FakePriceRepository
+
+    lineage, cid = uuid4(), uuid4()
+    prices = [
+        _price_bar("005930", lineage, cid, date(2024, 6, 25), "80000"),
+        _price_bar("005930", lineage, cid, date(2024, 6, 26), "80500"),
+        _price_bar("005930", lineage, cid, date(2024, 6, 27), "81000"),
+        _price_bar("005930", lineage, cid, date(2024, 7, 1), "82000"),  # as_of 이후 → 제외
+    ]
+    app = create_app(price_repository=FakePriceRepository(records=prices))
+    with TestClient(app) as c:
+        res = c.get("/api/stocks/005930/prices?as_of=2024-06-28")
+        assert res.status_code == 200
+        body = res.json()
+        assert body["code"] == "005930"
+        assert body["as_of"] == "2024-06-28"
+        dates = [b["date"] for b in body["bars"]]
+        assert dates == ["2024-06-25", "2024-06-26", "2024-06-27"]  # PIT + asc
+        first = body["bars"][0]
+        assert Decimal(first["close"]) == Decimal("80000")  # str OHLC
+        assert "close_adjusted" in first and first["volume"] == 1000
+
+
+def test_get_stock_prices_empty_when_no_data() -> None:
+    """가격 데이터 없는 종목 → 200 + 빈 bars (404 아님 — 차트가 '데이터 없음')."""
+    app = create_app()
+    with TestClient(app) as c:
+        res = c.get("/api/stocks/000660/prices?as_of=2024-06-28")
+        assert res.status_code == 200
+        assert res.json()["bars"] == []

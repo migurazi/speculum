@@ -57,7 +57,7 @@ from app.adapters.base import (
 from app.adapters.dart_account_mapper import is_unmapped, map_ifrs_account
 from app.models.source_citation import SourceCitation, SourceKind
 
-__all__ = ["DartAdapter"]
+__all__ = ["DartAdapter", "DisclosureItem", "TreasurySharesResult"]
 
 
 # DART OpenAPI base URL (2026 기준 — opendart.fss.or.kr).
@@ -85,6 +85,69 @@ _FS_DIV_BY_IFRS_TYPE: Final[dict[IfrsType, str]] = {
 _STATUS_OK: Final[str] = "000"
 _STATUS_RATE_LIMIT: Final[str] = "020"
 _STATUS_AUTH_FAILURE: Final[frozenset[str]] = frozenset({"010", "011"})
+# "013" = 조회된 데이터 없음. 재무제표/자사주 경로에서는 `_call_dart` 가
+# AdapterError 로 raise (정상 — 그 분기 데이터가 반드시 있어야 함). 그러나
+# list.json (공시목록) 은 공시가 없는 종목이 정상 case 이므로, fetch_disclosure_list
+# 가 이 에러를 잡아 빈 결과로 변환 (`_call_dart` 시그니처/동작은 변경 없음).
+_STATUS_NO_DATA: Final[str] = "013"
+
+# stockTotqySttus.json (주식의 총수 현황) 의 `se` (구분) 값 — 자사주 추출 규칙.
+# KRX shares_outstanding (market_caps) 가 보통주 기준이므로 일관성을 위해 "보통주"
+# 행의 `tesstk_co` 를 1순위 사용. "보통주" 행 부재 시 "합계" fallback.
+_SE_COMMON_STOCK: Final[str] = "보통주"
+_SE_TOTAL: Final[str] = "합계"
+
+
+@dataclass(frozen=True, slots=True)
+class TreasurySharesResult:
+    """`fetch_treasury_shares` 의 data payload — 자사주 + 발행주식총수.
+
+    DART `stockTotqySttus.json` (주식의 총수 현황) 의 "보통주" 행에서 추출.
+
+    Attributes:
+        shares_treasury: 보통주 자기주식수 (`tesstk_co`). DART 가 "-"/빈값/
+            누락 또는 파싱 실패 시 None (결측 — 절대 0 으로 가정 금지, silent
+            오류 회피). DbFieldProvider 의 `shares_treasury` 해소가 None 이면
+            정식 N/A.
+        shares_issued_total: 보통주 기말 발행주식총수 (`istc_totqy`). 결측 시
+            None. (market_caps.shares_outstanding 의 cross-check 용 — 본 cycle
+            은 자사주 영구화가 주목적이라 검증/대사는 별도 cycle.)
+        effective_date: 공시 효력일. ADR-0012 D6 — rcept_no 도출 정밀 공시일
+            (precise) 또는 신고기한 보수값 fallback. citation.effective_date 와
+            동일하나, 호출자 (dart_daily) 가 effective_date_precise 와 함께 record
+            로 영속화하기 위해 data payload 로도 노출.
+        effective_date_precise: True 면 effective_date 가 rcept_no 도출 실 공시일
+            (정밀), False 면 신고기한 보수값.
+    """
+
+    shares_treasury: int | None
+    shares_issued_total: int | None
+    effective_date: date
+    effective_date_precise: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DisclosureItem:
+    """`fetch_disclosure_list` 의 단일 공시 항목 — 제목·접수일·원문링크만.
+
+    ADR-0026 D1 (표시 범위 하드 제약) — DART `list.json` row 에서 **제목·접수일자·
+    DART 원문 viewer URL** 3 필드만 추출. 본문/요약/자체 분류라벨 0 (§2.7 경계).
+
+    Attributes:
+        report_name: 공시 제목 (`report_nm`). 회사가 낸 외부 사실 = EXTERNAL_QUOTE
+            scope (ADR-0007 D4.5) — forbidden_words 검사 대상 아님. Speculum 이
+            생성/가공하지 않은 DART 원문.
+        rcept_date: 접수일자 (`rcept_dt`, YYYYMMDD 파싱). PIT 필터 (ADR-0026 D4 —
+            `rcept_date <= as_of`) 의 비교 키.
+        rcept_no: DART 접수번호. 원문 viewer URL 생성에 사용.
+        dart_url: DART 공시 viewer URL (`_DART_VIEWER_URL_TEMPLATE`). 클릭 시
+            DART 페이지로 이탈 — 본문 텍스트 자체 표시 X (ADR-0026 D1).
+    """
+
+    report_name: str
+    rcept_date: date
+    rcept_no: str
+    dart_url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +159,10 @@ class _ParsedResponse:
         skipped_row_count: thstrm_amount 결측/비숫자로 skip 된 row 수.
         unmapped_account_count: IFRS taxonomy ID 가 미매핑인 row 수
             (canonical key 는 `unmapped:` prefix 로 보존).
-        effective_date_max: 분기말 date (보고서 효력일 근사). M3 backlog.
+        effective_date_max: 보고서 effective_date. rcept_no 도출 성공 시 정밀
+            공시일 (ADR-0012 D6), 실패 시 신고기한 보수값 (ADR-0012 D1).
+        effective_date_precise: effective_date_max 가 rcept_no 도출 실 공시일이면
+            True, 신고기한 보수값 fallback 이면 False.
         rcept_no: 첫 valid row 의 DART 접수번호. 모든 row 가 같은 보고서
             가정.
     """
@@ -105,6 +171,7 @@ class _ParsedResponse:
     skipped_row_count: int
     unmapped_account_count: int
     effective_date_max: date
+    effective_date_precise: bool
     rcept_no: str
 
 
@@ -243,16 +310,328 @@ class DartAdapter(DataSourceAdapter):
                 f"DART {parsed.unmapped_account_count} unmapped IFRS accounts — "
                 f"dart_account_mapper extension required"
             )
-        # `effective_date` 는 ADR-0012 D1 의 보수적 신고기한 — 자본시장법
-        # 제160조 (Q1~Q3 = +45일, Q4 = +90일). 100% 회사 공시 완료 시점이라
-        # silent look-ahead bias 0. 단 실제 rcept_dt (회사가 일찍 공시한 경우)
-        # 와의 잔여 lag 가 추정 — `estimated_fields` marker 보존. M1+ 의 DART
-        # list.json fetch (ADR-0012 D6) 합류 시 marker 자연 제거.
+        # `effective_date` 는 ADR-0012 D6 — DART 응답 rcept_no 앞 8자리
+        # (YYYYMMDD = 접수일자 = 공시일) 에서 직접 도출한 정밀 공시일. 도출 성공
+        # 시 `estimated_fields` 비움 (정밀 — marker 불요), 실패 시 자본시장법
+        # 제160조 신고기한 보수값 + `estimated_fields={"effective_date"}` fallback
+        # (100% 공시 완료 보장 시점이라 look-ahead 0). precise 여부는
+        # effective_date_precise 컬럼으로 영속화 (record/ORM).
+        estimated_fields = (
+            frozenset()
+            if parsed.effective_date_precise
+            else frozenset({"effective_date"})
+        )
         return FetchResult(
             data=rows,
             citations=(citation,),
             warnings=tuple(warnings),
-            estimated_fields=frozenset({"effective_date"}),
+            estimated_fields=estimated_fields,
+        )
+
+    # -------------------------------------------------------------------------
+    # 자사주 fetch — stockTotqySttus.json (주식의 총수 현황)
+    # -------------------------------------------------------------------------
+
+    def fetch_treasury_shares(
+        self,
+        *,
+        code: str,
+        corp_code: str,
+        fiscal_year: int,
+        fiscal_quarter: int,
+        batch_id: UUID,
+    ) -> FetchResult[TreasurySharesResult]:
+        """단일 회사·연도·분기의 자사주 (보통주 자기주식수) fetch.
+
+        DART `stockTotqySttus.json` (주식의 총수 현황) 의 "보통주" 행에서
+        `tesstk_co` (자기주식수) 를 추출. KRX shares_outstanding (market_caps)
+        가 보통주 기준이므로 일관성을 위해 "보통주" 행을 1순위 사용. "보통주"
+        행 부재 시 "합계" 행 fallback. "-"/빈값/파싱 실패는 결측 (None) 처리 —
+        절대 0 으로 가정하지 않음 (silent 오류 회피).
+
+        `fetch_financial_statement` 패턴 미러:
+            - 같은 `_call_dart` 재사용 (status code 분기 동일 — "020" retry,
+              "010"/"011" auth, 그 외 비정상 AdapterError).
+            - effective_date = `_disclosure_deadline` (ADR-0012 D1 보수 신고기한,
+              financials 와 동일). estimated_fields = {"effective_date"}.
+
+        Args:
+            code: KRX 종목코드 (6자리). canonical schema 의 code 와 동치 (citation
+                의미상 사용처는 호출자).
+            corp_code: DART 8자리 회사코드. 호출자 책임 매핑.
+            fiscal_year: 사업연도 (e.g., 2023).
+            fiscal_quarter: 1~4 (4=연간/사업보고서).
+            batch_id: 일배치 식별자 — citation batch_id 채움.
+
+        Returns:
+            FetchResult — data = `TreasurySharesResult` (자사주 + 발행주식총수,
+            결측 시 각 None). citations = `(SourceCitation,)` 1 개. warnings =
+            "보통주" 행 부재 fallback / 결측 안내. estimated_fields =
+            `{"effective_date"}` (financials 와 동일 — 신고기한 추정 marker).
+
+        Raises:
+            AdapterError: 입력 검증 실패, API key 미설정, DART status code
+                non-rate-limit 에러 (status "013" 데이터없음 포함 — `_call_dart`
+                가 raise), 빈 응답.
+            AdapterRetryError: DART status "020" (요청 제한) 또는 네트워크 단절.
+        """
+        _validate_code(code)
+        _validate_corp_code(corp_code)
+        _validate_fiscal_period(fiscal_year, fiscal_quarter)
+
+        params = {
+            "crtfc_key": self._resolve_api_key(),
+            "corp_code": corp_code,
+            "bsns_year": str(fiscal_year),
+            "reprt_code": _REPRT_CODE_BY_QUARTER[fiscal_quarter],
+        }
+
+        client = self._get_http_client()
+        response_json = self._call_dart(
+            client=client,
+            endpoint="stockTotqySttus.json",
+            params=params,
+            context=(
+                f"fetch_treasury_shares(corp={corp_code}, "
+                f"{fiscal_year}Q{fiscal_quarter})"
+            ),
+        )
+
+        treasury, issued_total, rcept_no, warnings = self._parse_treasury_response(
+            response_json=response_json,
+            code=code,
+            fiscal_year=fiscal_year,
+            fiscal_quarter=fiscal_quarter,
+        )
+
+        # ADR-0012 D6 — financials 와 동일. rcept_no 앞 8자리 (YYYYMMDD =
+        # 접수일자) 에서 정밀 공시일 직접 도출. 유효 시 effective_date = 실 공시일
+        # (precise), 무효/부재 (rcept_no placeholder fallback 포함) 시 자본시장법
+        # 제160조 신고기한 보수값 (look-ahead 0).
+        precise_date = _rcept_date(rcept_no)
+        if precise_date is not None:
+            effective_date = precise_date
+            effective_date_precise = True
+        else:
+            effective_date = _disclosure_deadline(fiscal_year, fiscal_quarter)
+            effective_date_precise = False
+        citation = self._make_citation(
+            identifier=rcept_no,
+            effective_date=effective_date,
+            batch_id=batch_id,
+        )
+        # precise 면 marker 불요, fallback 이면 {"effective_date"} (financials 동일).
+        estimated_fields = (
+            frozenset()
+            if effective_date_precise
+            else frozenset({"effective_date"})
+        )
+        return FetchResult(
+            data=TreasurySharesResult(
+                shares_treasury=treasury,
+                shares_issued_total=issued_total,
+                effective_date=effective_date,
+                effective_date_precise=effective_date_precise,
+            ),
+            citations=(citation,),
+            warnings=tuple(warnings),
+            estimated_fields=estimated_fields,
+        )
+
+    def _parse_treasury_response(
+        self,
+        *,
+        response_json: dict[str, Any],
+        code: str,
+        fiscal_year: int,
+        fiscal_quarter: int,
+    ) -> tuple[int | None, int | None, str, list[str]]:
+        """stockTotqySttus.json list → (자사주, 발행주식총수, rcept_no, warnings).
+
+        자사주 추출 규칙:
+            1. `se == "보통주"` 행의 `tesstk_co` (자기주식수) 1순위.
+            2. "보통주" 행 부재 시 `se == "합계"` 행 fallback (warning).
+            3. "-"/빈값/파싱 실패는 None (결측 — 0 가정 금지).
+
+        Raises:
+            AdapterError: list 비어있음 / schema drift (필수 필드 누락).
+        """
+        raw_list = response_json.get("list", [])
+        if not isinstance(raw_list, list) or not raw_list:
+            raise AdapterError(
+                f"DART empty 'list' for stockTotqySttus code={code} "
+                f"{fiscal_year}Q{fiscal_quarter}"
+            )
+
+        # se → row 매핑 (마지막 등장 우선 — 통상 1 회). rcept_no 는 첫 row 채택.
+        rows_by_se: dict[str, dict[str, Any]] = {}
+        rcept_no = ""
+        for raw in raw_list:
+            if not isinstance(raw, dict):
+                raise AdapterError(
+                    f"DART stockTotqySttus schema drift — non-dict row for "
+                    f"code={code} {fiscal_year}Q{fiscal_quarter}"
+                )
+            try:
+                se = str(raw["se"]).strip()
+            except (KeyError, TypeError) as exc:
+                raise AdapterError(
+                    f"DART stockTotqySttus schema drift — missing 'se' field: "
+                    f"{exc}. row keys: {list(raw.keys())}"
+                ) from exc
+            rows_by_se[se] = raw
+            if not rcept_no:
+                rcept_no_raw = raw.get("rcept_no", "")
+                if rcept_no_raw:
+                    rcept_no = str(rcept_no_raw)
+
+        warnings: list[str] = []
+        # 1. "보통주" 1순위, 부재 시 "합계" fallback.
+        target_row = rows_by_se.get(_SE_COMMON_STOCK)
+        if target_row is None:
+            target_row = rows_by_se.get(_SE_TOTAL)
+            if target_row is not None:
+                warnings.append(
+                    f"DART stockTotqySttus '{_SE_COMMON_STOCK}' row 부재 — "
+                    f"'{_SE_TOTAL}' 행 fallback (code={code})"
+                )
+        if target_row is None:
+            # 보통주/합계 모두 부재 — 자사주 결측 (None). 우선주만 있는 등 edge.
+            warnings.append(
+                f"DART stockTotqySttus '{_SE_COMMON_STOCK}'/'{_SE_TOTAL}' 행 "
+                f"모두 부재 — 자사주 결측 (code={code})"
+            )
+            treasury: int | None = None
+            issued_total: int | None = None
+        else:
+            treasury = _parse_share_count(target_row.get("tesstk_co"))
+            issued_total = _parse_share_count(target_row.get("istc_totqy"))
+            if treasury is None:
+                warnings.append(
+                    f"DART stockTotqySttus tesstk_co 결측/파싱 실패 "
+                    f"('-'/빈값/비숫자) — 자사주 N/A (code={code})"
+                )
+
+        # rcept_no 가 빈 string 인 edge — financials 와 달리 자사주 결측이 정상
+        # 운영 case 이므로 fail 하지 않고 빈 identifier 로 citation 생성하지 않기
+        # 위해 fallback. DART 응답에 rcept_no 가 없으면 corp_code 기반 placeholder.
+        if not rcept_no:
+            rcept_no = f"stockTotqySttus:{code}:{fiscal_year}Q{fiscal_quarter}"
+            warnings.append(
+                f"DART stockTotqySttus rcept_no 부재 — placeholder identifier "
+                f"사용 (code={code})"
+            )
+
+        return treasury, issued_total, rcept_no, warnings
+
+    # -------------------------------------------------------------------------
+    # 공시목록 fetch — list.json (ADR-0026)
+    # -------------------------------------------------------------------------
+
+    def fetch_disclosure_list(
+        self,
+        *,
+        corp_code: str,
+        bgn_de: str,
+        end_de: str,
+        page_count: int = 100,
+    ) -> FetchResult[tuple[DisclosureItem, ...]]:
+        """단일 회사의 기간 내 공시목록 on-demand fetch — ADR-0026.
+
+        DART `list.json` (공시검색) 을 corp_code + 기간 (bgn_de~end_de) 으로 조회.
+        batch/영속화 X — Stock Detail 진입 1 종목의 실시간 조회 (ADR-0026 D3).
+        각 row 에서 **제목 (`report_nm`) + 접수일자 (`rcept_dt`) + 접수번호
+        (`rcept_no`)** 3 필드만 추출 (ADR-0026 D1). 본문/기타 필드 무시.
+
+        status "013" (조회된 데이터 없음) 은 공시가 없는 종목 = 정상 빈 결과.
+        재무제표/자사주 경로는 `_call_dart` 가 "013" 을 AdapterError 로 raise 하나,
+        공시목록은 부재가 에러가 아니므로 본 메서드가 그 AdapterError 를 잡아 빈
+        list 로 변환 (`_call_dart` 시그니처/동작은 변경 없음 — 회귀 0).
+
+        Args:
+            corp_code: DART 8자리 회사코드. 호출자 책임 매핑.
+            bgn_de: 조회 시작일 (YYYYMMDD).
+            end_de: 조회 종료일 (YYYYMMDD).
+            page_count: 페이지당 row 수 (DART 최대 100). default 100.
+
+        Returns:
+            FetchResult — data = `tuple[DisclosureItem, ...]` (rcept_date 역순 =
+            최신순, ADR-0026 D3). citations = `(SourceCitation,)` 대표 1 개 (가장
+            최신 공시 기준) 또는 빈 결과 시 빈 tuple. warnings = rcept_dt 파싱
+            실패로 skip 한 row 안내.
+
+        Raises:
+            AdapterError: 입력 검증 실패, API key 미설정, DART status code
+                non-rate-limit·non-013 에러 (auth 등).
+            AdapterRetryError: DART status "020" (요청 제한) 또는 네트워크 단절.
+        """
+        _validate_corp_code(corp_code)
+        _validate_date_yyyymmdd(bgn_de, "bgn_de")
+        _validate_date_yyyymmdd(end_de, "end_de")
+        if not isinstance(page_count, int) or not (1 <= page_count <= 100):
+            raise AdapterError(
+                f"page_count must be 1..100, got {page_count!r}"
+            )
+
+        params = {
+            "crtfc_key": self._resolve_api_key(),
+            "corp_code": corp_code,
+            "bgn_de": bgn_de,
+            "end_de": end_de,
+            "page_count": str(page_count),
+        }
+
+        client = self._get_http_client()
+        context = (
+            f"fetch_disclosure_list(corp={corp_code}, {bgn_de}~{end_de})"
+        )
+        try:
+            response_json = self._call_dart(
+                client=client,
+                endpoint="list.json",
+                params=params,
+                context=context,
+            )
+        except AdapterError as exc:
+            # status "013" (조회된 데이터 없음) 은 공시 미존재 종목 = 정상 빈 결과.
+            # `_call_dart` 는 non-OK status 를 `"DART non-OK status={status} in
+            # {context}: ..."` 메시지로 raise 한다 (시그니처/동작 변경 금지 제약).
+            # 그 메시지에서 status="013" 토큰을 식별해 빈 결과로 변환 — 다른 status
+            # (auth 등) 은 그대로 re-raise (회귀 0).
+            if _is_no_data_error(exc):
+                return FetchResult(data=(), citations=(), warnings=())
+            raise
+
+        items, skipped = _parse_disclosure_list(response_json)
+
+        warnings: list[str] = []
+        if skipped > 0:
+            warnings.append(
+                f"DART disclosure {skipped} rows skipped — "
+                f"rcept_dt missing or non-date (YYYYMMDD parse 실패)"
+            )
+
+        if not items:
+            # status "000" 이나 list 가 비거나 모든 row parse 실패한 edge.
+            return FetchResult(data=(), citations=(), warnings=tuple(warnings))
+
+        # 최신순 (rcept_date 역순) 정렬 — ADR-0026 D3 (사실 정렬 허용). 동일
+        # 접수일 내 순서는 DART 응답 순서 보존 (stable sort).
+        ordered = tuple(
+            sorted(items, key=lambda d: d.rcept_date, reverse=True)
+        )
+        # 대표 citation — 가장 최신 공시 (정렬 후 첫 항목) 기준. 공시 1 종목
+        # 조회라 fact 단위 citation 대신 retrieval 대표 1 개.
+        latest = ordered[0]
+        citation = self._make_citation(
+            identifier=latest.rcept_no,
+            effective_date=latest.rcept_date,
+            batch_id=uuid4(),
+        )
+        return FetchResult(
+            data=ordered,
+            citations=(citation,),
+            warnings=tuple(warnings),
         )
 
     # -------------------------------------------------------------------------
@@ -388,15 +767,14 @@ class DartAdapter(DataSourceAdapter):
                 f"{fiscal_year}Q{fiscal_quarter} {ifrs_type.value}"
             )
 
-        # 공시 신고기한 (ADR-0012 D1) — 분기 종료 + 45/90일. 분기 내 모든
-        # row 가 같은 effective_date. 자본시장법 제160조 신고기한 = 100% 공시
-        # 완료 보장 시점 → silent look-ahead bias 0.
-        effective_date = _disclosure_deadline(fiscal_year, fiscal_quarter)
-
-        rows: list[FinancialStatementRow] = []
+        # 1차: row 데이터 수집 + 첫 valid row 의 rcept_no 채택. effective_date 는
+        # rcept_no 도출 (ADR-0012 D6) 결과에 의존하므로 row 생성은 2차로 미룸.
+        # 분기 내 모든 row 가 같은 보고서 = 같은 rcept_no = 같은 effective_date.
         skipped_row_count = 0
         unmapped_account_count = 0
         rcept_no = ""
+        # (canonical_account, value, rcept_no, currency) 누적.
+        parsed_rows: list[tuple[str, Decimal, str, str]] = []
 
         for raw in raw_list:
             # 필수 필드 검증 — schema drift fail-fast.
@@ -429,25 +807,14 @@ class DartAdapter(DataSourceAdapter):
                 # 미매핑 — row 는 보존 (canonical key 가 "unmapped:..." prefix).
                 unmapped_account_count += 1
 
-            rows.append(
-                FinancialStatementRow(
-                    code=code,
-                    fiscal_year=fiscal_year,
-                    fiscal_quarter=fiscal_quarter,
-                    effective_date=effective_date,
-                    account=canonical_account,
-                    value=value,
-                    unit="krw",
-                    ifrs_type=ifrs_type,
-                    rcept_no=str(rcept_no_raw),
-                    currency=str(currency),
-                )
+            parsed_rows.append(
+                (canonical_account, value, str(rcept_no_raw), str(currency))
             )
             # rcept_no 는 보통 한 보고서 단위로 동일 — 첫 valid row 채택.
             if not rcept_no:
                 rcept_no = str(rcept_no_raw)
 
-        if not rows:
+        if not parsed_rows:
             raise AdapterError(
                 f"DART parsed 0 valid rows for code={code} "
                 f"{fiscal_year}Q{fiscal_quarter} {ifrs_type.value}"
@@ -459,11 +826,41 @@ class DartAdapter(DataSourceAdapter):
                 f"code={code} {fiscal_year}Q{fiscal_quarter}"
             )
 
+        # ADR-0012 D6 — rcept_no 앞 8자리 (YYYYMMDD = 접수일자) 에서 정밀 공시일
+        # 직접 도출. 유효 시 effective_date = 실 공시일 (precise=True), 무효/부재
+        # 시 자본시장법 제160조 신고기한 보수값 fallback (precise=False) — 어느
+        # 경우든 look-ahead 0 (보수값은 100% 공시 완료 보장 시점, ADR-0012 D1).
+        precise_date = _rcept_date(rcept_no)
+        if precise_date is not None:
+            effective_date = precise_date
+            effective_date_precise = True
+        else:
+            effective_date = _disclosure_deadline(fiscal_year, fiscal_quarter)
+            effective_date_precise = False
+
+        rows = tuple(
+            FinancialStatementRow(
+                code=code,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+                effective_date=effective_date,
+                account=account,
+                value=value,
+                unit="krw",
+                ifrs_type=ifrs_type,
+                rcept_no=row_rcept_no,
+                currency=currency,
+                effective_date_precise=effective_date_precise,
+            )
+            for (account, value, row_rcept_no, currency) in parsed_rows
+        )
+
         return _ParsedResponse(
-            rows=tuple(rows),
+            rows=rows,
             skipped_row_count=skipped_row_count,
             unmapped_account_count=unmapped_account_count,
             effective_date_max=effective_date,
+            effective_date_precise=effective_date_precise,
             rcept_no=rcept_no,
         )
 
@@ -512,6 +909,143 @@ def _validate_corp_code(corp_code: str) -> None:
         raise AdapterError(
             f"corp_code must be 8-digit numeric, got {corp_code[:32]!r}"
         )
+
+
+def _validate_date_yyyymmdd(value: str, field_name: str) -> None:
+    """DART 기간 파라미터 (bgn_de / end_de) — 8자리 YYYYMMDD numeric + 유효 date."""
+    if not isinstance(value, str):
+        raise AdapterError(
+            f"{field_name} must be str, got {type(value).__name__}"
+        )
+    if len(value) != 8 or not value.isdigit():
+        raise AdapterError(
+            f"{field_name} must be 8-digit YYYYMMDD, got {value[:32]!r}"
+        )
+    try:
+        datetime.strptime(value, "%Y%m%d")
+    except ValueError as exc:
+        raise AdapterError(
+            f"{field_name} is not a valid YYYYMMDD date: {value!r}"
+        ) from exc
+
+
+def _is_no_data_error(exc: AdapterError) -> bool:
+    """`_call_dart` 가 raise 한 AdapterError 가 DART status "013" (데이터 없음) 인지.
+
+    `_call_dart` 의 non-OK status 메시지 형식 (`"...status={status}..."`) 에서
+    status="013" 토큰을 식별. list.json 전용 — 공시 미존재 종목을 빈 결과로
+    변환하기 위함 (ADR-0026). 다른 status (auth 등) 는 False → 호출자가 re-raise.
+    """
+    return f"status={_STATUS_NO_DATA}" in str(exc)
+
+
+def _parse_disclosure_list(
+    response_json: dict[str, Any],
+) -> tuple[list[DisclosureItem], int]:
+    """DART list.json 의 `list` → (DisclosureItem list, skipped row 수).
+
+    각 row 에서 `report_nm` / `rcept_dt` / `rcept_no` 만 추출 (ADR-0026 D1). 본문/
+    기타 필드 무시. `rcept_dt` (8자리 YYYYMMDD) 파싱은 방어적 — 실패 시 그 row
+    skip + 카운트 (전체 fetch 실패시키지 않음). 정렬은 호출자 책임.
+
+    `list` 키 부재/빈 list 는 빈 결과 ([], 0) — status "000" 이나 row 0 인 edge
+    (DART 가 "013" 대신 빈 list 로 응답하는 경우도 정상 빈 결과로 처리).
+    """
+    raw_list = response_json.get("list", [])
+    if not isinstance(raw_list, list) or not raw_list:
+        return [], 0
+
+    items: list[DisclosureItem] = []
+    skipped = 0
+    for raw in raw_list:
+        if not isinstance(raw, dict):
+            # schema drift — 방어적 skip (전체 실패 회피).
+            skipped += 1
+            continue
+        rcept_dt_raw = raw.get("rcept_dt")
+        rcept_no_raw = raw.get("rcept_no")
+        report_nm_raw = raw.get("report_nm")
+        # rcept_no / report_nm 부재는 viewer URL·제목 생성 불가 → skip.
+        if not rcept_dt_raw or not rcept_no_raw or report_nm_raw is None:
+            skipped += 1
+            continue
+        # rcept_dt (8자리 YYYYMMDD) 직접 파싱 — `_rcept_date` 는 14자리 rcept_no
+        # 용이라 부적합. 파싱 실패 시 그 row skip + warning (방어적).
+        try:
+            rcept_date = datetime.strptime(
+                str(rcept_dt_raw).strip(), "%Y%m%d"
+            ).date()
+        except ValueError:
+            skipped += 1
+            continue
+
+        rcept_no = str(rcept_no_raw).strip()
+        dart_url = _DART_VIEWER_URL_TEMPLATE.format(rcept_no=rcept_no)
+        items.append(
+            DisclosureItem(
+                report_name=str(report_nm_raw).strip(),
+                rcept_date=rcept_date,
+                rcept_no=rcept_no,
+                dart_url=dart_url,
+            )
+        )
+    return items, skipped
+
+
+def _parse_share_count(raw: object) -> int | None:
+    """DART 주식수 string ("5,969,782,550") → int. 결측/파싱 실패 시 None.
+
+    DART 의 주식수는 콤마 포함 문자열. "-"/빈값은 결측. 음수/소수는 schema
+    drift 로 보고 None (자사주는 비음 정수). 절대 0 으로 가정하지 않음 (결측은
+    None — silent 오류 회피).
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip().replace(",", "")
+    if not s or s == "-":
+        return None
+    try:
+        value = int(s)
+    except (ValueError, TypeError):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _rcept_date(rcept_no: str) -> date | None:
+    """DART 접수번호 (rcept_no) → 정밀 공시일 (effective_date). 도출 실패 시 None.
+
+    ADR-0012 D6 — DART rcept_no 는 14자리 = 앞 8자리 (YYYYMMDD = 접수일자 =
+    공시일) + 6자리 일련번호. fnlttSinglAcntAll.json / stockTotqySttus.json 응답
+    각 row 의 필수 필드로 이미 존재 (citation identifier + 뷰어 URL 에 사용). 별도
+    list.json fetch 없이 정확한 공시일을 직접 도출 (rate-limit 무관, 더 정확).
+
+    방어 (schema 예상 외 시 None — 호출자가 보수 신고기한 fallback):
+        - 14자리 숫자가 아니면 None (placeholder identifier, 빈값, drift 포함).
+        - 앞 8자리가 유효 date (YYYYMMDD) 가 아니면 None.
+        - 연도가 합리적 범위 (2000~2100) 밖이면 None (오염 방어).
+
+    Args:
+        rcept_no: DART 접수번호 문자열.
+
+    Returns:
+        정밀 공시일 (date) 또는 도출 실패 시 None. None 이면 호출자가 자본시장법
+        제160조 신고기한 보수값 + effective_date_precise=False 로 안전 fallback
+        (look-ahead 위험 0).
+    """
+    if not isinstance(rcept_no, str):
+        return None
+    if len(rcept_no) != 14 or not rcept_no.isdigit():
+        return None
+    try:
+        parsed = datetime.strptime(rcept_no[:8], "%Y%m%d").date()
+    except ValueError:
+        return None
+    # 연도 합리적 범위 — _validate_fiscal_period 와 동일 가드 (오염 방어).
+    if parsed.year < 2000 or parsed.year > 2100:
+        return None
+    return parsed
 
 
 def _validate_fiscal_period(year: int, quarter: int) -> None:

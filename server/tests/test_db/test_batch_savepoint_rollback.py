@@ -221,15 +221,15 @@ def test_dart_savepoint_rolls_back_failed_company_only(
 
     # oracle T19 L2 — financial row 직접 검증. 회사 1 영구화 + 회사 2 rollback.
     # _dart_row 의 default account_id = "ifrs-full_Assets" → canonical
-    # "total_assets". as_of 는 fiscal_quarter=4 의 신고기한 (ADR-0012 D1) =
-    # 2023-12-31 + 90일 = 2024-03-30 이후. 2024-04-01 으로 안전 마진.
+    # "total_assets". effective_date 는 rcept_no="20240501000123" 도출 정밀
+    # 공시일 (ADR-0012 D6) = 2024-05-01. as_of=2024-05-15 으로 안전 마진.
     fin_005930 = financial_repo.fetch_financials(
-        "005930", as_of=date(2024, 4, 1),
+        "005930", as_of=date(2024, 5, 15),
         account="total_assets",
     )
     assert len(fin_005930) > 0
     fin_000660 = financial_repo.fetch_financials(
-        "000660", as_of=date(2024, 4, 1),
+        "000660", as_of=date(2024, 5, 15),
         account="total_assets",
     )
     assert fin_000660 == ()

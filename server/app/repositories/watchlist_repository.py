@@ -493,8 +493,18 @@ class FakeScreenerSetRepository(ScreenerSetRepository):
         return s
 
     def list_all(self, *, user_id: UUID) -> Sequence[ScreenerSet]:
-        owned = [s for s in self._sets.values() if s.user_id == user_id]
-        return tuple(sorted(owned, key=lambda x: x.updated_at, reverse=True))
+        # updated_at 만으론 동일 timestamp (Windows datetime.now 해상도 ~16ms 로
+        # 빠른 연속 생성 시 tie) 의 순서가 비결정 — stable sort 가 dict 삽입순을
+        # 유지해 "가장 최근" 의미와 어긋남. 삽입 index 를 보조 key 로 추가해
+        # 생성순 (나중 생성 = 더 최근) tiebreaker 보장 (SqlScreenerSetRepository.
+        # list_all 의 created_at/id 보조 정렬과 동일 의도, 클럭 무관 결정적).
+        owned = [
+            (i, s)
+            for i, s in enumerate(self._sets.values())
+            if s.user_id == user_id
+        ]
+        ordered = sorted(owned, key=lambda t: (t[1].updated_at, t[0]), reverse=True)
+        return tuple(s for _, s in ordered)
 
     def get(self, set_id: UUID, *, user_id: UUID) -> ScreenerSet | None:
         s = self._sets.get(set_id)

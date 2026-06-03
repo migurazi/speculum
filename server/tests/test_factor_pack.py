@@ -22,7 +22,9 @@ from typing import Any
 import pytest
 
 from app.services.factor_pack import (
+    BuiltinCompositeError,
     CitationMissing,
+    CyclicDependency,
     FactorPackError,
     ForbiddenVocabInPack,
     HashMismatch,
@@ -34,6 +36,8 @@ from app.services.factor_pack import (
     fill_hash,
     load_builtin_pack,
     load_pack,
+    validate_acyclic,
+    validate_builtin_no_composite,
     validate_citation,
     validate_forbidden_vocab,
     validate_hash,
@@ -395,5 +399,274 @@ def test_load_pack_propagates_each_validation_step(
 def test_factor_pack_error_is_base_class() -> None:
     """모든 specific 예외가 FactorPackError 의 subclass."""
     for cls in (SchemaValidationError, IdentityViolation, CitationMissing,
-                ForbiddenVocabInPack, HashMismatch):
+                ForbiddenVocabInPack, HashMismatch, CyclicDependency):
         assert issubclass(cls, FactorPackError)
+
+
+# =============================================================================
+# 11. 정적 DAG acyclicity 검증 (ADR-0022 R5/D2)
+# =============================================================================
+#
+# factor 의존 그래프 (factor A 의 inputs 가 다른 factor B 의 출력 derived field
+# 참조) 의 순환을 데이터 없이 정의만으로 탐지. db_field_provider._resolving
+# (런타임 동적) 과 다른 정적 메커니즘.
+
+
+def _mini_factor(
+    *, canonical_id: str, uuid_str: str, inputs: list[str], ast: dict[str, Any],
+) -> dict[str, Any]:
+    """acyclicity 테스트용 minimal factor — schema 필수 필드만."""
+    return {
+        "canonical_id": canonical_id,
+        "uuid": uuid_str,
+        "name": canonical_id,
+        "description": canonical_id + " desc",
+        "formula": {"ast": ast, "inputs": inputs},
+        "unit": "ratio",
+    }
+
+
+def _mini_pack(factors: list[dict[str, Any]]) -> dict[str, Any]:
+    return {"factors": factors}
+
+
+def test_validate_acyclic_passes_for_builtin(builtin_body: dict[str, Any]) -> None:
+    """빌트인 pack (PER → market-cap:ex-treasury 단방향 의존) 은 acyclic."""
+    validate_acyclic(builtin_body)  # raises 안 함
+
+
+def test_validate_acyclic_passes_for_linear_chain() -> None:
+    """A → B → C 단방향 체인 — acyclic 통과.
+
+    field 명명 규칙: factor `a:base` 출력 = field `a_base` (':'/'-' → '_').
+    """
+    factors = [
+        _mini_factor(
+            canonical_id="a:base", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["primitive_x"], ast={"field": "primitive_x"},
+        ),
+        _mini_factor(
+            canonical_id="b:mid", uuid_str="00000000-0000-0000-0000-00000000000b",
+            inputs=["a_base"], ast={"field": "a_base"},
+        ),
+        _mini_factor(
+            canonical_id="c:top", uuid_str="00000000-0000-0000-0000-00000000000c",
+            inputs=["b_mid"], ast={"field": "b_mid"},
+        ),
+    ]
+    validate_acyclic(_mini_pack(factors))  # raises 안 함
+
+
+def test_validate_acyclic_rejects_direct_cycle() -> None:
+    """A → B → A 순환 — fail-loud (CyclicDependency)."""
+    factors = [
+        _mini_factor(
+            canonical_id="a:x", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["b_y"], ast={"field": "b_y"},  # A 가 B 출력 참조
+        ),
+        _mini_factor(
+            canonical_id="b:y", uuid_str="00000000-0000-0000-0000-00000000000b",
+            inputs=["a_x"], ast={"field": "a_x"},  # B 가 A 출력 참조 → 순환
+        ),
+    ]
+    with pytest.raises(CyclicDependency, match="순환"):
+        validate_acyclic(_mini_pack(factors))
+
+
+def test_validate_acyclic_rejects_self_loop() -> None:
+    """A → A self-loop (자기 출력 field 를 자기가 참조) — 순환."""
+    factors = [
+        _mini_factor(
+            canonical_id="a:self", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["a_self"], ast={"field": "a_self"},
+        ),
+    ]
+    with pytest.raises(CyclicDependency, match="순환"):
+        validate_acyclic(_mini_pack(factors))
+
+
+def test_validate_acyclic_rejects_indirect_cycle() -> None:
+    """A → B → C → A 간접 순환 — 탐지."""
+    factors = [
+        _mini_factor(
+            canonical_id="a:x", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["c_z"], ast={"field": "c_z"},
+        ),
+        _mini_factor(
+            canonical_id="b:y", uuid_str="00000000-0000-0000-0000-00000000000b",
+            inputs=["a_x"], ast={"field": "a_x"},
+        ),
+        _mini_factor(
+            canonical_id="c:z", uuid_str="00000000-0000-0000-0000-00000000000c",
+            inputs=["b_y"], ast={"field": "b_y"},
+        ),
+    ]
+    with pytest.raises(CyclicDependency, match="순환"):
+        validate_acyclic(_mini_pack(factors))
+
+
+def test_validate_acyclic_cycle_message_includes_path() -> None:
+    """순환 에러가 순환 경로 (factor canonical_id) 를 노출 — 디버깅."""
+    factors = [
+        _mini_factor(
+            canonical_id="a:x", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["b_y"], ast={"field": "b_y"},
+        ),
+        _mini_factor(
+            canonical_id="b:y", uuid_str="00000000-0000-0000-0000-00000000000b",
+            inputs=["a_x"], ast={"field": "a_x"},
+        ),
+    ]
+    with pytest.raises(CyclicDependency) as exc:
+        validate_acyclic(_mini_pack(factors))
+    msg = str(exc.value)
+    assert "a:x" in msg and "b:y" in msg
+
+
+def test_validate_acyclic_ignores_primitive_fields() -> None:
+    """primitive DB field (어떤 factor 출력도 아님) 참조는 엣지 생성 안 함."""
+    factors = [
+        _mini_factor(
+            canonical_id="a:base", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["shares_issued", "close_price_adjusted"],
+            ast={"op": "mul",
+                 "left": {"field": "shares_issued"},
+                 "right": {"field": "close_price_adjusted"}},
+        ),
+    ]
+    validate_acyclic(_mini_pack(factors))  # primitive 만 — acyclic
+
+
+def test_load_pack_rejects_cyclic_pack(
+    tmp_path: Path, builtin_body: dict[str, Any],
+) -> None:
+    """load_pack 이 순환 pack 을 거부 (검증 파이프라인 통합)."""
+    body = _clone(builtin_body)
+    # 빌트인의 처음 두 factor 를 상호 참조 순환으로 변조.
+    body["factors"] = [
+        _mini_factor(
+            canonical_id="a:x", uuid_str="00000000-0000-0000-0000-00000000000a",
+            inputs=["b_y"], ast={"field": "b_y"},
+        ),
+        _mini_factor(
+            canonical_id="b:y", uuid_str="00000000-0000-0000-0000-00000000000b",
+            inputs=["a_x"], ast={"field": "a_x"},
+        ),
+    ]
+    body["content_hash"] = compute_pack_hash(body)
+    p = tmp_path / "cyclic.json"
+    p.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
+    with pytest.raises(CyclicDependency):
+        load_pack(p)
+
+
+# =============================================================================
+# 12. 금지 op schema 거부 (ADR-0022 D1) — rank/top_n/bottom_n/sign/step
+# =============================================================================
+
+@pytest.mark.parametrize("forbidden_op", ["rank", "top_n", "bottom_n", "sign", "step"])
+def test_schema_rejects_forbidden_ops(
+    builtin_body: dict[str, Any], forbidden_op: str,
+) -> None:
+    """ADR-0022 D1 — rank/top_n/bottom_n/sign/step 은 exprOp enum 에 부재 (거부).
+
+    "처음부터 부재가 안전" (ADR-0007 Alternative C) — schema 가 1 차 방어선.
+    """
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {"op": forbidden_op, "field": "shares_issued"}
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued"]
+    with pytest.raises(SchemaValidationError):
+        validate_schema(body)
+
+
+# =============================================================================
+# 13. 허용 composite op schema 통과 (ADR-0022 D1)
+# =============================================================================
+
+def test_schema_accepts_weighted_sum(builtin_body: dict[str, Any]) -> None:
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {
+        "op": "weighted_sum",
+        "args": [{"field": "shares_issued"}, {"field": "shares_treasury"}],
+        "weights": [0.5, 0.5],
+    }
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued", "shares_treasury"]
+    validate_schema(body)  # raises 안 함
+
+
+def test_schema_accepts_winsorize(builtin_body: dict[str, Any]) -> None:
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {
+        "op": "winsorize", "args": [{"field": "shares_issued"}],
+        "lower": 0, "upper": 1000000,
+    }
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued"]
+    validate_schema(body)
+
+
+@pytest.mark.parametrize("op", ["zscore", "percentile", "min_max_scale"])
+def test_schema_accepts_universe_relative_ops(
+    builtin_body: dict[str, Any], op: str,
+) -> None:
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {"op": op, "field": "shares_issued"}
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued"]
+    validate_schema(body)
+
+
+# =============================================================================
+# 12. 빌트인 Composite op 금지 게이트 (ADR-0022 D5 / ADR-0007 D5.1 / T73)
+# =============================================================================
+#
+# 빌트인 pack 에 유니버스-상대(zscore/percentile/min_max_scale) + weighted_sum 이
+# 들어가면 "빌트인 multi-factor score"(= 사실상 추천) 가 되므로 load_builtin_pack
+# 에서 자동 거부. community/custom(사용자 정의)은 허용. winsorize 는 제외.
+
+
+def test_validate_builtin_no_composite_passes_for_builtin(
+    builtin_body: dict[str, Any],
+) -> None:
+    """빌트인 pack 은 Composite op 미사용 — 통과 (DEFAULT_PACK import 도 통과)."""
+    validate_builtin_no_composite(builtin_body)  # raises 안 함
+
+
+@pytest.mark.parametrize(
+    "op", ["weighted_sum", "zscore", "percentile", "min_max_scale"]
+)
+def test_validate_builtin_no_composite_rejects(
+    builtin_body: dict[str, Any], op: str,
+) -> None:
+    """빌트인에 Composite op 포함 → BuiltinCompositeError (ADR-0022 D5)."""
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {"op": op, "field": "shares_issued"}
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued"]
+    with pytest.raises(BuiltinCompositeError, match="Composite op"):
+        validate_builtin_no_composite(body)
+
+
+def test_validate_builtin_no_composite_allows_winsorize(
+    builtin_body: dict[str, Any],
+) -> None:
+    """winsorize(종목-국소 전처리)는 빌트인 허용 — D5 제외."""
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {
+        "op": "winsorize", "args": [{"field": "shares_issued"}],
+        "lower": 0, "upper": 1000000,
+    }
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued"]
+    validate_builtin_no_composite(body)  # raises 안 함
+
+
+def test_validate_builtin_no_composite_detects_nested(
+    builtin_body: dict[str, Any],
+) -> None:
+    """중첩 expression(left/right)의 Composite op 도 탐지 — AST walk."""
+    body = _clone(builtin_body)
+    body["factors"][0]["formula"]["ast"] = {
+        "op": "add",
+        "left": {"field": "shares_issued"},
+        "right": {"op": "percentile", "field": "shares_issued"},
+    }
+    body["factors"][0]["formula"]["inputs"] = ["shares_issued"]
+    with pytest.raises(BuiltinCompositeError):
+        validate_builtin_no_composite(body)

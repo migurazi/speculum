@@ -98,7 +98,11 @@ async def update_item(
     return WatchlistItemOut.from_domain(updated)
 
 
-@router.delete("/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+# response_model=None — 204 No Content body 불가. 최신 FastAPI 의 `-> None`
+# NoneType 추론 → 204 assert 발화 방지 (screener_sets.py delete 참조).
+@router.delete(
+    "/items/{item_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None,
+)
 async def delete_item(
     item_id: UUID,
     user: CurrentUserDep,
@@ -130,7 +134,10 @@ async def update_folder(
     return WatchlistFolderOut.from_domain(updated)
 
 
-@router.delete("/{folder_id}", status_code=status.HTTP_204_NO_CONTENT)
+# response_model=None — 204 No Content body 불가 (위 items delete 와 동일 사유).
+@router.delete(
+    "/{folder_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None,
+)
 async def delete_folder(
     folder_id: UUID,
     user: CurrentUserDep,

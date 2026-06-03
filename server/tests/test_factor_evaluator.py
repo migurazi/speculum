@@ -38,6 +38,7 @@ from app.services.factor_evaluator import (
     FactorEvaluator,
     FactorEvaluatorError,
     MalformedFormulaError,
+    UniverseDistributionProvider,
     UnknownFieldError,
 )
 
@@ -850,3 +851,341 @@ def test_evaluate_builtin_per_ttm_with_quarterly_series() -> None:
     expected_sum = Decimal("46000000000000")
     expected = Decimal("400000000000000") / expected_sum
     assert result.value == expected
+
+
+# =============================================================================
+# 20. M2 T70b composite 연산자 (ADR-0022 D1) — weighted_sum (종목-국소, 완전 구현)
+# =============================================================================
+
+def test_weighted_sum_basic() -> None:
+    """ADR-0022 D1 weighted_sum — Σ(arg_i × weight_i). 정상 가중합."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"a": Decimal("10"), "b": Decimal("20"), "c": Decimal("30")},
+    )
+    factor = _factor(
+        ast={"op": "weighted_sum",
+             "args": [{"field": "a"}, {"field": "b"}, {"field": "c"}],
+             "weights": [0.5, 0.25, 0.25]},
+        inputs=["a", "b", "c"],
+    )
+    result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+    # 10×0.5 + 20×0.25 + 30×0.25 = 5 + 5 + 7.5 = 17.5
+    assert result.value == Decimal("17.5")
+
+
+def test_weighted_sum_normalized_input_scenario() -> None:
+    """정규화된 입력 (zscore 결과 ∈ [-2,2] 가정) 의 가중합 — composite score."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={
+            "value_norm": Decimal("1.2"),
+            "quality_norm": Decimal("-0.5"),
+            "momentum_norm": Decimal("0.8"),
+        },
+    )
+    factor = _factor(
+        ast={"op": "weighted_sum",
+             "args": [
+                 {"field": "value_norm"},
+                 {"field": "quality_norm"},
+                 {"field": "momentum_norm"},
+             ],
+             "weights": [0.4, 0.4, 0.2]},
+        inputs=["value_norm", "quality_norm", "momentum_norm"],
+    )
+    result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+    # 1.2×0.4 + (-0.5)×0.4 + 0.8×0.2 = 0.48 - 0.20 + 0.16 = 0.44
+    assert result.value == Decimal("0.44")
+
+
+def test_weighted_sum_weights_length_mismatch_raises() -> None:
+    """weights 길이 != args 길이 → pack 무결성 위반 (MalformedFormulaError)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"a": Decimal("10"), "b": Decimal("20")},
+    )
+    factor = _factor(
+        ast={"op": "weighted_sum",
+             "args": [{"field": "a"}, {"field": "b"}],
+             "weights": [0.5]},  # 길이 1 != args 길이 2
+        inputs=["a", "b"],
+    )
+    with pytest.raises(MalformedFormulaError, match="weights length"):
+        evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+
+
+def test_weighted_sum_na_propagation() -> None:
+    """한 arg 라도 N/A 면 가중합 전체 N/A (단조성)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"a": Decimal("10"), "b": None},  # b 결손
+    )
+    factor = _factor(
+        ast={"op": "weighted_sum",
+             "args": [{"field": "a"}, {"field": "b"}],
+             "weights": [0.5, 0.5]},
+        inputs=["a", "b"],
+    )
+    result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+    assert result.is_na
+    assert result.na_reason == "missing_input:b"
+
+
+def test_weighted_sum_missing_weights_raises_shape() -> None:
+    """weights 누락 → shape 위반 (MalformedFormulaError)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1),
+                                  scalars={"a": Decimal("10")})
+    factor = _factor(
+        ast={"op": "weighted_sum", "args": [{"field": "a"}]},  # weights 없음
+        inputs=["a"],
+    )
+    with pytest.raises(MalformedFormulaError, match="weighted_sum"):
+        evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+
+
+# =============================================================================
+# 21. winsorize (종목-국소 상수경계, 완전 구현)
+# =============================================================================
+
+@pytest.mark.parametrize("value, expected", [
+    (Decimal("50"), Decimal("50")),    # 경계 내 — 그대로
+    (Decimal("-10"), Decimal("0")),    # 하한 미만 → lower
+    (Decimal("200"), Decimal("100")),  # 상한 초과 → upper
+    (Decimal("0"), Decimal("0")),      # 하한 경계값 — 그대로
+    (Decimal("100"), Decimal("100")),  # 상한 경계값 — 그대로
+])
+def test_winsorize_clip(value: Decimal, expected: Decimal) -> None:
+    """ADR-0022 D1 winsorize — lower/upper 상수 clip."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1), scalars={"x": value})
+    factor = _factor(
+        ast={"op": "winsorize", "args": [{"field": "x"}],
+             "lower": 0, "upper": 100},
+        inputs=["x"],
+    )
+    result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+    assert result.value == expected
+
+
+def test_winsorize_lower_gt_upper_raises() -> None:
+    """lower > upper → pack 무결성 위반."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1),
+                                  scalars={"x": Decimal("50")})
+    factor = _factor(
+        ast={"op": "winsorize", "args": [{"field": "x"}],
+             "lower": 100, "upper": 0},  # 역전
+        inputs=["x"],
+    )
+    with pytest.raises(MalformedFormulaError, match="lower"):
+        evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+
+
+def test_winsorize_na_propagation() -> None:
+    """입력 N/A → winsorize N/A propagation."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1), scalars={"x": None})
+    factor = _factor(
+        ast={"op": "winsorize", "args": [{"field": "x"}],
+             "lower": 0, "upper": 100},
+        inputs=["x"],
+    )
+    result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+    assert result.is_na
+    assert result.na_reason == "missing_input:x"
+
+
+def test_winsorize_missing_bounds_raises_shape() -> None:
+    """lower/upper 누락 → shape 위반."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1),
+                                  scalars={"x": Decimal("50")})
+    factor = _factor(
+        ast={"op": "winsorize", "args": [{"field": "x"}], "lower": 0},  # upper 없음
+        inputs=["x"],
+    )
+    with pytest.raises(MalformedFormulaError, match="winsorize"):
+        evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+
+
+# =============================================================================
+# 22. 유니버스-상대 op (zscore/percentile/min_max_scale) — 분포 미주입 시 정식 N/A
+# =============================================================================
+#
+# ADR-0022 D2/D3 — 이 op 들은 유니버스 분포 필요. T70b 에서는 shape 검증은
+# 통과하되, 분포 컨텍스트 미주입 시 정식 N/A (stub 아닌 정식 결과). 분포 계산
+# 자체는 T72.
+
+
+class FakeUniverseDistribution:
+    """테스트용 분포 provider — T72 의 인터페이스 contract 충족 stub.
+
+    T70b 의 대부분 테스트는 분포 **미주입** 경로 (정식 N/A) 를 검증하므로 본
+    fake 는 인터페이스 주입 경로 (provider 가 있으면 메서드가 호출됨) 의 dispatch
+    검증에만 쓴다 — 실제 분포 통계는 T72.
+    """
+
+    def __init__(self, *, as_of: date,
+                 values: dict[str, Decimal | None] | None = None) -> None:
+        self.as_of = as_of
+        self._values = values or {}
+
+    def zscore(self, field: str, value: Decimal) -> Decimal | None:  # noqa: ARG002
+        return self._values.get(f"zscore:{field}")
+
+    def percentile(self, field: str, value: Decimal) -> Decimal | None:  # noqa: ARG002
+        return self._values.get(f"percentile:{field}")
+
+    def min_max_scale(self, field: str, value: Decimal) -> Decimal | None:  # noqa: ARG002
+        return self._values.get(f"min_max_scale:{field}")
+
+    def sample_size(self, field: str) -> int:
+        # ADR-0024 D5 — 표시 전용 조회 메서드 (Protocol contract). evaluator 는
+        # 호출하지 않으나 runtime_checkable Protocol 충족을 위해 stub 제공.
+        n = self._values.get(f"sample_size:{field}")
+        return int(n) if n is not None else 0
+
+
+@pytest.mark.parametrize("op", ["zscore", "percentile", "min_max_scale"])
+def test_universe_relative_op_without_distribution_returns_formal_na(op: str) -> None:
+    """ADR-0022 D2/D3 — 분포 컨텍스트 미주입 시 정식 N/A (stub 아님)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"per_value": Decimal("12.3")},
+    )
+    factor = _factor(
+        ast={"op": op, "field": "per_value"},
+        inputs=["per_value"],
+    )
+    # universe_distribution 미주입 (default None).
+    result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+    assert result.is_na
+    # 명확한 사유 — "데이터 결손" 아닌 "분포 provider 미주입 (T72 전)".
+    assert result.na_reason == "universe_distribution_required"
+
+
+@pytest.mark.parametrize("op", ["zscore", "percentile", "min_max_scale"])
+def test_universe_relative_op_shape_validated_even_without_distribution(op: str) -> None:
+    """분포 미주입이어도 shape 검증은 통과 (field 누락 등은 raise)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1))
+    # field 누락 — shape 위반은 분포 주입 여부와 무관하게 raise.
+    factor = _factor(
+        ast={"op": op, "args": [{"const": 1}]},  # field 없음, args 는 금지
+        inputs=[],
+    )
+    with pytest.raises(MalformedFormulaError, match=op):
+        evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
+
+
+def test_universe_relative_op_with_distribution_dispatches() -> None:
+    """분포 주입 (T72 인터페이스) 시 provider 메서드로 dispatch — 실값 산출."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"per_value": Decimal("12.3")},
+    )
+    dist = FakeUniverseDistribution(
+        as_of=date(2024, 5, 1),
+        values={"percentile:per_value": Decimal("18.3")},
+    )
+    factor = _factor(
+        ast={"op": "percentile", "field": "per_value"},
+        inputs=["per_value"],
+    )
+    result = evaluator.evaluate(
+        factor, provider, as_of=date(2024, 5, 1), universe_distribution=dist,
+    )
+    assert result.value == Decimal("18.3")
+    assert result.inputs_used["per_value"] == Decimal("12.3")
+
+
+def test_universe_relative_op_distribution_na_propagates() -> None:
+    """분포 주입됐으나 provider 가 N/A (모집단 부족 / σ=0) → N/A 자연 전파."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"per_value": Decimal("12.3")},
+    )
+    dist = FakeUniverseDistribution(as_of=date(2024, 5, 1), values={})  # 분포 N/A
+    factor = _factor(
+        ast={"op": "zscore", "field": "per_value"},
+        inputs=["per_value"],
+    )
+    result = evaluator.evaluate(
+        factor, provider, as_of=date(2024, 5, 1), universe_distribution=dist,
+    )
+    assert result.is_na
+    assert "universe_distribution_na:zscore:per_value" == result.na_reason
+
+
+def test_universe_relative_op_distribution_as_of_mismatch_raises() -> None:
+    """분포 provider as_of != evaluate as_of → PIT invariant 위반 (ADR-0022 D3)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"per_value": Decimal("12.3")},
+    )
+    dist = FakeUniverseDistribution(as_of=date(2024, 6, 1))  # mismatch
+    factor = _factor(
+        ast={"op": "percentile", "field": "per_value"},
+        inputs=["per_value"],
+    )
+    with pytest.raises(MalformedFormulaError, match="PIT invariant"):
+        evaluator.evaluate(
+            factor, provider, as_of=date(2024, 5, 1), universe_distribution=dist,
+        )
+
+
+def test_universe_relative_op_missing_input_with_distribution() -> None:
+    """분포 주입 + 종목값 결손 → missing_input N/A (분포 N/A 아닌 데이터 결손)."""
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(
+        as_of=date(2024, 5, 1),
+        scalars={"per_value": None},  # 종목값 결손
+    )
+    dist = FakeUniverseDistribution(as_of=date(2024, 5, 1))
+    factor = _factor(
+        ast={"op": "percentile", "field": "per_value"},
+        inputs=["per_value"],
+    )
+    result = evaluator.evaluate(
+        factor, provider, as_of=date(2024, 5, 1), universe_distribution=dist,
+    )
+    assert result.is_na
+    assert result.na_reason == "missing_input:per_value"
+
+
+def test_universe_distribution_provider_protocol_runtime_checkable() -> None:
+    """UniverseDistributionProvider Protocol 이 runtime_checkable — fake 가 충족."""
+    dist = FakeUniverseDistribution(as_of=date(2024, 5, 1))
+    assert isinstance(dist, UniverseDistributionProvider)
+
+
+# =============================================================================
+# 23. 금지 op 부재 (ADR-0022 D1) — rank/top_n 등은 evaluator 가 unknown op
+# =============================================================================
+
+@pytest.mark.parametrize("forbidden_op", ["rank", "top_n", "bottom_n", "sign", "step"])
+def test_forbidden_ops_are_unknown_to_evaluator(forbidden_op: str) -> None:
+    """ADR-0022 D1 — rank/top_n/bottom_n/sign/step 은 _OP_SHAPES 부재 → unknown op.
+
+    schema 가 1 차 방어선 (enum 부재) 이나, evaluator 도 독립적으로 거부 (defense
+    in depth — schema 우회 입력 차단).
+    """
+    evaluator = FactorEvaluator()
+    provider = FakeFieldProvider(as_of=date(2024, 5, 1),
+                                  scalars={"x": Decimal("1")})
+    factor = _factor(
+        ast={"op": forbidden_op, "field": "x"},
+        inputs=["x"],
+    )
+    with pytest.raises(MalformedFormulaError, match="unknown op"):
+        evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))

@@ -13,15 +13,16 @@
  * trigger 의 aria-describedby 기반 indirect.
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
 import { SourceAttribution } from "../SourceAttribution";
+import { renderWithIntl } from "@/test-utils/intl";
 
 describe("SourceAttribution", () => {
   it("renders value + source + asOf inline", () => {
-    render(
+    renderWithIntl(
       <SourceAttribution
         value="12.34"
         source="DART"
@@ -37,7 +38,7 @@ describe("SourceAttribution", () => {
   it("supports multiple source labels", () => {
     const sources = ["KRX", "PYKRX", "FDR", "ECOS"] as const;
     for (const source of sources) {
-      const { unmount } = render(
+      const { unmount } = renderWithIntl(
         <SourceAttribution
           value="value"
           source={source}
@@ -53,7 +54,7 @@ describe("SourceAttribution", () => {
   });
 
   it("renders ReactNode value (number)", () => {
-    render(
+    renderWithIntl(
       <SourceAttribution
         value={70_000}
         source="KRX"
@@ -65,7 +66,7 @@ describe("SourceAttribution", () => {
   });
 
   it("renders ReactNode value (element with inline color)", () => {
-    render(
+    renderWithIntl(
       <SourceAttribution
         value={<span data-testid="custom-value">strong</span>}
         source="DART"
@@ -77,7 +78,7 @@ describe("SourceAttribution", () => {
   });
 
   it("applies className to wrapper", () => {
-    const { container } = render(
+    const { container } = renderWithIntl(
       <SourceAttribution
         value="x"
         source="DART"
@@ -100,7 +101,7 @@ describe("SourceAttribution", () => {
       formula: "f",
       asOf: "2024-01-01",
     };
-    render(<SourceAttribution {...validProps} />);
+    renderWithIntl(<SourceAttribution {...validProps} />);
     expect(screen.getByText("x")).toBeInTheDocument();
   });
 
@@ -110,7 +111,7 @@ describe("SourceAttribution", () => {
   // getAllByText 로 length >= 1 만 검증.
   it("shows tooltip content (source ko / formula / asOf) on hover", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       <SourceAttribution
         value="12.34"
         source="DART"
@@ -134,7 +135,7 @@ describe("SourceAttribution", () => {
 
   it("shows effectiveDate in tooltip when different from asOf", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       <SourceAttribution
         value="100"
         source="DART"
@@ -153,7 +154,7 @@ describe("SourceAttribution", () => {
 
   it("hides effectiveDate when empty string (oracle M1)", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       <SourceAttribution
         value="100"
         source="DART"

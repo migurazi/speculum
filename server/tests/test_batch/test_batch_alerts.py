@@ -401,6 +401,7 @@ def _make_dart_adapter_mock(*, account_count: int = 5) -> Any:
             ifrs_type=ifrs,
             rcept_no="20240331000001",
             currency="KRW",
+            effective_date_precise=True,
         )
 
     def _fetch(

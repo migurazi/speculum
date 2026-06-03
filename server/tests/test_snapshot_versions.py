@@ -12,6 +12,7 @@ import pytest
 from app.services.snapshot_versions import (
     SNAPSHOT_SCHEMA_VERSION,
     collect_active_policy_versions,
+    collect_run_data_versions,
 )
 
 # =============================================================================
@@ -34,11 +35,16 @@ def test_collect_all_values_are_str() -> None:
 
 
 def test_snapshot_schema_version_constant() -> None:
-    assert SNAPSHOT_SCHEMA_VERSION == "1.0"
+    # M1 T48b — "1.0" → "1.1" (krx_batch_id / dart_batch_id 2 키가 run 생성
+    # 경로의 data_versions 에 합류 → schema 키 set 확장).
+    # M2 T72 — "1.1" → "1.2" (distribution_policy_version 1 키가 정책-only set 에
+    # 합류 → schema 키 set 확장).
+    assert SNAPSHOT_SCHEMA_VERSION == "1.2"
 
 
 # =============================================================================
-# 2. 기대 키 set — oracle 결정 3 의 10 키 + snapshot_schema_version
+# 2. 기대 키 set — oracle 결정 3 의 10 키 + distribution_policy_version (T72)
+#    + snapshot_schema_version
 # =============================================================================
 
 EXPECTED_KEYS: frozenset[str] = frozenset({
@@ -52,6 +58,7 @@ EXPECTED_KEYS: frozenset[str] = frozenset({
     "adjustment_policy_version",
     "ca_policy_version",
     "evaluator_version",
+    "distribution_policy_version",
     "snapshot_schema_version",
 })
 
@@ -79,6 +86,14 @@ def test_evaluator_version_matches_source_module() -> None:
     from app.services.factor_evaluator import EVALUATOR_POLICY_VERSION
     result = collect_active_policy_versions()
     assert result["evaluator_version"] == EVALUATOR_POLICY_VERSION
+
+
+def test_distribution_policy_version_matches_source_module() -> None:
+    """M2 T72 — `distribution_policy_version` 이 db_universe_distribution 의
+    DISTRIBUTION_POLICY_VERSION 과 동일 (ADR-0022 D3 freeze)."""
+    from app.services.db_universe_distribution import DISTRIBUTION_POLICY_VERSION
+    result = collect_active_policy_versions()
+    assert result["distribution_policy_version"] == DISTRIBUTION_POLICY_VERSION
 
 
 def test_calendar_versions_match_source_module() -> None:
@@ -127,3 +142,51 @@ def test_collect_is_deterministic() -> None:
     a = collect_active_policy_versions()
     b = collect_active_policy_versions()
     assert dict(a) == dict(b)
+
+
+# =============================================================================
+# 6. ADR-0025 D3 — pack default 인자 byte 불변
+# =============================================================================
+
+def test_collect_no_arg_equals_default_pack_arg() -> None:
+    """무인자 호출 == 명시 DEFAULT_PACK 인자 (byte 동일, 키 12개 불변).
+
+    ADR-0025 D3 — collect_active_policy_versions 에 pack 파라미터를 추가했으나
+    default=DEFAULT_PACK 라 기존 무인자 호출 결과가 byte 불변이어야 한다. 12 키 set
+    + 모든 value 가 동일.
+    """
+    from app.services.factor_pack import DEFAULT_PACK
+
+    no_arg = dict(collect_active_policy_versions())
+    explicit = dict(collect_active_policy_versions(DEFAULT_PACK))
+    assert no_arg == explicit
+    assert frozenset(no_arg.keys()) == EXPECTED_KEYS
+    assert len(no_arg) == 12
+
+
+def test_collect_explicit_pack_freezes_that_pack_hash() -> None:
+    """명시 pack 주입 시 그 pack 의 content_hash/slug/version 을 freeze (custom 경로).
+
+    Phase 2c custom pack run 생성 경로의 계약 — 무인자(default)는 DEFAULT_PACK,
+    명시 주입은 그 pack. 본 테스트는 빌트인 pack 명시 주입이 default 와 동일함을
+    확인 (custom pack 자체는 Phase 2c).
+    """
+    from app.services.factor_pack import DEFAULT_PACK
+
+    result = collect_active_policy_versions(DEFAULT_PACK)
+    assert result["factor_pack_content_hash"] == DEFAULT_PACK.computed_hash
+    assert result["factor_pack_slug"] == DEFAULT_PACK.pack_slug
+    assert result["factor_pack_version"] == DEFAULT_PACK.version
+
+
+def test_collect_run_data_versions_no_pack_arg_byte_invariant() -> None:
+    """collect_run_data_versions(as_of, None) 무-pack 호출 byte 불변 (정책 12 키)."""
+    from datetime import date
+
+    from app.services.factor_pack import DEFAULT_PACK
+
+    as_of = date(2024, 6, 30)
+    two_arg = dict(collect_run_data_versions(as_of, None))
+    explicit = dict(collect_run_data_versions(as_of, None, DEFAULT_PACK))
+    assert two_arg == explicit
+    assert two_arg == dict(collect_active_policy_versions())

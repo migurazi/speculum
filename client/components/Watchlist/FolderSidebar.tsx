@@ -21,6 +21,7 @@
  * - M0_PLAN T39 / AC-F-06.
  */
 
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 import type { WatchlistFolder } from "@/lib/api/watchlist";
@@ -45,6 +46,7 @@ export function FolderSidebar({
   onDelete,
   isMutating,
 }: FolderSidebarProps): JSX.Element {
+  const t = useTranslations("watchlist");
   const [newName, setNewName] = useState<string>("");
   const [renameTarget, setRenameTarget] = useState<string | null>(null);
   const [renameText, setRenameText] = useState<string>("");
@@ -78,7 +80,7 @@ export function FolderSidebar({
     <aside className="w-60 shrink-0 border-r border-neutral-200 bg-neutral-50">
       <div className="p-3">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">
-          폴더
+          {t("sidebarHeading")}
         </h2>
         <ul className="mt-2 space-y-0.5">
           {folders.map((folder) => {
@@ -97,7 +99,7 @@ export function FolderSidebar({
                         if (e.key === "Escape") setRenameTarget(null);
                       }}
                       className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm"
-                      aria-label="폴더 이름 변경"
+                      aria-label={t("renameInputAriaLabel")}
                       autoFocus
                     />
                     <button
@@ -105,7 +107,7 @@ export function FolderSidebar({
                       onClick={() => void commitRename(folder.id)}
                       className="rounded bg-neutral-800 px-2 py-1 text-xs text-white hover:bg-neutral-700"
                     >
-                      저장
+                      {t("saveButton")}
                     </button>
                   </div>
                 ) : (
@@ -130,7 +132,7 @@ export function FolderSidebar({
                             isSelected ? "text-neutral-300" : "text-neutral-400",
                           )}
                         >
-                          (기본)
+                          {t("defaultBadge")}
                         </span>
                       ) : null}
                     </button>
@@ -146,7 +148,7 @@ export function FolderSidebar({
                         <button
                           type="button"
                           onClick={() => startRename(folder)}
-                          aria-label={`${folder.name} 이름 변경`}
+                          aria-label={t("renameFolderAriaLabel", { name: folder.name })}
                           className="text-[11px] hover:underline"
                         >
                           이름
@@ -154,7 +156,7 @@ export function FolderSidebar({
                         <button
                           type="button"
                           onClick={() => void onDelete(folder.id)}
-                          aria-label={`${folder.name} 삭제`}
+                          aria-label={t("deleteFolderAriaLabel", { name: folder.name })}
                           className="text-[11px] hover:underline"
                         >
                           삭제
@@ -176,8 +178,8 @@ export function FolderSidebar({
             onKeyDown={(e) => {
               if (e.key === "Enter") void handleCreate();
             }}
-            placeholder="새 폴더 이름"
-            aria-label="새 폴더 이름"
+            placeholder={t("newFolderPlaceholder")}
+            aria-label={t("newFolderPlaceholder")}
             className="w-full rounded border border-neutral-300 px-2 py-1 text-sm"
             disabled={isMutating}
           />
@@ -187,7 +189,7 @@ export function FolderSidebar({
             disabled={isMutating || newName.trim().length === 0}
             className="w-full rounded bg-neutral-800 px-2 py-1.5 text-xs text-white hover:bg-neutral-700 disabled:cursor-not-allowed disabled:bg-neutral-300"
           >
-            폴더 추가
+            {t("addFolderButton")}
           </button>
         </div>
       </div>

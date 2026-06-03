@@ -4,10 +4,8 @@
  * Stock Detail page — `/stock/[code]`.
  *
  * ADR-0007 D2 + M0_PLAN T37 / AC-F-04. 종목 메타정보 (이름·시장·상장일·
- * status) + 지표 카드 grid + 종목코드 변경 history.
- *
- * 가격 차트 + 재무 시계열 표 는 별도 cycle backlog (lightweight-charts 도입
- * 필요).
+ * status) + 가격 차트(raw/adjusted 토글 + CA 마커) + 재무 시계열 표 +
+ * 지표 카드 grid + 종목코드 변경 history.
  *
  * 관련:
  * - ADR-0008 D3 — Stock Detail 이 as_of 기준 데이터 표시.
@@ -16,10 +14,16 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { useParams } from "next/navigation";
 
 import { CodeHistory } from "@/components/StockDetail/CodeHistory";
+import { DisclosureWithFactsPanel } from "@/components/StockDetail/DisclosureWithFactsPanel";
+import { FinancialSeriesTable } from "@/components/StockDetail/FinancialSeriesTable";
 import { MetricCard } from "@/components/StockDetail/MetricCard";
+import { NotesPanel } from "@/components/StockDetail/NotesPanel";
+import { PriceChart } from "@/components/StockDetail/PriceChart";
+import { RestatementHistory } from "@/components/StockDetail/RestatementHistory";
 import { fetchStockDetail } from "@/lib/api/stocks";
 import { useAsOfStore } from "@/state/as-of-store";
 
@@ -36,6 +40,7 @@ const STATUS_BADGE_CLASS: Readonly<Record<string, string>> = {
 };
 
 export default function StockDetailPage(): JSX.Element {
+  const t = useTranslations("stock");
   const params = useParams<{ code: string }>();
   const code = params?.code ?? "";
   const asOf = useAsOfStore((s) => s.asOf);
@@ -49,7 +54,7 @@ export default function StockDetailPage(): JSX.Element {
   if (!code) {
     return (
       <main className="mx-auto max-w-5xl px-6 py-8">
-        <p className="text-sm text-neutral-500">종목코드가 필요합니다.</p>
+        <p className="text-sm text-neutral-500">{t("noCode")}</p>
       </main>
     );
   }
@@ -57,7 +62,7 @@ export default function StockDetailPage(): JSX.Element {
   if (query.isLoading) {
     return (
       <main className="mx-auto max-w-5xl px-6 py-8">
-        <p className="text-sm text-neutral-500">불러오는 중...</p>
+        <p className="text-sm text-neutral-500">{t("loading")}</p>
       </main>
     );
   }
@@ -66,7 +71,7 @@ export default function StockDetailPage(): JSX.Element {
     return (
       <main className="mx-auto max-w-5xl px-6 py-8">
         <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
-          데이터 로드 실패: {(query.error as Error).message}
+          {t("loadError", { message: (query.error as Error).message })}
         </div>
       </main>
     );
@@ -76,7 +81,7 @@ export default function StockDetailPage(): JSX.Element {
   if (!detail) {
     return (
       <main className="mx-auto max-w-5xl px-6 py-8">
-        <p className="text-sm text-neutral-500">데이터 없음.</p>
+        <p className="text-sm text-neutral-500">{t("noData")}</p>
       </main>
     );
   }
@@ -101,28 +106,42 @@ export default function StockDetailPage(): JSX.Element {
           <span className="text-xs text-neutral-500">{detail.market}</span>
         </div>
         <div className="text-xs text-neutral-600">
-          상장일: <span className="font-mono">{detail.listing_date}</span>
+          {t("listingDate")}: <span className="font-mono">{detail.listing_date}</span>
           {detail.delisting_date !== null ? (
             <>
               {" · "}
-              폐지일:{" "}
+              {t("delistingDate")}:{" "}
               <span className="font-mono">{detail.delisting_date}</span>
             </>
           ) : null}
           {" · "}
-          결산월: {detail.fiscal_month}월
+          {t("fiscalMonth")}: {detail.fiscal_month}{t("fiscalMonthUnit")}
           {" · "}
-          IFRS: {detail.ifrs_preference}
+          {t("ifrs")}: {detail.ifrs_preference}
         </div>
       </header>
+
+      {/* 가격 차트 — lightweight-charts 캔들스틱/라인. PIT = asOf.
+          raw 모드: CA ▾ 마커 표시 (ADR-0001 D6). adjusted 모드: 마커 없음. */}
+      <section className="mt-6">
+        <PriceChart code={code} asOf={asOf} />
+      </section>
+
+      {/* 재무 시계열 표 — periods × items. 결손 "—". 중립 표(판단색 0). */}
+      <section className="mt-6">
+        <h2 className="mb-3 text-sm font-medium text-neutral-700">
+          {t("financials.heading")}
+        </h2>
+        <FinancialSeriesTable code={code} asOf={asOf} />
+      </section>
 
       {/* 지표 카드 grid — ADR-0007 D2 의 source attribution 의무 강제.
           각 MetricCard 가 SourceAttribution wrap. */}
       <section className="mt-6">
-        <h2 className="text-sm font-medium text-neutral-700">지표</h2>
+        <h2 className="text-sm font-medium text-neutral-700">{t("metricsHeading")}</h2>
         {detail.factors.length === 0 ? (
           <p className="mt-2 text-sm text-neutral-500">
-            표시할 지표가 없습니다.
+            {t("noMetrics")}
           </p>
         ) : (
           <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -135,6 +154,44 @@ export default function StockDetailPage(): JSX.Element {
             ))}
           </div>
         )}
+      </section>
+
+      {/*
+       * 정정공시 이력 — §2.7 Observation. 회사가 수치를 정정했다는 사실 표.
+       * §2.2 No Advice: 등락색·증감·가치 판단 0. vintage chain 중립 표시.
+       * §2.4 PIT: asOf 기준 공개된 vintage 만 포함(backend 보장).
+       */}
+      <section className="mt-6">
+        <h2 className="mb-3 text-sm font-medium text-neutral-700">
+          {t("restatementHistory.heading")}
+        </h2>
+        <RestatementHistory code={code} asOf={asOf} />
+      </section>
+
+      {/*
+       * 공시 목록 패널 + AI 사실 추출 진입점 — ADR-0026 D1/D3 + ADR-0031 D4.
+       * 제목 + 접수일 + DART 원문링크 + AI 사실 추출 버튼(on-demand).
+       * on-demand fetch — 사용자가 명시 진입한 이 1종목만.
+       * asOf: PIT 기준 이후 공시 backend 가 제외(ADR-0026 D4).
+       * AI 사실 추출: 사용자 명시 클릭 시에만 per-row 실행(ADR-0031 D4).
+       */}
+      <section className="mt-6">
+        <h2 className="mb-3 text-sm font-medium text-neutral-700">
+          {t("disclosures.heading")}
+        </h2>
+        <DisclosureWithFactsPanel code={code} asOf={asOf} />
+      </section>
+
+      {/*
+       * 종목별 메모 패널 — T76. 사용자 scoped CRUD.
+       * detail.id = code_lineage_id (UUID). Notes 는 사용자 자유 콘텐츠.
+       * 시스템 UI 라벨은 §2.2 No Advice 중립 원칙 준수.
+       */}
+      <section className="mt-6">
+        <h2 className="mb-3 text-sm font-medium text-neutral-700">
+          {t("notes.heading")}
+        </h2>
+        <NotesPanel codeLineageId={detail.id} />
       </section>
 
       {/* lineage 의 종목코드 변경 history (2+ entry 인 경우만 렌더). */}

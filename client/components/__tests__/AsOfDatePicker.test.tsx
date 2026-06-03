@@ -9,12 +9,13 @@
  *   5. SSR mount 이전 표시 (placeholder dash)
  */
 
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { AsOfBanner, AsOfDatePicker } from "../AsOfDatePicker";
 import { kstToday, useAsOfStore } from "@/state/as-of-store";
+import { renderWithIntl } from "@/test-utils/intl";
 
 describe("AsOfDatePicker", () => {
   beforeEach(() => {
@@ -27,7 +28,7 @@ describe("AsOfDatePicker", () => {
   });
 
   it("renders today by default with neutral styling", async () => {
-    render(<AsOfDatePicker />);
+    renderWithIntl(<AsOfDatePicker />);
     const input = await screen.findByLabelText("기준 일자 선택");
     expect(input).toBeInTheDocument();
     expect((input as HTMLInputElement).value).toBe(kstToday());
@@ -39,7 +40,7 @@ describe("AsOfDatePicker", () => {
 
   it("shows reset button + amber styling when past date selected", async () => {
     const user = userEvent.setup();
-    render(<AsOfDatePicker />);
+    renderWithIntl(<AsOfDatePicker />);
     const input = (await screen.findByLabelText(
       "기준 일자 선택",
     )) as HTMLInputElement;
@@ -61,7 +62,7 @@ describe("AsOfDatePicker", () => {
 
   it("reset button restores today", async () => {
     const user = userEvent.setup();
-    render(<AsOfDatePicker />);
+    renderWithIntl(<AsOfDatePicker />);
     await screen.findByLabelText("기준 일자 선택");
 
     act(() => {
@@ -87,7 +88,7 @@ describe("AsOfBanner", () => {
     // oracle T34 L3 — setTimeout heuristic → waitFor deterministic.
     // mount 후에도 today 면 null. useEffect 가 setMounted(true) 까지
     // wait 후 검증.
-    render(<AsOfBanner />);
+    renderWithIntl(<AsOfBanner />);
     await waitFor(() => {
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
@@ -97,7 +98,7 @@ describe("AsOfBanner", () => {
     act(() => {
       useAsOfStore.getState().setAsOf("2024-01-01");
     });
-    render(<AsOfBanner />);
+    renderWithIntl(<AsOfBanner />);
     const banner = await screen.findByRole("status");
     expect(banner).toBeInTheDocument();
     expect(banner.textContent).toContain("2024-01-01");

@@ -1,0 +1,29 @@
+{
+  "watchlistHeading": "내 관심 종목",
+  "watchlistEmpty": "관심 종목을 추가하면 여기에 표시됩니다. Screener 로 종목을 탐색하거나 종목 조회에서 직접 검색하세요.",
+  "quickStartHeading": "빠른 시작",
+  "quickLinks": {
+    "screener": {
+      "title": "Screener",
+      "description": "정량 조건으로 종목 필터링."
+    },
+    "stock": {
+      "title": "종목 조회",
+      "description": "단일 종목의 지표·가격·재무 상세."
+    },
+    "compare": {
+      "title": "Compare",
+      "description": "2~6 종목 나란히 비교."
+    },
+    "watchlist": {
+      "title": "Watchlist",
+      "description": "관심 종목 폴더링·메모."
+    },
+    "market": {
+      "title": "시장 통계",
+      "description": "시장 전체 지표 분포·종목 수."
+    }
+  },
+  "guideIntro": "Speculum 은 한국 주식 시장의 정량 데이터 탐색 도구입니다. 어떻게 시작하나요?",
+  "guideLink": "가이드 보기"
+}

@@ -13,8 +13,9 @@ data_versions + result_hash 의 완전 freeze.
     - **data_versions JSON** — `Mapping[str, str]` → JSON object.
     - **user_id 인덱스 + computed_at 인덱스** — fetch_recent hot path.
     - **result_hash 컬럼 String** — `"sha256:<hex>"` prefix 포함, 67 chars.
-    - **append-only 정책 X** — M0 정책 = overwrite 허용 (Fake 와 동일).
-      운영 시 정정공시 chain 처럼 별도 한 cycle 의 ADR 결정 필요.
+    - **append-only 정책 O (ADR-0021 D2)** — M2 부터 같은 id 재저장 금지
+      (`SqlScreenRunRepository.save`). M0 의 overwrite 정책 폐기 — 재현 자산
+      보존 + IDOR(타 user run overwrite) 차단. user_id 는 FK → users.id.
 
 관련 ADR:
 - ADR-0008 D7 — screen_runs schema (본 ORM 의 source-of-truth)
@@ -28,7 +29,7 @@ from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, Date, Index, String, Uuid
+from sqlalchemy import JSON, Date, ForeignKey, Index, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,7 +43,13 @@ class ScreenRunSnapshotORM(Base):
     __tablename__ = "screen_runs"
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    user_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # user_id FK → users.id (ADR-0021 D2, migration 0012). M2 부터 user 격리의
+    # FK anchor — 기존 SYSTEM-owned run 은 sentinel(00000000-…-0001) 참조.
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", name="fk_screen_runs_user_id_users"),
+        nullable=False,
+    )
     # query: ScreenRunQuery 의 conditions + selected_factors + presentation_order
     # nested JSON. PG=JSONB, SQLite=JSON.
     query: Mapped[dict[str, Any]] = mapped_column(

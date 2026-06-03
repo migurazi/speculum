@@ -30,7 +30,7 @@ from app.adapters.base import (
 from app.adapters.fdr_adapter import FdrAdapter
 from app.adapters.pykrx_adapter import PykrxAdapter
 from app.repositories.citation_repository import FakeCitationRepository
-from app.repositories.fakes import FakePriceRepository
+from app.repositories.fakes import FakeMarketCapRepository, FakePriceRepository
 from app.services.conflict_detector import (
     ConflictDetector,
 )
@@ -239,6 +239,84 @@ def test_run_normal_path_saves_citations_and_prices(
     cited = citation_repo.fetch_by_batch(summary.batch_id)
     # 종목당 universe + ohlcv + market_cap = 5 (universe 1 + 종목 2개 × 2).
     assert len(cited) == 5
+
+
+# =============================================================================
+# 3b. Phase B — market_cap 저장 + citation FK 연결
+# =============================================================================
+
+def test_run_saves_market_caps_with_citation_fk(business_day: date) -> None:
+    """market_cap_repo 주입 시 market_cap 영구화 + citation_id FK 연결.
+
+    citation 은 batch 가 먼저 save (citation → market_cap 순서). 저장된 record 의
+    citation_id 가 citation_repo 에 실재해야 함 (FK 의미). shares_treasury 는
+    pykrx 미제공 → None 그대로 보존.
+    """
+    universe = ["005930", "000660"]
+    pykrx_mock = _make_pykrx_mock(
+        universe=universe,
+        ohlcv_close_by_code={"005930": 70000.0, "000660": 130000.0},
+        market_cap_by_code={
+            "005930": 410_000_000_000_000,
+            "000660": 95_000_000_000_000,
+        },
+    )
+    citation_repo = FakeCitationRepository()
+    market_cap_repo = FakeMarketCapRepository(records=())
+
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=citation_repo,
+        price_repo=FakePriceRepository(records=()),
+        market_cap_repo=market_cap_repo,
+        throttle_seconds=0,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI")
+
+    assert summary.success_count == 2
+    # market_cap 영구화 — 양 종목 모두.
+    samsung_mc = market_cap_repo.fetch_latest("005930", as_of=business_day)
+    assert samsung_mc is not None
+    assert samsung_mc.market_cap == Decimal("410000000000000")
+    assert samsung_mc.shares_outstanding == 5_000_000_000
+    # pykrx 자사주 미제공 → None 보존 (0 가정 금지).
+    assert samsung_mc.shares_treasury is None
+
+    sk_mc = market_cap_repo.fetch_latest("000660", as_of=business_day)
+    assert sk_mc is not None
+    assert sk_mc.market_cap == Decimal("95000000000000")
+
+    # citation FK 의미 — 저장된 record 의 citation_id 가 citation_repo 에 실재.
+    all_cited_ids = {
+        c.id for c in citation_repo.fetch_by_batch(summary.batch_id)
+    }
+    assert samsung_mc.citation_id in all_cited_ids
+    assert sk_mc.citation_id in all_cited_ids
+
+
+def test_run_without_market_cap_repo_skips_save(business_day: date) -> None:
+    """market_cap_repo None (Fake-only 호환) → 영구화 skip, summary raw rows 유지."""
+    pykrx_mock = _make_pykrx_mock(
+        universe=["005930"],
+        ohlcv_close_by_code={"005930": 70000.0},
+    )
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=FakeCitationRepository(),
+        price_repo=FakePriceRepository(records=()),
+        market_cap_repo=None,
+        throttle_seconds=0,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI")
+    assert summary.success_count == 1
+    # 영구화 skip 하더라도 summary 의 raw rows 는 유지 (Phase A 동작).
+    assert len(summary.market_cap_rows) == 1
 
 
 # =============================================================================

@@ -1,0 +1,3 @@
+# Windows 배치 파일은 CRLF 고정 (cmd.exe 는 LF .bat 를 오파싱)
+*.bat text eol=crlf
+*.cmd text eol=crlf

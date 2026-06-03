@@ -39,8 +39,138 @@ from app.adapters.dart_account_mapper import (
     is_unmapped,
     map_ifrs_account,
 )
-from app.adapters.dart_adapter import DartAdapter
+from app.adapters.dart_adapter import (
+    DartAdapter,
+    _disclosure_deadline,
+    _rcept_date,
+)
 from app.models.source_citation import SourceKind
+
+# =============================================================================
+# 0. _rcept_date — rcept_no → 정밀 공시일 도출 (ADR-0012 D6)
+# =============================================================================
+
+@pytest.mark.parametrize(
+    "rcept_no,expected",
+    [
+        # 정상 14자리 — 앞 8자리 YYYYMMDD = 접수일자 (공시일).
+        ("20240501000123", date(2024, 5, 1)),
+        ("20231114000001", date(2023, 11, 14)),
+        # 윤년 2월 29일.
+        ("20240229999999", date(2024, 2, 29)),
+        # 8자리 비정상 date (2월 30일 부재) → None.
+        ("20240230000001", None),
+        # 13 월 → None.
+        ("20241301000001", None),
+        # 연도 범위 밖 (1999) → None (오염 방어).
+        ("19990101000001", None),
+        # 연도 범위 밖 (2101) → None.
+        ("21010101000001", None),
+        # 14자리이나 비숫자 → None.
+        ("BADRCEPTNO123", None),
+        ("2024050100012X", None),
+        # 길이 != 14 → None (13자리).
+        ("2024050100012", None),
+        # 길이 != 14 → None (15자리).
+        ("202405010001234", None),
+        # placeholder identifier (treasury fallback) → None.
+        ("stockTotqySttus:005930:2024Q1", None),
+        # 빈 string → None.
+        ("", None),
+    ],
+)
+def test_rcept_date_derivation(rcept_no: str, expected: date | None) -> None:
+    """ADR-0012 D6 — rcept_no 앞 8자리 (YYYYMMDD) 직접 도출 + 방어 fallback."""
+    assert _rcept_date(rcept_no) == expected
+
+
+def test_rcept_date_non_str_returns_none() -> None:
+    """str 외 입력은 None (방어 — schema 예상 외)."""
+    assert _rcept_date(None) is None  # type: ignore[arg-type]
+    assert _rcept_date(20240501000123) is None  # type: ignore[arg-type]
+
+
+# =============================================================================
+# 0b. T55 무회귀 — 정밀값 ≤ 보수추정값 (early disclosure 불변식)
+# =============================================================================
+#
+# m1-milestone.md T55: "정밀값 ≤ 보수추정값 (early disclosure, 늦으면 V1 회귀)".
+# 정밀화 (rcept_no 도출 실 공시일) 가 보수추정 (자본시장법 제160조 신고기한)
+# 보다 늦은 effective_date 를 만들면, 정밀화 이전보다 factor 가 더 늦게 PIT 를
+# 통과 → V1 (DART PIT) 회귀 + look-ahead 안전성은 유지되나 정밀화 이득 소멸.
+# 정상 (기한 내) 공시는 항상 precise <= deadline 이어야 하며, 이를 회귀 게이트로
+# 박는다. (지각 공시 = precise > deadline 는 비정상 데이터로, 정밀값을 그대로
+# 쓰면 PIT 안전 — 그러나 그 경우 effective_date_precise=True 로 명시 노출됨.)
+
+@pytest.mark.parametrize(
+    "fiscal_year,fiscal_quarter,rcept_no",
+    [
+        # Q1 신고기한 = 2023-05-15. 기한 내 조기 공시 (5-10) → precise < deadline.
+        (2023, 1, "20230510000001"),
+        # Q1 기한 당일 공시 (5-15) → precise == deadline (경계, <= 성립).
+        (2023, 1, "20230515000001"),
+        # Q2 신고기한 = 2023-08-14. 반기보고서 조기 공시 (8-01).
+        (2023, 2, "20230801000001"),
+        # Q3 신고기한 = 2023-11-14. 3분기보고서 조기 공시 (11-01).
+        (2023, 3, "20231101000001"),
+        # Q4 신고기한 = 2024-03-30 (2023 사업연도 +90d). 사업보고서 조기 공시 (3-14).
+        (2023, 4, "20240314000001"),
+        # Q4 기한 당일 공시 (3-30) → precise == deadline (경계).
+        (2023, 4, "20240330000001"),
+    ],
+)
+def test_precise_disclosure_not_later_than_deadline(
+    fiscal_year: int,
+    fiscal_quarter: int,
+    rcept_no: str,
+) -> None:
+    """정상 (기한 내) 공시는 정밀 공시일 ≤ 보수 신고기한 (T55 early disclosure).
+
+    정밀화가 effective_date 를 보수추정보다 늦추면 안 됨 (늦추면 V1 회귀).
+    기한 내 공시 rcept_no 들에 대해 `_rcept_date <= _disclosure_deadline` 검증.
+    """
+    precise = _rcept_date(rcept_no)
+    deadline = _disclosure_deadline(fiscal_year, fiscal_quarter)
+    assert precise is not None
+    # early disclosure 불변식 — 정밀값이 보수추정값을 초과하지 않음.
+    assert precise <= deadline
+
+
+def test_precise_effective_date_not_later_than_conservative_fallback() -> None:
+    """통합 경로 무회귀 — 정밀 effective_date ≤ 보수 fallback effective_date.
+
+    같은 분기 (Q4 2023) 를 (a) 정상 조기 공시 rcept_no (정밀 경로) 와 (b) 비숫자
+    rcept_no (보수 fallback) 로 각각 fetch → 정밀 경로의 effective_date 가
+    fallback 의 신고기한보다 이르거나 같음. adapter 가 정밀값을 채택해도 PIT 가
+    더 늦어지지 않음 (T55 — 정밀화는 effective_date 를 앞당기거나 유지).
+    """
+    # (a) 정밀 경로 — Q4 사업보고서 3-14 조기 공시 (기한 3-30 전).
+    precise_adapter = _adapter_with_response(_dart_response(rows=[
+        _dart_row(thstrm_amount="100", rcept_no="20240314000001"),
+    ]))
+    precise_result = precise_adapter.fetch_financial_statement(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4,
+        ifrs_type=IfrsType.CFS, batch_id=uuid4(),
+    )
+    # (b) 보수 fallback — 비숫자 rcept_no → 신고기한 (3-30).
+    fallback_adapter = _adapter_with_response(_dart_response(rows=[
+        _dart_row(thstrm_amount="100", rcept_no="NOTADATE00123"),
+    ]))
+    fallback_result = fallback_adapter.fetch_financial_statement(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4,
+        ifrs_type=IfrsType.CFS, batch_id=uuid4(),
+    )
+
+    assert precise_result.data[0].effective_date_precise is True
+    assert fallback_result.data[0].effective_date_precise is False
+    # 정밀값 ≤ 보수추정값 — 정밀화가 PIT 통과 시점을 늦추지 않음.
+    assert (
+        precise_result.data[0].effective_date
+        <= fallback_result.data[0].effective_date
+    )
+
 
 # =============================================================================
 # DART JSON fixture builder
@@ -134,10 +264,10 @@ def test_fetch_financial_statement_returns_canonical_rows() -> None:
     assert assets.ifrs_type == IfrsType.CFS
     assert assets.fiscal_year == 2023
     assert assets.fiscal_quarter == 4
-    # effective_date = 신고기한 (ADR-0012 D1 의 보수 정책). Q4 = 사업보고서
-    # → 사업연도 종료 + 90일 (캘린더 산술). 2023-12-31 + 90d = 2024-03-30
-    # (2024 윤년 → 2월 29일 포함이라 31+29+30 = 90).
-    assert assets.effective_date == date(2024, 3, 30)
+    # effective_date = rcept_no 도출 정밀 공시일 (ADR-0012 D6). fixture default
+    # rcept_no="20240501000123" → 앞 8자리 2024-05-01 = 접수일자 (공시일).
+    assert assets.effective_date == date(2024, 5, 1)
+    assert assets.effective_date_precise is True
 
 
 # =============================================================================
@@ -242,6 +372,26 @@ def test_account_mapper_known_mapping() -> None:
     )
 
 
+def test_account_mapper_reit_ffo_accounts() -> None:
+    """리츠 FFO/배당 구성 계정 매핑 — ADR-0023 D8 (P0 실 DART 검증).
+
+    FFO = net_income(ifrs-full_ProfitLoss, 기존) + depreciation. 배당/투자부동산은
+    dividend-yield:reit·NAV 구성. 데이터 정규화(canonical key)이지 factor 정의가
+    아니므로 factor pack content_hash 무변경(재현성 무관).
+    """
+    assert (
+        map_ifrs_account("ifrs-full_AdjustmentsForDepreciationExpense")
+        == "depreciation_expense"
+    )
+    assert (
+        map_ifrs_account("ifrs-full_DividendsPaidClassifiedAsFinancingActivities")
+        == "dividends_paid_annual"
+    )
+    assert map_ifrs_account("ifrs-full_InvestmentProperty") == "investment_property"
+    # FFO 분자의 순이익은 기존 net_income 매핑 재사용(중복 등록 아님).
+    assert map_ifrs_account("ifrs-full_ProfitLoss") == "net_income"
+
+
 def test_account_mapper_unmapped_preserves_id() -> None:
     """미매핑 ID 는 UNMAPPED_PREFIX 로 보존."""
     result = map_ifrs_account("ifrs-full_SomeRareAccount")
@@ -286,13 +436,45 @@ def test_fetch_preserves_unmapped_rows_with_warning() -> None:
     assert "1 unmapped" in unmapped_warning
 
 
-def test_fetch_estimated_fields_marks_effective_date() -> None:
-    """ADR-0012 D3 회귀 — effective_date 가 보수적 신고기한 근사임을 표시.
+def test_fetch_precise_effective_date_clears_estimated_marker() -> None:
+    """ADR-0012 D6 — 유효 rcept_no 면 정밀 공시일 + estimated_fields 비움.
 
-    실 rcept_dt (회사가 일찍 공시한 경우) 와의 잔여 lag 가 추정 — M1+ list.json
-    fetch (ADR-0012 D6) 합류 시 marker 자연 제거.
+    rcept_no 앞 8자리 (YYYYMMDD = 접수일자 = 공시일) 직접 도출 → effective_date
+    정밀 → marker 불요 (effective_date_precise=True 컬럼으로 영속화).
     """
-    rows_raw = [_dart_row(account_id="ifrs-full_Assets", thstrm_amount="100")]
+    rows_raw = [
+        _dart_row(
+            account_id="ifrs-full_Assets",
+            thstrm_amount="100",
+            rcept_no="20240314000456",
+        )
+    ]
+    adapter = _adapter_with_response(_dart_response(rows=rows_raw))
+    result = adapter.fetch_financial_statement(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4,
+        ifrs_type=IfrsType.CFS, batch_id=uuid4(),
+    )
+    assert result.estimated_fields == frozenset()
+    assert result.data[0].effective_date == date(2024, 3, 14)
+    assert result.data[0].effective_date_precise is True
+    assert result.citations[0].effective_date == date(2024, 3, 14)
+
+
+def test_fetch_invalid_rcept_no_falls_back_to_deadline() -> None:
+    """ADR-0012 D6 방어 — rcept_no 가 14자리 숫자 schema 외면 보수 fallback.
+
+    rcept_no 도출 실패 시 자본시장법 제160조 신고기한 보수값 (ADR-0012 D1) +
+    estimated_fields={"effective_date"} + effective_date_precise=False (look-ahead
+    0 보장). 본 fixture 의 rcept_no="BADRCEPTNO123" 는 14자리이나 비숫자.
+    """
+    rows_raw = [
+        _dart_row(
+            account_id="ifrs-full_Assets",
+            thstrm_amount="100",
+            rcept_no="BADRCEPTNO123",
+        )
+    ]
     adapter = _adapter_with_response(_dart_response(rows=rows_raw))
     result = adapter.fetch_financial_statement(
         code="005930", corp_code="00126380",
@@ -300,6 +482,10 @@ def test_fetch_estimated_fields_marks_effective_date() -> None:
         ifrs_type=IfrsType.CFS, batch_id=uuid4(),
     )
     assert result.estimated_fields == frozenset({"effective_date"})
+    # Q4 신고기한 = 2023-12-31 + 90d = 2024-03-30 (보수값).
+    assert result.data[0].effective_date == date(2024, 3, 30)
+    assert result.data[0].effective_date_precise is False
+    assert result.citations[0].effective_date == date(2024, 3, 30)
 
 
 # =============================================================================
@@ -328,8 +514,19 @@ def test_disclosure_deadline_matrix(
     fiscal_quarter: int,
     expected_date: date,
 ) -> None:
-    """ADR-0012 D1 의 신고기한 매트릭스 — 자본시장법 제160조 보수 정책."""
-    rows_raw = [_dart_row(account_id="ifrs-full_Assets", thstrm_amount="100")]
+    """ADR-0012 D1 의 신고기한 매트릭스 — 자본시장법 제160조 보수 fallback.
+
+    rcept_no 도출 실패 (비숫자 14자리) 시 신고기한 보수 정책으로 fallback 함을
+    검증 (ADR-0012 D6 의 방어 경로). 정밀 도출 경로는
+    test_fetch_precise_effective_date_clears_estimated_marker 가 담당.
+    """
+    rows_raw = [
+        _dart_row(
+            account_id="ifrs-full_Assets",
+            thstrm_amount="100",
+            rcept_no="NOTADATE00123",  # 14자리이나 비숫자 → 보수 fallback.
+        )
+    ]
     adapter = _adapter_with_response(_dart_response(rows=rows_raw))
     result = adapter.fetch_financial_statement(
         code="005930", corp_code="00126380",
@@ -338,6 +535,7 @@ def test_disclosure_deadline_matrix(
     )
     assert len(result.data) == 1
     assert result.data[0].effective_date == expected_date
+    assert result.data[0].effective_date_precise is False
     # citation 의 effective_date 도 동일.
     assert result.citations[0].effective_date == expected_date
 
@@ -623,3 +821,239 @@ def test_health_check_returns_false_without_key(
     monkeypatch.delenv("DART_API_KEY", raising=False)
     adapter = DartAdapter()
     assert adapter.health_check() is False
+
+
+# =============================================================================
+# 자사주 fetch — stockTotqySttus.json (주식의 총수 현황)
+# =============================================================================
+
+def _totqy_response(
+    *,
+    rows: list[dict[str, Any]] | None = None,
+    status: str = "000",
+) -> dict[str, Any]:
+    """stockTotqySttus.json 응답 JSON 모사."""
+    return {
+        "status": status,
+        "message": "정상" if status == "000" else "에러",
+        "list": rows or [],
+    }
+
+
+def _totqy_row(
+    *,
+    se: str,
+    istc_totqy: str = "5,969,782,550",
+    tesstk_co: str = "0",
+    distb_stock_co: str = "5,969,782,550",
+    rcept_no: str = "20240501000123",
+    stlm_dt: str = "2023-12-31",
+) -> dict[str, Any]:
+    """stockTotqySttus list 의 1 entry (se 구분별 행)."""
+    return {
+        "se": se,
+        "isu_stock_totqy": "10,000,000,000",
+        "now_to_isu_stock_totqy": istc_totqy,
+        "istc_totqy": istc_totqy,
+        "tesstk_co": tesstk_co,
+        "distb_stock_co": distb_stock_co,
+        "rcept_no": rcept_no,
+        "stlm_dt": stlm_dt,
+    }
+
+
+def test_fetch_treasury_shares_extracts_common_stock_tesstk_co() -> None:
+    """보통주 행의 tesstk_co (자기주식수) 추출 + 발행주식총수."""
+    rows = [
+        _totqy_row(
+            se="보통주",
+            istc_totqy="5,969,782,550",
+            tesstk_co="538,000,000",
+        ),
+        _totqy_row(
+            se="우선주",
+            istc_totqy="822,886,700",
+            tesstk_co="100,000,000",
+        ),
+    ]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930",
+        corp_code="00126380",
+        fiscal_year=2023,
+        fiscal_quarter=4,
+        batch_id=uuid4(),
+    )
+    assert isinstance(result, FetchResult)
+    # 보통주 행 tesstk_co 사용 (우선주 100,000,000 이 아닌 538,000,000).
+    assert result.data.shares_treasury == 538_000_000
+    assert result.data.shares_issued_total == 5_969_782_550
+    # effective_date = rcept_no 도출 정밀 공시일 (ADR-0012 D6). fixture default
+    # rcept_no="20240501000123" → 2024-05-01. precise marker 제거.
+    assert result.citations[0].effective_date == date(2024, 5, 1)
+    assert result.data.effective_date == date(2024, 5, 1)
+    assert result.data.effective_date_precise is True
+    assert result.citations[0].source == SourceKind.DART
+    assert result.estimated_fields == frozenset()
+
+
+def test_fetch_treasury_shares_falls_back_to_total_row() -> None:
+    """보통주 행 부재 시 합계 행 fallback + warning."""
+    rows = [
+        _totqy_row(se="합계", istc_totqy="6,792,669,250", tesstk_co="438,000,000"),
+    ]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury == 438_000_000
+    assert any("합계" in w for w in result.warnings)
+
+
+def test_fetch_treasury_shares_invalid_rcept_no_falls_back() -> None:
+    """ADR-0012 D6 방어 — treasury rcept_no 도출 실패 시 신고기한 보수 fallback.
+
+    rcept_no 가 14자리 숫자 schema 외면 자본시장법 제160조 신고기한 (Q4 = +90일)
+    보수값 + effective_date_precise=False + estimated_fields={"effective_date"}.
+    """
+    rows = [
+        _totqy_row(
+            se="보통주", istc_totqy="5,969,782,550",
+            tesstk_co="538,000,000", rcept_no="BADRCEPTNO123",
+        ),
+    ]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury == 538_000_000
+    # Q4 신고기한 = 2024-03-30 (보수값).
+    assert result.data.effective_date == date(2024, 3, 30)
+    assert result.data.effective_date_precise is False
+    assert result.citations[0].effective_date == date(2024, 3, 30)
+    assert result.estimated_fields == frozenset({"effective_date"})
+
+
+def test_fetch_treasury_shares_placeholder_rcept_no_falls_back() -> None:
+    """rcept_no 부재 → placeholder identifier (비-14자리) → 보수 fallback.
+
+    _parse_treasury_response 가 rcept_no 부재 시 placeholder 를 생성하는데
+    (e.g. 'stockTotqySttus:005930:2023Q4'), 이는 14자리 숫자가 아니므로
+    _rcept_date 가 None → 신고기한 보수값 fallback (precise=False).
+    """
+    rows = [
+        {
+            "se": "보통주",
+            "isu_stock_totqy": "10,000,000,000",
+            "now_to_isu_stock_totqy": "5,969,782,550",
+            "istc_totqy": "5,969,782,550",
+            "tesstk_co": "538,000,000",
+            "distb_stock_co": "5,969,782,550",
+            "rcept_no": "",  # 부재 → placeholder 생성.
+            "stlm_dt": "2023-12-31",
+        }
+    ]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.effective_date == date(2024, 3, 30)
+    assert result.data.effective_date_precise is False
+    assert result.estimated_fields == frozenset({"effective_date"})
+
+
+def test_fetch_treasury_shares_dash_is_missing() -> None:
+    """tesstk_co '-' 는 결측 (None) — 0 으로 가정하지 않음."""
+    rows = [_totqy_row(se="보통주", tesstk_co="-")]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury is None
+    assert any("결측" in w or "N/A" in w for w in result.warnings)
+
+
+def test_fetch_treasury_shares_empty_tesstk_co_is_missing() -> None:
+    """tesstk_co 빈값은 결측 (None)."""
+    rows = [_totqy_row(se="보통주", tesstk_co="")]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury is None
+
+
+def test_fetch_treasury_shares_missing_tesstk_field_is_missing() -> None:
+    """tesstk_co 필드 자체 누락은 결측 (None) — schema drift fail 아님."""
+    row = _totqy_row(se="보통주")
+    del row["tesstk_co"]
+    adapter = _adapter_with_response(_totqy_response(rows=[row]))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury is None
+
+
+def test_fetch_treasury_shares_zero_is_valid() -> None:
+    """tesstk_co '0' 은 유효 (자사주 없음 명시) — None 과 구별."""
+    rows = [_totqy_row(se="보통주", tesstk_co="0")]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury == 0
+
+
+def test_fetch_treasury_shares_rate_limit_raises_retry() -> None:
+    """status 020 (요청 제한) → AdapterRetryError (재무 fetch 와 동일)."""
+    adapter = _adapter_with_response(_totqy_response(status="020"))
+    with pytest.raises(AdapterRetryError):
+        adapter.fetch_treasury_shares(
+            code="005930", corp_code="00126380",
+            fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+        )
+
+
+def test_fetch_treasury_shares_no_data_status_raises() -> None:
+    """status 013 (데이터없음) → AdapterError (_call_dart 비OK status)."""
+    adapter = _adapter_with_response(_totqy_response(status="013"))
+    with pytest.raises(AdapterError):
+        adapter.fetch_treasury_shares(
+            code="005930", corp_code="00126380",
+            fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+        )
+
+
+def test_fetch_treasury_shares_empty_list_raises() -> None:
+    """빈 list → AdapterError."""
+    adapter = _adapter_with_response(_totqy_response(rows=[]))
+    with pytest.raises(AdapterError):
+        adapter.fetch_treasury_shares(
+            code="005930", corp_code="00126380",
+            fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+        )
+
+
+def test_fetch_treasury_shares_only_preferred_stock_is_missing() -> None:
+    """우선주만 있는 경우 (보통주/합계 부재) → 자사주 결측 + warning."""
+    rows = [_totqy_row(se="우선주", tesstk_co="100,000,000")]
+    adapter = _adapter_with_response(_totqy_response(rows=rows))
+
+    result = adapter.fetch_treasury_shares(
+        code="005930", corp_code="00126380",
+        fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
+    )
+    assert result.data.shares_treasury is None

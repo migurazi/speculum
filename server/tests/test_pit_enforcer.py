@@ -741,8 +741,12 @@ def test_fakes_all_export_is_explicit() -> None:
     expected = {
         "FakeCorporateActionRepository",
         "FakeFinancialRepository",
+        "FakeMacroIndicatorRepository",
+        "FakeMarketCapRepository",
+        "FakeNavRepository",
         "FakePriceRepository",
         "FakeStockSnapshotRepository",
+        "FakeTreasurySharesRepository",
     }
     assert set(fakes_mod.__all__) == expected
 

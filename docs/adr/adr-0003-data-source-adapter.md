@@ -75,9 +75,11 @@ Adapter 의 출력은 항상 canonical schema. service / repository 는 canonica
 | **재무제표** | `FinancialStatement(code, fiscal_year, fiscal_quarter, ifrs_type, accounts: dict[str, decimal], rcept_no, rcept_dt)` | DART |
 | **Corporate Action** | `CorporateAction(code, action_type, ex_date, ratio, ...)` | DART (1차 자료) |
 | **휴장일** | `KrxCalendar(date, is_trading_day, session)` | pykrx |
-| **거시지표** | `MacroIndicator(indicator_id, date, value, unit)` | ECOS (M1+) |
+| **거시지표** | `MacroIndicator(indicator_id, reference_date, value, unit, vintage_date)` | ECOS (M1+) |
 
 Adapter 가 raw 응답을 canonical 로 변환. 변환 logic 은 adapter 코드 + 단위 테스트로 동결.
+
+**MacroIndicator 의 vintage 이중 시간축 (M1 T62 — PIT 정합성 P0)**: ECOS 거시지표는 잠정치가 먼저 공표된 뒤 같은 기간의 값이 확정치로 사후 개정된다(예: GDP 속보치 → 잠정치 → 확정치). 단일 `date` 필드로는 "언제 알 수 있었던 값인가"를 구분할 수 없어 look-ahead bias 가 발생한다. 이를 차단하기 위해 두 번째 시간축 `vintage_date`(한국은행이 그 값을 공표/개정한 시점)를 추가한다. 같은 `(indicator_id, reference_date)` 에 대해 `vintage_date` 가 다른 row 가 append-only 로 누적되며(잠정→확정 개정마다 새 row), PIT 조회 시 `vintage_date <= as_of` 중 각 `reference_date` 별 `max(vintage_date)` 를 선택하면 look-ahead 0 이 보장된다. financials 의 `superseded_by` chain 과 달리 개정 = 새 vintage row INSERT 로 표현하므로 어떤 UPDATE 도 없다(순수 append-only). 스키마/ORM/migration 선설계는 M1 T62, 실제 ECOS fetch adapter 는 T63, Repository 조회 구현은 T64.
 
 ### D3. Source Citation 7-tuple 의 자동 채움
 

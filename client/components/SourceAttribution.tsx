@@ -28,6 +28,7 @@
 
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { ReactNode } from "react";
+import { useTranslations } from "next-intl";
 
 import {
   SOURCE_LABEL_KO,
@@ -89,6 +90,7 @@ export function SourceAttribution({
   effectiveDate,
   className,
 }: SourceAttributionProps): JSX.Element {
+  const t = useTranslations("common");
   const sourceKo = SOURCE_LABEL_KO[source];
   return (
     <Tooltip.Provider delayDuration={200}>
@@ -115,13 +117,13 @@ export function SourceAttribution({
           >
             <div className="space-y-1">
               <div>
-                <span className="text-neutral-400">출처:</span> {sourceKo}
+                <span className="text-neutral-400">{t("sourceAttribution.tooltipSource")}</span> {sourceKo}
               </div>
               <div>
-                <span className="text-neutral-400">산출식:</span> {formula}
+                <span className="text-neutral-400">{t("sourceAttribution.tooltipFormula")}</span> {formula}
               </div>
               <div>
-                <span className="text-neutral-400">기준일:</span> {asOf}
+                <span className="text-neutral-400">{t("sourceAttribution.tooltipAsOf")}</span> {asOf}
               </div>
               {/* oracle 리뷰 M1 — 빈 문자열도 미표시. backend 가 잘못
                   전달한 "" 가 "발효일: " (값 없음) 으로 렌더되지 않도록. */}
@@ -129,7 +131,7 @@ export function SourceAttribution({
               && effectiveDate.length > 0
               && effectiveDate !== asOf ? (
                 <div>
-                  <span className="text-neutral-400">발효일:</span>{" "}
+                  <span className="text-neutral-400">{t("sourceAttribution.tooltipEffectiveDate")}</span>{" "}
                   {effectiveDate}
                 </div>
               ) : null}

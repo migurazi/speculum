@@ -17,7 +17,14 @@
  * - ADR-0007 D2 (Source attribution 의무) — 본 grid 의 모든 값 cell.
  * - ADR-0008 D3 (as_of 영향 화면).
  * - M0_PLAN T38 / AC-F-05.
+ *
+ * compare/page.tsx ("use client") 가 직접 import 하므로 클라이언트 컴포넌트로
+ * 동작한다 — useTranslations 사용.
  */
+
+"use client";
+
+import { useTranslations } from "next-intl";
 
 import {
   SourceAttribution,
@@ -26,10 +33,11 @@ import {
 import type { FactorValue, StockDetail } from "@/lib/api/stocks";
 import { inferFactorSource } from "@/lib/factor/source";
 
-const STATUS_LABEL_KO: Readonly<Record<string, string>> = {
-  active: "거래 중",
-  not_yet_listed: "미상장",
-  delisted: "상장폐지",
+/** status → i18n 키 매핑 — compare 네임스페이스의 statusActive 등. */
+const STATUS_LABEL_KEY: Readonly<Record<string, string>> = {
+  active: "statusActive",
+  not_yet_listed: "statusNotYetListed",
+  delisted: "statusDelisted",
 };
 
 const STATUS_BADGE_CLASS: Readonly<Record<string, string>> = {
@@ -85,9 +93,11 @@ export function CompareGrid({
   stocks,
   asOf,
 }: CompareGridProps): JSX.Element {
+  const t = useTranslations("compare");
+
   if (stocks.length === 0) {
     return (
-      <p className="text-sm text-neutral-500">표시할 종목이 없습니다.</p>
+      <p className="text-sm text-neutral-500">{t("gridEmpty")}</p>
     );
   }
 
@@ -103,7 +113,7 @@ export function CompareGrid({
               scope="col"
               className="sticky left-0 z-10 border-b border-r border-neutral-200 bg-neutral-50 px-4 py-2 text-left font-medium"
             >
-              지표
+              {t("gridMetricHeader")}
             </th>
             {stocks.map((stock) => (
               <th
@@ -127,7 +137,9 @@ export function CompareGrid({
                         ?? "border-neutral-200 bg-neutral-50"
                       }`}
                     >
-                      {STATUS_LABEL_KO[stock.status] ?? stock.status}
+                      {STATUS_LABEL_KEY[stock.status] !== undefined
+                        ? t(STATUS_LABEL_KEY[stock.status] as Parameters<typeof t>[0])
+                        : stock.status}
                     </span>
                     <span className="text-[10px] text-neutral-500">
                       {stock.market}

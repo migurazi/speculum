@@ -15,6 +15,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SessionProvider } from "next-auth/react";
 import { useState, type ReactNode } from "react";
 
+import { AuthTokenSync } from "@/components/AuthTokenSync";
+
 interface ProvidersProps {
   readonly children: ReactNode;
 }
@@ -37,6 +39,8 @@ export function Providers({ children }: ProvidersProps): JSX.Element {
 
   return (
     <SessionProvider>
+      {/* AuthTokenSync: useSession → setAuthToken 배선 (ADR-0021 D1.1 모델 B). */}
+      <AuthTokenSync />
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </SessionProvider>
   );

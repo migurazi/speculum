@@ -186,6 +186,21 @@ WARN_ONLY 는 응답에 어휘를 echo 하므로 ADR-0006 D2 의 자본시장법
 `scan_api_response` 의 `exclude_paths` 파라미터로 dict key 단위 제외 가능 — 종목명 등의
 구조적 path 를 운영 시 false positive 없이 검사 영역에서 제외.
 
+**[T76 결정 — 2026-06-02] M2 종목별 Notes = USER_PRIVATE 전용 (work-order §7.5 closure).**
+종목별 사용자 Markdown 메모(T76)는 **USER_PRIVATE** scope 로 구현 — forbidden-words 검사
+skip(본인만 보는 자기 의제, No Advice 무관, 위 표 행과 일치). **USER_SHARED 는 enum 에
+예약돼 있으나 M2 미구현** — Notes 공유 surface 가 부재하므로(공유 서버는 M3+, work-order
+§8) SHARED 강제는 도달 불가 경로를 지키는 dead code. repository 경계에서 `scope !=
+USER_PRIVATE` 를 `NotesDataError` 로 거부해 SHARED 를 구조적으로 봉쇄(M3 공유 도입 시
+`assert_clean(..., scope=USER_SHARED)` 한 줄 추가로 전환). **시스템 생성 Notes 0**(No
+Advice §2.2) — Notes 작성 경로는 인증된 user route 뿐, system-write path 부재(seeder/
+migration insert/builtin 0). **grep-gate** 로 강제(T73 `<RecommendedStocks>` 부재 게이트
+패턴). **XSS(R6)** — Markdown 은 raw 저장, 렌더 시 sanitize(허용 태그 whitelist + DOMPurify
+단일 chokepoint, `dangerouslySetInnerHTML` 는 그 chokepoint import 파일만). backend 는
+길이 cap 만(Markdown 은 HTML 이 아니므로 서버 HTML sanitize 는 잘못된 레이어). Notes 는
+mutable CRUD — append-only(ADR-0020)는 재현 freeze artifact(screen_runs)에만 적용, 메모는
+편집/삭제가 자연(재현 불변식 없음).
+
 #### D4.6 어휘 SoT — `shared/forbidden-words.json` (oracle 리뷰 D1)
 
 어휘는 `shared/forbidden-words.json` 단일 정의. Python + TypeScript 모두 빌드 시 동일
@@ -199,12 +214,14 @@ JSON 을 import → 양 언어 구현 분기 불가. ADR 본문은 이 SoT 의 �
 - M0 의 빌트인 ~30 factor 는 모두 단일 지표.
 - "Magic Formula 점수", "F-Score", "퀄리티 점수" 등 합산 점수 빌트인 X.
 - M2 Factor Lab 에서 사용자가 정의 가능 — 그 경우 정의·산출식이 visible (Fidelity).
+- **[M2 개정 — ADR-0022 D7]** 사용자 정의 Composite 의 **허용 연산자 = [[adr-0022-composite-factor-operators]] D1 확정 집합**(weighted_sum / zscore / percentile / min_max_scale / winsorize). rank / top_n / sign 은 enum 에 **부재**(D5.2). 빌트인 composite/weighted factor **0** 은 T73 CI 게이트(`validate_builtin_no_composite`, `server/tests/test_factor_pack.py` §12)로 자동 강제 — 수동 검토 아님.
 
 #### D5.2 랭킹 (Top N) 의 경계
 
 - "PER 하위 10 종목" — 정렬 결과의 상위 표시 (사용자가 명시적 정렬 후) → **허용**
 - "오늘의 Top 10" / "Best 10" — 시스템이 큐레이션 → **금지**
 - "내 관심 종목 중 PER 낮은 순" — 사용자 명시적 → **허용**
+- **[M2 개정 — ADR-0022 D7]** **rank / top_n 연산자는 factor 식 enum 에 부재**([[adr-0022-composite-factor-operators]] D1). 순위는 *연산*(factor 정의 내 서수화)이 아니라 **표시 시점 user sort** 로만 — 사용자가 결과 테이블을 명시적으로 정렬. composite 식에 rank/top_n 을 넣어 "Top-N 큐레이션"을 우회하는 통로를 **연산자 집합 레벨에서 차단**(코드베이스에 부재가 가장 안전, Alternative C). percentile 은 분포 내 위치(사실, D2.2 허용)이지 서수 선택이 아니므로 rank 와 구분.
 
 ### D6. 홈 화면 정체성 — ADR-0010 으로
 
@@ -243,7 +260,13 @@ M1+ 변경 시 [[adr-0006-legal-review]] 재검토.
 
 #### D8.3 차트 라이브러리의 default 제어
 
-Lightweight Charts default 가 빨강·녹색 양봉/음봉 → 한국 관행 빨강 양봉 / 파랑 음봉으로 override (M0 유지, M1 재검토 — 8 기둥 §2.2 와의 거리).
+Lightweight Charts default 가 서구 관행 (녹색 양봉 / 빨강 음봉) → 한국 관행 **빨강 양봉(상승) / 파랑 음봉(하락)** 으로 override.
+
+**M1 결정 (T59 차트 시각요소 review gate, 2026-06-01)** — M0 구현이 실제로는 lightweight-charts 의 서구 관행(녹색 상승 `#16a34a` / 빨강 하락)을 그대로 두어 본 ADR 의 "한국 관행" 명시와 불일치했다. M1 에서 한국 관행(상승=빨강 `#dc2626` / 하락=파랑 `#2563eb`)으로 확정·일치화한다.
+
+- **§2.2 No Advice 와의 관계** — 등락색은 "그날 종가 > 시가" 라는 **사실** 의 표시이며, 금지 대상인 매매 신호·추천·점수 라벨이 아니다. 네이버 금융·KRX·키움 모두 동일 관행으로, 색이 "좋다/나쁘다" 가치판단이 아닌 등락 사실을 전달한다(§2.5 Open Data Sufficiency). 차트에는 corporate action 일자(사실) 외 annotation·랭킹·추천 marker 를 넣지 않는다.
+- **Compare 오버레이(T58)** — 여러 종목의 절대가격을 로그 Y축에 겹치며, 종목 구분은 **등락 의미 없는 중립 6색 팔레트**(빨강 상승/녹색 하락 같은 등락색 미사용)로만 한다. 가격 정규화(리베이싱)는 "어느 종목이 더 올랐나" 성과비교가 §2.3 Active Inspection 경계에 닿아 채택하지 않는다.
+- **회귀 방지** — 캔들 색은 명명 상수(`CANDLE_UP_COLOR`/`CANDLE_DOWN_COLOR`)로 export 하고, `client/components/__tests__/chart-visual-gate.test.tsx` 가 한국 관행 색 + 서구 녹색 상승색 부재를 검증(텍스트 검사 `no-forbidden-words` 로 미포착되는 시각 요소 gate).
 
 ## Rationale
 

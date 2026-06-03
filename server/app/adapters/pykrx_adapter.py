@@ -61,6 +61,7 @@ from app.adapters.base import (
     DataSourceAdapter,
     FetchResult,
     MarketCapRow,
+    NavRow,
     OHLCVRow,
     StockMaster,
 )
@@ -87,6 +88,17 @@ _PYKRX_OHLCV_COLUMNS: Final[dict[str, str]] = {
 _PYKRX_MARKET_CAP_COLUMNS: Final[dict[str, str]] = {
     "market_cap": "시가총액",
     "shares_outstanding": "상장주식수",
+}
+# pykrx `get_etf_ohlcv_by_date` 의 한글 컬럼명 — 실 컬럼명은 integration test
+# (pykrx 가용 시) 로 확정. 현재는 표준 컬럼 가정 (ADR-0023 D3-a).
+_PYKRX_ETF_NAV_COLUMNS: Final[dict[str, str]] = {
+    "nav": "NAV",
+    "market_price": "종가",
+    "aum": "순자산총액",
+}
+# pykrx `get_etf_price_deviation` 의 괴리율 컬럼명.
+_PYKRX_ETF_DEVIATION_COLUMNS: Final[dict[str, str]] = {
+    "deviation": "괴리율",
 }
 
 # Citation `url` 은 None — Momus M0 review W1 fix. 기존의 `kind.krx.co.kr/...`
@@ -290,6 +302,135 @@ class PykrxAdapter(DataSourceAdapter):
             effective_date=rows[-1].trade_date,
             batch_id=batch_id,
             url=None,  # W1: KRX 종목 deep link 부재 — 추후 KRX OPEN API 합류 시.
+        )
+        return FetchResult(data=rows, citations=(citation,))
+
+    # -------------------------------------------------------------------------
+    # ETF NAV — 일별 NAV · 시장가 · 괴리율 · AUM (ADR-0023 D3-a)
+    # -------------------------------------------------------------------------
+
+    def fetch_etf_nav(
+        self,
+        ticker: str,
+        *,
+        start: date,
+        end: date,
+        batch_id: UUID,
+    ) -> FetchResult[tuple[NavRow, ...]]:
+        """단일 ETF 의 NAV · 시장가 · 괴리율 시계열 fetch.
+
+        pykrx `get_etf_ohlcv_by_date(fromdate, todate, ticker)` 로 NAV + 종가
+        + 순자산총액 취득, `get_etf_price_deviation(fromdate, todate, ticker)` 로
+        괴리율 보완. DataFrame join 후 NavRow 변환.
+
+        canonical_id / factor pack 미등록 상태 — R4 deferred (ADR-0023 D8).
+        데이터 영구화 전까지 SqlNavRepository / ORM / 일배치 wiring 금지.
+
+        Args:
+            ticker: KRX ETF 종목코드 (6자리 zero-padded).
+            start: 시작일 (KST naive date, inclusive).
+            end: 종료일 (KST naive date, inclusive).
+            batch_id: 호출자가 부여한 batch 식별자.
+
+        Returns:
+            FetchResult — data = `tuple[NavRow, ...]` (trade_date 오름차순).
+            citations = `(SourceCitation,)` — 본 fetch 1 개.
+
+        Raises:
+            AdapterError: ticker 형식 위반, pykrx 가 빈 DataFrame 반환
+                (ETF 미존재 등), NAV 컬럼 미확인 이상 응답.
+            AdapterRetryError: 네트워크 / 일시 장애.
+        """
+        _validate_code(ticker)
+        _validate_date_range(start, end)
+
+        module = self._get_pykrx_module()
+        start_str = start.strftime("%Y%m%d")
+        end_str = end.strftime("%Y%m%d")
+
+        # NAV + 종가 + 순자산총액 — get_etf_ohlcv_by_date.
+        df_nav = self._call_pykrx(
+            lambda: module.get_etf_ohlcv_by_date(start_str, end_str, ticker),
+            context=f"get_etf_ohlcv_by_date({ticker}, {start}, {end})",
+        )
+        if df_nav is None or df_nav.empty:
+            raise AdapterError(
+                f"pykrx returned empty ETF NAV for ticker={ticker} "
+                f"in {start.isoformat()}~{end.isoformat()}"
+            )
+
+        # 괴리율 — get_etf_price_deviation.
+        df_dev = self._call_pykrx(
+            lambda: module.get_etf_price_deviation(start_str, end_str, ticker),
+            context=f"get_etf_price_deviation({ticker}, {start}, {end})",
+        )
+
+        # 괴리율 DataFrame 이 가용한 경우 index 기준 join.
+        dev_col = _PYKRX_ETF_DEVIATION_COLUMNS["deviation"]
+        has_deviation = (
+            df_dev is not None
+            and not df_dev.empty
+            and dev_col in df_dev.columns
+        )
+
+        nav_col = _PYKRX_ETF_NAV_COLUMNS["nav"]
+        price_col = _PYKRX_ETF_NAV_COLUMNS["market_price"]
+        aum_col = _PYKRX_ETF_NAV_COLUMNS["aum"]
+
+        if nav_col not in df_nav.columns:
+            raise AdapterError(
+                f"pykrx ETF NAV DataFrame missing expected column '{nav_col}' "
+                f"for ticker={ticker}. 실 컬럼명 확인 필요 (integration test 병행)."
+            )
+
+        rows_list: list[NavRow] = []
+        for ts, row in df_nav.iterrows():
+            trade_date = _index_to_date(ts)
+            nav_val = _decimal_from_value(row[nav_col])
+            market_price_val = (
+                _decimal_from_value(row[price_col])
+                if price_col in df_nav.columns
+                else nav_val
+            )
+            aum_val: Decimal | None = None
+            if aum_col in df_nav.columns:
+                try:
+                    aum_val = _decimal_from_value(row[aum_col])
+                except AdapterError:
+                    # AUM NaN 은 비치명 — None 처리.
+                    aum_val = None
+
+            # 괴리율 — join 가능 시 pykrx 제공값, 불가 시 직접 산출.
+            if has_deviation and ts in df_dev.index:
+                deviation_val = _decimal_from_value(df_dev.at[ts, dev_col])
+            elif nav_val != Decimal("0"):
+                deviation_val = (market_price_val - nav_val) / nav_val
+            else:
+                deviation_val = Decimal("0")
+
+            rows_list.append(
+                NavRow(
+                    code=ticker,
+                    trade_date=trade_date,
+                    nav=nav_val,
+                    market_price=market_price_val,
+                    premium_discount_rate=deviation_val,
+                    aum=aum_val,
+                )
+            )
+
+        rows = tuple(sorted(rows_list, key=lambda r: r.trade_date))
+        if not rows:
+            raise AdapterError(
+                f"no valid ETF NAV rows after conversion for ticker={ticker} "
+                f"in {start.isoformat()}~{end.isoformat()}"
+            )
+
+        citation = self._make_citation(
+            identifier=f"{ticker}|{start.isoformat()}|{end.isoformat()}|etf_nav",
+            effective_date=rows[-1].trade_date,
+            batch_id=batch_id,
+            url=None,  # KRX ETF deep link 부재 — 추후 KRX OPEN API 합류 시.
         )
         return FetchResult(data=rows, citations=(citation,))
 

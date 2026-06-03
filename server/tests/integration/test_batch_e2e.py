@@ -44,6 +44,7 @@ from app.db.base import Base
 from app.db.orm import (  # noqa: F401 — Base.metadata 등록 side-effect
     CorporateActionORM,
     FinancialORM,
+    MarketCapDailyORM,
     PriceDailyORM,
     ScreenerSetORM,
     ScreenRunSnapshotORM,
@@ -55,6 +56,7 @@ from app.db.orm import (  # noqa: F401 — Base.metadata 등록 side-effect
 from app.repositories.citation_repository import SqlCitationRepository
 from app.repositories.sql_repositories import (
     SqlFinancialRepository,
+    SqlMarketCapRepository,
     SqlPriceRepository,
 )
 from app.services.corp_code_mapping import CorpCodeMapping
@@ -278,6 +280,56 @@ def test_krx_e2e_commit_persists_price_and_citation(
 
 
 # =============================================================================
+# E2b. Phase B — SQL market_cap 영구화 + 실 FK (citation) 강제
+# =============================================================================
+
+
+def test_krx_e2e_commit_persists_market_cap(
+    db_session: Session,
+    business_day: date,
+) -> None:
+    """market_cap_repo (SQL) 주입 시 market_caps row 영구화 + citation FK 강제.
+
+    SQLite PRAGMA foreign_keys=ON 으로 운영 PG 와 동일 FK behavior — citation 이
+    먼저 save 돼야 market_cap FK 만족 (batch 의 citation → market_cap 순서 검증).
+    """
+    pykrx_mock = _make_pykrx_mock(
+        universe=["005930"],
+        ohlcv_close_by_code={"005930": 70000.0},
+    )
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=SqlCitationRepository(db_session),
+        price_repo=SqlPriceRepository(db_session),
+        market_cap_repo=SqlMarketCapRepository(db_session),
+        throttle_seconds=0,
+        session=db_session,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI")
+    db_session.commit()
+
+    assert summary.success_count == 1
+    # market_caps 1 row (005930, 2024-05-07).
+    assert db_session.query(MarketCapDailyORM).count() == 1
+
+    # fetch_latest 로 PIT round-trip — citation FK 만족 (commit 통과 = FK OK).
+    from decimal import Decimal
+
+    repo = SqlMarketCapRepository(db_session)
+    record = repo.fetch_latest("005930", as_of=business_day)
+    assert record is not None
+    assert record.market_cap == Decimal("400000000000000")
+    assert record.shares_outstanding == 5_000_000_000
+    # pykrx 자사주 미제공 → None 보존.
+    assert record.shares_treasury is None
+    # citation_id 가 실재 (FK).
+    assert db_session.get(SourceCitationORM, record.citation_id) is not None
+
+
+# =============================================================================
 # E3. conflict — FDR mismatch → alert.on_conflict + price persist
 # =============================================================================
 
@@ -351,6 +403,7 @@ def _make_dart_adapter_mock(*, account_count: int = 3) -> Any:
                 ifrs_type=ifrs_type,
                 rcept_no=f"{fiscal_year}0331{i:06d}",
                 currency="KRW",
+                effective_date_precise=True,
             )
             for i in range(account_count)
         )

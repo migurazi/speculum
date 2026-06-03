@@ -18,6 +18,7 @@
  * - M0_PLAN T32 (initial scaffold).
  */
 
+import { getTranslations } from "next-intl/server";
 import Link from "next/link";
 
 import { cn } from "@/lib/utils";
@@ -26,9 +27,12 @@ interface DisclaimerFooterProps {
   readonly className?: string;
 }
 
-export function DisclaimerFooter({
+export async function DisclaimerFooter({
   className,
-}: DisclaimerFooterProps): JSX.Element {
+}: DisclaimerFooterProps): Promise<JSX.Element> {
+  // 서버 컴포넌트의 i18n 패턴: getTranslations(네임스페이스).
+  const t = await getTranslations("legal");
+
   return (
     <footer
       className={cn(
@@ -38,44 +42,41 @@ export function DisclaimerFooter({
     >
       <div className="mx-auto max-w-5xl space-y-2">
         <p className="font-medium text-neutral-800">
-          본 도구는 정보 제공 목적의 정량 데이터 탐색기이며 투자 자문이
-          아닙니다.
+          {t("footer.noAdvice")}
         </p>
         <p>
-          모든 지표 값은 사용자가 정의한 조건의 필터링 결과를 표시합니다.
-          시스템은 종목·시점·전략을 권유하지 않으며, 표시되는 모든 값은 식·출처·
-          기준일을 함께 제시합니다.
+          {t("footer.filteringNote")}
         </p>
         <p>
-          데이터 출처:{" "}
-          <span className="font-medium">금융감독원 전자공시시스템(DART)</span>
+          {t("footer.sourcesLabel")}{" "}
+          <span className="font-medium">{t("footer.sourceDart")}</span>
           {" · "}
-          <span className="font-medium">한국거래소(KRX)</span>
+          <span className="font-medium">{t("footer.sourceKrx")}</span>
           {" · "}
-          <span className="font-medium">pykrx</span>
+          <span className="font-medium">{t("footer.sourcePykrx")}</span>
           {" · "}
-          <span className="font-medium">FinanceDataReader</span>.
+          <span className="font-medium">{t("footer.sourceFdr")}</span>.
         </p>
         <p className="text-neutral-500">
           <Link
             href="/privacy"
             className="underline-offset-2 hover:text-neutral-800 hover:underline"
           >
-            개인정보처리방침
+            {t("footer.linkPrivacy")}
           </Link>
           {" · "}
           <Link
             href="/terms"
             className="underline-offset-2 hover:text-neutral-800 hover:underline"
           >
-            이용약관
+            {t("footer.linkTerms")}
           </Link>
           {" · "}
           <Link
             href="/disclaimer"
             className="underline-offset-2 hover:text-neutral-800 hover:underline"
           >
-            면책조항
+            {t("footer.linkDisclaimer")}
           </Link>
         </p>
       </div>

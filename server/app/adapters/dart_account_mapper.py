@@ -78,6 +78,21 @@ _MAPPING: Final[Mapping[str, str]] = MappingProxyType({
     "ifrs-full_CashFlowsFromUsedInOperatingActivities": "cash_flow_operating",
     "ifrs-full_CashFlowsFromUsedInInvestingActivities": "cash_flow_investing",
     "ifrs-full_CashFlowsFromUsedInFinancingActivities": "cash_flow_financing",
+
+    # ===== 리츠(REIT) FFO/배당 구성 계정 — ADR-0023 D3-c / D8 =====
+    # P0 실 DART 검증(2026-06-02, 신한알파/ESR/SK리츠)으로 account_id 실재 확인.
+    # 이들은 *데이터 정규화*(canonical key 승격)이지 factor 정의가 아니므로 factor
+    # pack content_hash 무변경 → 재현성 무관. 리츠 factor(ffo-multiple:reit 등)는
+    # reference custom pack / PackRegistry 로 별도 제공(ADR-0023 D8 재현성 경로).
+    #
+    # FFO = net_income(ifrs-full_ProfitLoss, 기존 매핑) + depreciation. 감가상각은
+    # 현금흐름표의 손익조정 항목 — 일부 리츠만 별도 보고(ESR), 일부는 통합조정
+    # (AdjustmentsForReconcileProfitLoss)이라 감가상각 미보고 리츠는 FFO 자연 N/A.
+    "ifrs-full_AdjustmentsForDepreciationExpense": "depreciation_expense",
+    # 재무활동 배당금 지급 — dividend-yield:reit 분자(연 배당총액). 전 리츠 실재.
+    "ifrs-full_DividendsPaidClassifiedAsFinancingActivities": "dividends_paid_annual",
+    # 투자부동산 — 리츠 NAV 구성 자산(자산총계-부채총계 NAV 의 핵심 항목). 전 리츠 실재.
+    "ifrs-full_InvestmentProperty": "investment_property",
 })
 
 

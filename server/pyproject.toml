@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "speculum-server"
 version = "0.1.0-dev"
@@ -34,6 +38,20 @@ dependencies = [
   # T16 — DART OpenAPI httpx client. FastAPI starlette 가 이미 의존하나 본
   # 패키지의 직접 사용을 위해 명시 declare (semver pin 안정성).
   "httpx>=0.27,<1.0",
+  # 웹 serving — 앱이 직접 import 하는 FastAPI + Pydantic v2 schemas + uvicorn
+  # ASGI 서버. M0 scaffold 시점엔 미선언이었으나 (transitive 설치 의존) 직접
+  # 의존이므로 명시 declare. uvicorn 은 로컬 dev / 데모 실행
+  # (`python -m scripts.seed_demo` + `uvicorn app.main:app`) 에 필요.
+  "fastapi>=0.115,<1.0",
+  "pydantic>=2.0,<3.0",
+  "uvicorn[standard]>=0.30,<1.0",
+  # .env 로드 (app/core/config.py 가 startup 에 호출). DART_API_KEY 등 로컬
+  # 시크릿을 set/setx 대신 repo 루트 .env 에 둘 수 있게.
+  "python-dotenv>=1.0,<2.0",
+  # T68 — NextAuth JWT 검증 (HS256). AUTH_SECRET 설정 시 Authorization Bearer
+  # JWT 를 PyJWT 로 decode (서명·만료 검증). AUTH_SECRET 미설정(개발/CI/테스트
+  # 기본)이면 import 만 되고 호출 경로 없음 — SYSTEM_USER_ID fallback 유지.
+  "pyjwt>=2.8,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -41,6 +59,14 @@ dependencies = [
 test = [
   "pytest>=8.0,<9.0",
 ]
+
+# 패키지 discovery 명시 — flat-layout(server/ 에 app/batch/scripts/alembic 공존)
+# 에서 setuptools 자동 탐색이 "multiple top-level packages" 로 거부하므로 명시.
+# app/batch/scripts 는 import 대상 패키지(__init__.py 보유). alembic 은 migration
+# 디렉토리(패키지 아님, alembic CLI 가 cwd 에서 직접 읽음) + tests 는 설치 제외.
+[tool.setuptools.packages.find]
+include = ["app*", "batch*", "scripts*"]
+exclude = ["tests*", "alembic*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -72,7 +72,8 @@ def test_get_as_of_invalid_format_returns_422_sanitized(client: TestClient) -> N
 # 2. /api/policy-versions
 # =============================================================================
 
-def test_get_policy_versions_returns_11_keys(client: TestClient) -> None:
+def test_get_policy_versions_returns_12_keys(client: TestClient) -> None:
+    # M2 T72 — distribution_policy_version (유니버스-상대 분포 정책) 합류로 11→12.
     res = client.get("/api/policy-versions")
     assert res.status_code == 200
     body = res.json()
@@ -82,7 +83,8 @@ def test_get_policy_versions_returns_11_keys(client: TestClient) -> None:
         "pit_policy_version",
         "price_adjustment_policy_hash", "adjustment_policy_version",
         "ca_policy_version",
-        "evaluator_version", "snapshot_schema_version",
+        "evaluator_version", "distribution_policy_version",
+        "snapshot_schema_version",
     }
     assert set(body.keys()) == expected
 
@@ -175,3 +177,25 @@ def test_openapi_schema_does_not_block(client: TestClient) -> None:
     # 본 test 는 강한 invariant 아닌 sanity check — 만약 fail 시 docstring lint
     # 필요.
     # 단순화: 응답이 정상 (200) 이면 middleware 통과한 것.
+
+
+# =============================================================================
+# 7. /api/factors — Screener factor 선택 UI source
+# =============================================================================
+
+def test_get_factors_lists_active_pack(client: TestClient) -> None:
+    """활성 pack 의 factor 목록 — canonical_id + 사람이 읽는 name 노출."""
+    res = client.get("/api/factors")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["pack_slug"] and body["pack_version"]
+    factors = body["factors"]
+    assert isinstance(factors, list) and len(factors) > 0
+    ids = {f["canonical_id"] for f in factors}
+    # 표시 factor 들이 드롭다운 source 에 포함돼야.
+    assert "per:ttm-consolidated-ifrs" in ids
+    assert "pbr:consolidated-ifrs" in ids
+    # 각 항목은 값(canonical_id) + 라벨(name) 보유.
+    for f in factors:
+        assert f["canonical_id"] and f["name"]
+        assert "unit" in f and "tags" in f
