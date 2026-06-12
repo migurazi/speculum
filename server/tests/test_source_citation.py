@@ -313,11 +313,11 @@ def test_citation_producer_protocol_rejects_non_compliant() -> None:
 # 13. SourceKind enum coverage
 # =============================================================================
 
-def test_source_kind_has_seven_values() -> None:
-    """ADR-0002 D3 의 7 종 fix."""
-    assert len(list(SourceKind)) == 7
+def test_source_kind_values() -> None:
+    """ADR-0002 D3 의 base 7 종 + M7 #2 (ADR-0035) FSC + ⓓ PRECOMPUTE(derived)."""
     assert {k.value for k in SourceKind} == {
-        "DART", "KRX", "FDR", "PYKRX", "ECOS", "KOSIS", "USER_INPUT"
+        "DART", "KRX", "FDR", "PYKRX", "ECOS", "KOSIS", "USER_INPUT", "FSC",
+        "PRECOMPUTE",
     }
 
 

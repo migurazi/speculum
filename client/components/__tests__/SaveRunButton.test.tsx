@@ -12,7 +12,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
   afterEach,
@@ -26,6 +26,7 @@ import {
 
 import { SaveRunButton } from "../SaveRunButton";
 import type { ScreenCondition } from "@/lib/api/screen";
+import { renderWithIntl } from "@/test-utils/intl";
 
 const CONDITION: ScreenCondition = {
   factor: "per:ttm-consolidated-ifrs",
@@ -69,7 +70,7 @@ describe("SaveRunButton", () => {
   });
 
   it("disabled when canSave=false", () => {
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[CONDITION]}
@@ -83,7 +84,7 @@ describe("SaveRunButton", () => {
   });
 
   it("disabled when conditions empty", () => {
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[]}
@@ -97,7 +98,7 @@ describe("SaveRunButton", () => {
   });
 
   it("disabled when selectedFactors empty", () => {
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[CONDITION]}
@@ -118,7 +119,7 @@ describe("SaveRunButton", () => {
       }),
     );
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[CONDITION]}
@@ -153,7 +154,7 @@ describe("SaveRunButton", () => {
     );
     const onSaved = vi.fn();
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[CONDITION]}
@@ -178,7 +179,7 @@ describe("SaveRunButton", () => {
       new Response("Internal Error", { status: 500 }),
     );
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[CONDITION]}
@@ -206,7 +207,7 @@ describe("SaveRunButton", () => {
         new Response("Internal Error", { status: 500 }),
       );
     const user = userEvent.setup();
-    render(
+    renderWithIntl(
       wrap(
         <SaveRunButton
           conditions={[CONDITION]}

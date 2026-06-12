@@ -1,0 +1,29 @@
+{
+  "title": "증권거래세 계산",
+  "description": "매도 거래금액에 시장구분별 공개 세율을 적용한 증권거래세(농어촌특별세 포함) 산출입니다. 거래금액 × 세율의 단순 산술 사실이며 세무자문이 아닙니다.",
+  "form": {
+    "marketLabel": "시장구분",
+    "marketKospi": "코스피",
+    "marketKosdaq": "코스닥",
+    "marketKonex": "코넥스",
+    "marketUnlisted": "비상장",
+    "tradeAmountLabel": "거래금액 (원)",
+    "tradeAmountPlaceholder": "예: 1000000",
+    "tradeDateLabel": "거래일",
+    "calculateButton": "세액 계산",
+    "calculating": "계산 중...",
+    "error422": "입력값이 올바르지 않습니다. 거래일(2023-01-01 이후) 및 거래금액을 확인하세요.",
+    "errorGeneric": "계산 실패: {message}"
+  },
+  "result": {
+    "heading": "계산 결과",
+    "taxAmount": "증권거래세액",
+    "appliedRate": "적용 세율",
+    "effectiveDate": "세율 효력일",
+    "legalSourceLabel": "법령 출처",
+    "effectiveDateLabel": "효력일"
+  },
+  "disclaimer": {
+    "required": "본 계산은 공개 세율의 단순 참고용 적용이며 세무자문이 아닙니다. 실제 세액은 개인 상황·세법 개정에 따라 다르며 세무 전문가 상담을 요합니다."
+  }
+}

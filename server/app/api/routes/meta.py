@@ -11,9 +11,15 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter
 
 from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies.repositories import ActivePackDep, BatchRunRepoDep
+from app.schemas.data_freshness import DataFreshnessOut
+from app.services.data_freshness import assess_data_freshness
+from app.services.krx_calendar import DEFAULT_CALENDAR
 from app.services.snapshot_versions import collect_active_policy_versions
 
 router = APIRouter(prefix="/api", tags=["meta"])
@@ -54,6 +60,60 @@ async def get_policy_versions() -> dict:
     endpoint 결과와 snapshot 의 `data_versions` 비교로 변경된 정책 식별.
 
     Response 는 `snapshot_versions.collect_active_policy_versions()` 의 결과
-    (11 키 Mapping[str, str]).
+    (14 키 Mapping[str, str] — M2 T72 distribution_policy_version, M7 #5
+    total_return_policy_hash / total_return_policy_version 합류 반영).
     """
     return dict(collect_active_policy_versions())
+
+
+@router.get("/factors")
+async def get_factors(pack: ActivePackDep) -> dict:
+    """활성 factor pack 의 factor 목록 — Screener 의 factor 선택 UI source.
+
+    frontend 가 canonical_id 를 직접 타이핑하지 않고 드롭다운으로 고를 수 있도록
+    `(canonical_id, name, unit, tags)` 를 노출. canonical_id 는 조건/표시 입력의
+    실제 값, name 은 사람이 읽는 라벨, tags 는 카테고리 그룹핑용(valuation 등).
+
+    Response body:
+        pack_slug / pack_version: 활성 pack 식별 (UI 캐시 무효화 키).
+        factors: `[{canonical_id, name, unit, tags}]` — pack 정의 순서.
+    """
+    factors = [
+        {
+            "canonical_id": f["canonical_id"],
+            "name": f["name"],
+            "unit": f["unit"],
+            "tags": list(f.get("tags", ())),
+        }
+        for f in pack.body["factors"]
+    ]
+    return {
+        "pack_slug": pack.pack_slug,
+        "pack_version": pack.version,
+        "factors": factors,
+    }
+
+
+@router.get("/data-freshness", response_model=DataFreshnessOut)
+async def get_data_freshness(
+    batch_run_repo: BatchRunRepoDep,
+) -> DataFreshnessOut:
+    """source(KRX/DART)별 최신 성공 batch 시각 + stale 여부 — M5 #4a (ADR-0033 D6).
+
+    8 기둥 §2.1 Fidelity — "데이터 기준일 + stale 여부" 를 사실로 고지. 판정·해석
+    문구 없음 (§2.2 No Advice / §2.7 Observation) — `is_stale` bool·경과 일수만.
+    기존 공개 GET 패턴(`/api/policy-versions`·`/api/factors`)과 동일 — 인증 없음.
+
+    `now` 는 서버 현재 UTC(`datetime.now(UTC)`)를 주입 — 서비스(`assess_data_
+    freshness`)는 결정성 위해 `datetime.now()` 를 직접 호출하지 않는다. calendar 는
+    검증된 KRX 캘린더(`DEFAULT_CALENDAR`) — KRX 영업일 경과(stale 판정)에 사용.
+
+    stale 임계 (ADR-0033 D6): KRX 3 영업일 초과 / DART 100 calendar days 초과
+    (분기 공시 주기 근사, 재튜닝 가능).
+    """
+    freshness = assess_data_freshness(
+        now=datetime.now(UTC),
+        batch_run_repo=batch_run_repo,
+        calendar=DEFAULT_CALENDAR,
+    )
+    return DataFreshnessOut.from_domain(freshness)

@@ -1,0 +1,44 @@
+{
+  "appName": "Speculum",
+  "metaTitle": "Speculum",
+  "metaDescription": "한국 주식 시장의 정량 데이터 탐색기 — 본 도구는 정보 제공 목적이며 투자 자문이 아닙니다.",
+  "searchPlaceholder": "종목명 또는 코드 검색",
+  "searchAriaLabel": "종목 검색",
+  "primaryNavAriaLabel": "주 navigation",
+  "nav": {
+    "screener": "Screener",
+    "stocks": "Stocks",
+    "compare": "Compare",
+    "watchlist": "Watchlist",
+    "lab": "Factor Lab",
+    "backtest": "백테스트",
+    "portfolio": "Portfolio",
+    "tax": "세금 계산"
+  },
+  "asOfDatePicker": {
+    "inputAriaLabel": "기준 일자 선택",
+    "resetAriaLabel": "오늘 날짜로 리셋",
+    "resetButtonLabel": "오늘"
+  },
+  "asOfBanner": {
+    "pastAnalysis": "과거 시점 분석 — {asOf} 기준 데이터를 표시합니다. 그 시점 이후의 데이터는 사용되지 않습니다."
+  },
+  "saveRunButton": {
+    "buttonLabel": "Save Run",
+    "savingLabel": "저장 중...",
+    "successTitle": "저장 완료 — Run ID",
+    "successDetail": "결과 {count} 종목 · 정책 키 {versionCount} 개 freeze",
+    "errorPrefix": "저장 실패: {message}"
+  },
+  "sourceAttribution": {
+    "tooltipSource": "출처:",
+    "tooltipFormula": "산출식:",
+    "tooltipAsOf": "기준일:",
+    "tooltipEffectiveDate": "발효일:"
+  },
+  "auth": {
+    "signIn": "Google 로그인",
+    "signOut": "로그아웃",
+    "loading": "..."
+  }
+}

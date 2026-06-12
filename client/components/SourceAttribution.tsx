@@ -28,6 +28,7 @@
 
 import * as Tooltip from "@radix-ui/react-tooltip";
 import type { ReactNode } from "react";
+import { useTranslations } from "next-intl";
 
 import {
   SOURCE_LABEL_KO,
@@ -45,8 +46,16 @@ export interface SourceAttributionProps {
    */
   readonly value: ReactNode;
 
-  /** 데이터 출처 — ADR-0002 D3 의 SourceKind enum 과 동일. */
-  readonly source: SourceLabel;
+  /**
+   * 데이터 출처 — ADR-0002 D3 의 SourceKind enum 과 동일.
+   *
+   * 단일 출처: `SourceLabel` (예: "DART", "KRX").
+   * 복합 출처: `readonly SourceLabel[]` — §2.8 Conformance 요구 factor 에 사용.
+   *   예: ["KRX", "FSC"] → inline "KRX·FSC", tooltip 에 각 출처 전체명 표기.
+   *   현재 복합 factor: price-return (가격 KRX + 배당재투자 FSC),
+   *                     dividend-yield (배당 FSC / 가격 KRX).
+   */
+  readonly source: SourceLabel | ReadonlyArray<SourceLabel>;
 
   /**
    * 산출식 — 한글 표시. 예: "당기순이익 / 발행주식수", "시가총액 / 자기자본".
@@ -76,6 +85,30 @@ export interface SourceAttributionProps {
 }
 
 /**
+ * source prop 정규화 — 단일/복합 양쪽 처리.
+ *
+ * inline suffix 표기: 단일 "KRX", 복합 "KRX·FSC".
+ * tooltip 표기: 단일 1행, 복합 각 출처 전체명 나열 (§2.8 출처 완전 표기).
+ */
+function normalizeSource(source: SourceLabel | ReadonlyArray<SourceLabel>): {
+  inlineLabel: string;
+  tooltipLines: ReadonlyArray<string>;
+} {
+  if (Array.isArray(source)) {
+    const labels = source as ReadonlyArray<SourceLabel>;
+    return {
+      inlineLabel: labels.join("·"),
+      tooltipLines: labels.map((s) => SOURCE_LABEL_KO[s]),
+    };
+  }
+  const s = source as SourceLabel;
+  return {
+    inlineLabel: s,
+    tooltipLines: [SOURCE_LABEL_KO[s]],
+  };
+}
+
+/**
  * Source attribution wrapper — 값 + tooltip.
  *
  * 모든 props 가 required (TypeScript 강제). 누락 시 빌드 에러. 8 기둥 §2.1
@@ -89,7 +122,8 @@ export function SourceAttribution({
   effectiveDate,
   className,
 }: SourceAttributionProps): JSX.Element {
-  const sourceKo = SOURCE_LABEL_KO[source];
+  const t = useTranslations("common");
+  const { inlineLabel, tooltipLines } = normalizeSource(source);
   return (
     <Tooltip.Provider delayDuration={200}>
       <Tooltip.Root>
@@ -102,7 +136,7 @@ export function SourceAttribution({
           >
             <span className="font-medium tabular-nums">{value}</span>
             <span className="text-[11px] text-neutral-500">
-              {source} · {asOf}
+              {inlineLabel} · {asOf}
             </span>
           </span>
         </Tooltip.Trigger>
@@ -115,13 +149,25 @@ export function SourceAttribution({
           >
             <div className="space-y-1">
               <div>
-                <span className="text-neutral-400">출처:</span> {sourceKo}
+                <span className="text-neutral-400">{t("sourceAttribution.tooltipSource")}</span>{" "}
+                {tooltipLines.length === 1 ? (
+                  tooltipLines[0]
+                ) : (
+                  <span>
+                    {tooltipLines.map((line, i) => (
+                      <span key={i}>
+                        {i > 0 ? ", " : ""}
+                        {line}
+                      </span>
+                    ))}
+                  </span>
+                )}
               </div>
               <div>
-                <span className="text-neutral-400">산출식:</span> {formula}
+                <span className="text-neutral-400">{t("sourceAttribution.tooltipFormula")}</span> {formula}
               </div>
               <div>
-                <span className="text-neutral-400">기준일:</span> {asOf}
+                <span className="text-neutral-400">{t("sourceAttribution.tooltipAsOf")}</span> {asOf}
               </div>
               {/* oracle 리뷰 M1 — 빈 문자열도 미표시. backend 가 잘못
                   전달한 "" 가 "발효일: " (값 없음) 으로 렌더되지 않도록. */}
@@ -129,7 +175,7 @@ export function SourceAttribution({
               && effectiveDate.length > 0
               && effectiveDate !== asOf ? (
                 <div>
-                  <span className="text-neutral-400">발효일:</span>{" "}
+                  <span className="text-neutral-400">{t("sourceAttribution.tooltipEffectiveDate")}</span>{" "}
                   {effectiveDate}
                 </div>
               ) : null}

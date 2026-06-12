@@ -67,7 +67,18 @@ class SourceKind(str, Enum):
     str-mixin — JSON 직렬화 시 enum value 자연 변환 (`"DART"` 등).
 
     Future (M2+ community pack):
-        `EXTERNAL` value 추가 검토. 본 사이클은 7 종 fix.
+        `EXTERNAL` value 추가 검토.
+
+    M7 #2 (ADR-0035 D3/D6) 에서 `FSC` 추가 — 금융위원회 공공데이터(공공데이터포털
+    GetStocDiviInfoService) 의 주식 배당 정보 출처. DB `source_citations.source`
+    는 String(32) 컬럼 (enum/CHECK 없음) 이라 value 추가가 schema migration 을
+    요구하지 않으며, `converters.SourceKind(orm.source)` round-trip 도 자동 호환.
+
+    ⓓ (ADR-0002 amendment) 에서 `PRECOMPUTE` 추가 — stock_snapshots 일배치가
+    생산하는 **derived(파생) 결과**의 출처 종류. 1차 raw 자료(DART/KRX/ECOS …)와
+    달리 외부 fetch 가 없고 factor 평가의 산물이므로 별도 kind 로 구분한다. 단일
+    대표 citation 으로, 전체 input provenance 는 snapshot 의 data_versions(freeze
+    fingerprint) + inputs 에 보존된다(per-input 1:1 citation 은 M2+ join 테이블).
     """
 
     DART = "DART"            # 전자공시시스템 (재무제표, corporate action)
@@ -77,6 +88,8 @@ class SourceKind(str, Enum):
     ECOS = "ECOS"            # 한국은행 경제통계시스템 (M1+ 거시지표)
     KOSIS = "KOSIS"          # 통계청 KOSIS (M1+ 경제·산업 통계)
     USER_INPUT = "USER_INPUT"  # 사용자 manual 입력 (M2+ Factor Lab)
+    FSC = "FSC"              # 금융위원회 공공데이터 (배당 정보, M7 #2 ADR-0035)
+    PRECOMPUTE = "PRECOMPUTE"  # stock_snapshots 일배치 derived 결과 (ⓓ, ADR-0002)
 
 
 # =============================================================================

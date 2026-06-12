@@ -32,6 +32,8 @@ from decimal import Decimal
 from typing import Protocol, runtime_checkable
 from uuid import NAMESPACE_OID, UUID, uuid5
 
+from app.repositories.batch_run_repository import BatchCutoff
+
 # =============================================================================
 # Common PIT Record Protocols
 # =============================================================================
@@ -58,6 +60,25 @@ class SupersedableRecord(PITRecord, Protocol):
     """
 
     superseded_by: UUID | None
+
+
+@runtime_checkable
+class VintageRecord(Protocol):
+    """vintage 이중 시간축 PIT record — MacroIndicatorRecord 전용.
+
+    `PITRecord` (단일 `effective_date` 축) 와 의도적으로 별개 — ECOS 거시지표는
+    `effective_date` 가 없고 `reference_date` (지표 기준 기간) / `vintage_date`
+    (한국은행 공표·개정 시점) 의 두 축을 가진다 (MacroIndicatorRecord docstring
+    참조). PIT look-ahead 차단은 두 축이 *동시에* `<= as_of` 여야 만족 —
+    `PITEnforcer.assert_no_vintage_lookahead` 가 본 Protocol 위에서 검사한다.
+
+    MacroIndicatorRecord 는 이미 `id` / `reference_date` / `vintage_date` 필드를
+    가지므로 구조적으로 본 Protocol 을 만족 (별도 변경 불필요).
+    """
+
+    id: UUID
+    reference_date: date
+    vintage_date: date
 
 
 # =============================================================================
@@ -95,15 +116,45 @@ class PriceRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class MarketCapRecord:
+    """일별 시가총액 + 발행주식수 — ADR-0003 D2 + ADR-0004.
+
+    `MarketCapRow` (adapter canonical) 의 DB record 표현. KRX 시가총액은 정정
+    안 됨 → supersede 없음 (PriceRecord 와 동일). `effective_date` = 기준일
+    (KRX 거래일) — PriceRecord 와 동일 PIT 의미 (`effective_date <= as_of`).
+
+    `shares_treasury` 는 pykrx 미제공 시 None — 절대 0 으로 가정하지 않음
+    (silent 오류 회피, DART 보강 별도 cycle, T48c). `market_cap_ex_treasury`
+    산출은 자사주가 채워질 때까지 불가.
+    """
+
+    id: UUID
+    code: str  # 종목코드 (사건 발생 시점 기준)
+    code_lineage_id: UUID  # ADR-0009 D6 의 lineage
+    effective_date: date  # = 기준일 (KRX 거래일)
+    market_cap: Decimal  # 시가총액 (원)
+    shares_outstanding: int  # 발행주식수 (자사주 포함)
+    shares_treasury: int | None  # 자사주 수 (pykrx 미제공 시 None)
+    citation_id: UUID  # ADR-0002 D3
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class FinancialRecord:
     """재무제표 단일 항목 (account 별 row).
 
     `effective_date` 의 의미 (ADR-0012 D7 명시):
         - KRX 가격: trade_date (정확).
-        - DART 재무제표: 본 record 가 시장에 100% 가용해진 시점. M0 v0.1.0 은
-          자본시장법 제160조 신고기한 (Q1~Q3 = +45일, Q4 = +90일) 으로
-          보수 산출 (ADR-0012 D1). 실 rcept_dt 의 정확한 값은 `estimated_fields`
-          marker 보존 + M1+ DART list.json fetch 합류 시 갱신.
+        - DART 재무제표: 본 record 가 시장에 100% 가용해진 시점. M1 정밀화 —
+          DART 응답 각 row 의 `rcept_no` (14자리 접수번호) 앞 8자리 (YYYYMMDD =
+          접수일자 = 공시일) 에서 직접 도출 (ADR-0012 D6). 도출 실패 시 자본시장법
+          제160조 신고기한 (Q1~Q3 = +45일, Q4 = +90일) 보수값 fallback (ADR-0012
+          D1). 어느 경우든 look-ahead 0.
+
+    `effective_date_precise`:
+        - True → effective_date 가 rcept_no 도출 실 공시일 (정밀, ADR-0012 D6).
+        - False → 신고기한 보수 추정값 (구 `estimated_fields={"effective_date"}`
+          marker 를 대체하는 영구 컬럼).
     정정공시 시 새 row + 옛 row 의 `superseded_by` = 새 row.id.
     """
 
@@ -123,6 +174,39 @@ class FinancialRecord:
     citation_id: UUID
     superseded_by: UUID | None
     created_at: datetime
+    # ADR-0012 D6 — effective_date 가 rcept_no 도출 실 공시일이면 True, 신고기한
+    # 보수값 fallback 이면 False. schema 의 effective_date_precise 컬럼과 1:1.
+    effective_date_precise: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class TreasurySharesRecord:
+    """보통주 자기주식수 단일 fiscal_period — DART stockTotqySttus.json.
+
+    financials (`FinancialRecord`) 패턴 미러. DART 의 주식의 총수 현황에서
+    추출한 보통주 자사주를 fiscal_period 단위로 영구화. 정정공시 시 새 row +
+    옛 row 의 `superseded_by` = 새 row.id.
+
+    `effective_date` / `effective_date_precise` 의 의미 (financials 와 동일,
+    ADR-0012 D6):
+        - DART: 본 record 가 시장에 100% 가용해진 시점. stockTotqySttus.json 응답
+          의 `rcept_no` 앞 8자리 (YYYYMMDD = 접수일자) 에서 직접 도출 (정밀,
+          `effective_date_precise = True`). 도출 실패 시 자본시장법 제160조
+          신고기한 보수값 fallback (`effective_date_precise = False`).
+    """
+
+    id: UUID
+    code: str
+    code_lineage_id: UUID
+    effective_date: date
+    # DART 일배치 표준 = `f"{year}Q{quarter}"` (예: "2024Q1") — financials 동일.
+    fiscal_period: str
+    shares_treasury: int  # 보통주 자기주식수 (stockTotqySttus tesstk_co)
+    citation_id: UUID
+    superseded_by: UUID | None
+    created_at: datetime
+    # ADR-0012 D6 — financials 와 동일 의미. rcept_no 도출 실 공시일이면 True.
+    effective_date_precise: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +233,61 @@ class CorporateActionRecord:
     details: Mapping[str, object]  # ADR-0009 D2 의 action_type 별 JSONB
     citation_id: UUID
     superseded_by: UUID | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MacroIndicatorRecord:
+    """ECOS 거시지표 단일 관측값 — vintage 이중 시간축 PIT record.
+
+    한국은행 ECOS 는 거시지표를 사후 개정한다(잠정치 공표 → 나중에 확정치로 같은
+    기간의 값이 바뀜). PIT-정합(재현성 P0)을 위해 이중 시간축을 도입:
+
+        `reference_date` (date):
+            지표가 가리키는 기준 시점/기간. 월별 지표는 해당 월의 1일
+            (2024-01 기준금리 → 2024-01-01), 분기별 지표는 분기 시작일
+            (2024Q1 GDP → 2024-01-01).
+
+        `vintage_date` (date):
+            한국은행이 그 값을 공표/개정한 시점 — PIT 의 두 번째 축.
+            같은 `(indicator_id, reference_date)` 에 대해 vintage_date 가 다른
+            여러 row 가 append-only 로 누적된다(잠정→확정 개정마다 새 row).
+
+    PIT 조회 규약 (look-ahead 0):
+        `WHERE indicator_id=? AND vintage_date <= as_of` 중 각 reference_date 별
+        `max(vintage_date)` 의 value 를 사용 → as_of 시점에 알 수 있었던 vintage 만
+        선택. 잠정치로 한 과거 분석이 확정치 공표 후에도 재현 가능(불변). 이 규약의
+        실제 Repository 구현은 T64 MacroIndicatorRepository 에서 vintage_date<=as_of
+        max 규약으로 구현 예정.
+
+    왜 superseded_by 가 없는가:
+        financials / treasury_shares 의 정정공시는 사람이 명시적으로 정정 이벤트를
+        올리는 구조라 superseded_by chain 으로 old row 를 inactive 처리한다.
+        반면 ECOS 매크로 개정은 "새 vintage_date 를 가진 새 row" 의 자연 누적으로
+        표현 — 어떤 UPDATE 도 없고, 개정 = 새 vintage row 의 INSERT 다(순수
+        append-only). superseded_by chain 을 두면 개정마다 이전 row 를 UPDATE 해야
+        하는데, 이는 append-only 불변식 위반이다. vintage_date max 규약으로 동일한
+        PIT 의미론을 UPDATE 없이 달성한다.
+
+    Attributes:
+        id: row 고유 UUID (surrogate PK).
+        indicator_id: ECOS 통계 식별자 (통계표·항목 코드 조합). T63 EcosAdapter 에서
+            실제 코드 체계 확정.
+        reference_date: 지표의 기준 시점 — 월/분기를 date 로 정규화.
+        value: 지표 값 (금리·지수·금액 등).
+        unit: 값의 단위 ("percent" / "index" / "krw_100m" 등). T63 에서 확정.
+        vintage_date: 한국은행의 공표/개정 시점 — PIT 두 번째 축.
+        citation_id: ECOS fetch 의 source citation (ADR-0002 D3 Fidelity).
+        created_at: row insert 시각 (UTC). append-only 영구 보존.
+    """
+
+    id: UUID
+    indicator_id: str  # ECOS 통계 식별자 (예: "722Y001/0101000")
+    reference_date: date  # 지표 기준 시점 (월/분기 → date 정규화)
+    value: Decimal
+    unit: str  # "percent" / "index" / "krw_100m" 등
+    vintage_date: date  # 한국은행 공표/개정 시점 (PIT 두 번째 축)
+    citation_id: UUID  # ADR-0002 D3 — ECOS fetch citation
     created_at: datetime
 
 
@@ -183,6 +322,8 @@ class StockMasterRecord:
         fiscal_month: 결산 월 (12 = 12 월결산). ADR-0005 의 K-IFRS 결산기.
         code_history: 종목코드 변경 history. `(code, valid_from, valid_to, reason)`.
         ifrs_preference_default: K-IFRS 연결/별도 선호 — ADR-0005. "AUTO" / "CONSOLIDATED" / "SEPARATE".
+        security_type: 자산군 분류 — ADR-0023 D2. "common" / "preferred" / "etf" / "reit".
+            lineage 시계열 불변(immutable). 분포 partition(T78 D5)/screener 필터(T79 D7) 는 별도 사이클.
     """
 
     id: UUID
@@ -194,6 +335,9 @@ class StockMasterRecord:
     fiscal_month: int
     code_history: tuple[CodeHistoryEntry, ...]
     ifrs_preference_default: str = "AUTO"
+    # ADR-0023 D2 — 자산군 분류. 기존 전 종목 backfill = "common".
+    # 분포 partition(T78) / screener 필터(T79) 는 별도 사이클 — 여기서 구현 X.
+    security_type: str = "common"
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,8 +358,13 @@ class StockSnapshotRecord:
     value: Decimal | None  # None = 미산정 (분모 0 등)
     value_unit: str
     inputs: Mapping[str, object]  # 산정 시 사용한 입력값 (Fidelity)
-    citation_id: UUID  # 결과의 대표 citation
+    citation_id: UUID  # 결과의 대표 citation (per-input 전체는 inputs/pack 으로 복원)
     computed_at: datetime
+    # 산정 당시 freeze fingerprint — screen_runs.data_versions 와 대칭(batch_id·
+    # evaluator_version·policy hash). 후속 read-bypass cycle 이 reproduce 의 frozen
+    # data_versions 와 비교해 "serve vs recompute" 를 **결정적으로** 판정하는 축
+    # (§2.10 — provenance 없이는 timestamp 추정 fragile). oracle 리뷰 C1.
+    data_versions: Mapping[str, str]
     # 캐싱된 합성 id. __post_init__ 에서 frozen 우회로 설정. PITRecord 호환.
     id: UUID = field(init=False)
 
@@ -254,10 +403,15 @@ class PriceRepository(Protocol):
         *,
         as_of: date,
         start: date,
+        batch_cutoff: BatchCutoff | None = None,
     ) -> Sequence[PriceRecord]:
         """`[start, as_of]` 범위의 가격 시계열 (오름차순).
 
         `as_of` 가 영업일이 아닌 경우 호출자 책임 (AsOfPolicy 가 normalize 후 전달).
+
+        `batch_cutoff` (M1 T48c 재현): None (default) 이면 무필터 = 기존 동작.
+        주입 시 frozen 이하 KRX batch 가 생산한 row 만 (backfill 제외 — price 는
+        supersede 없음). EXCLUDE_ALL sentinel 이면 그 source fact 전부 제외.
         """
         ...
 
@@ -275,6 +429,45 @@ class PriceRepository(Protocol):
 
 
 @runtime_checkable
+class MarketCapRepository(Protocol):
+    """일별 시가총액 + 발행주식수. KRX 시가총액은 정정 안 됨 → supersede 없음.
+
+    PriceRepository 와 동일 PIT 의미 — `effective_date <= as_of` 중 최신. `as_of`
+    는 keyword-only required (호출자가 PIT 의도 명시).
+    """
+
+    def fetch_latest(
+        self,
+        code: str,
+        *,
+        as_of: date,
+        batch_cutoff: BatchCutoff | None = None,
+    ) -> MarketCapRecord | None:
+        """`effective_date <= as_of` 중 가장 최신 record. 없으면 None.
+
+        PriceRepository 와 동일 PIT 의미론 (KRX 정정 없음 → supersede 무관).
+        `as_of` 가 영업일이 아닌 경우 호출자 책임 (AsOfPolicy 가 normalize 후 전달).
+
+        `batch_cutoff` (M1 T48c 재현): None (default) 이면 무필터. 주입 시 frozen
+        이하 KRX batch 가 생산한 row 로 한정한 뒤 max (backfill row 제외). 단순
+        `started_at <=` 가 아닌 lexicographic `(started_at, id) <= cutoff`.
+        """
+        ...
+
+    def save_market_caps(self, records: Sequence[MarketCapRecord]) -> None:
+        """시가총액 row bulk insert — KRX 일배치 Phase B 합류.
+
+        Invariant (save_prices 와 동일):
+            - 같은 `(code, effective_date)` 의 중복 insert 는 구현체 정책 (SQL
+              은 UNIQUE constraint raise, Fake 는 overwrite). 호출자 책임으로
+              dedup 권장.
+            - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼 있어야
+              FK 만족. 배치 orchestrator 가 citation → market_cap 순서 강제.
+        """
+        ...
+
+
+@runtime_checkable
 class FinancialRepository(Protocol):
     """재무제표 — supersede chain 해소가 핵심."""
 
@@ -284,13 +477,64 @@ class FinancialRepository(Protocol):
         *,
         as_of: date,
         account: str,
+        ifrs_type: str | None = None,
         max_periods: int = 8,
+        batch_cutoff: BatchCutoff | None = None,
     ) -> Sequence[FinancialRecord]:
         """`as_of` 시점에 active 였던 (code, account) 의 fiscal_period 별 record.
+
+        `batch_cutoff` (M1 T48c 재현): None (default) 이면 무필터 = 기존 동작.
+        주입 시 frozen 이하 DART batch 가 생산한 row 로 candidate 를 한정 → 이후
+        정정 (successor) row 가 빠지면 `latest_active_by_key` 의 보수 분기
+        (pit_enforcer.py:306-311) 가 원 row 를 active 복원 → 정정 전 값 재현
+        (C#1, load-bearing). cutoff+as_of 곱집합이 빈 group 은 NoActiveRecordError
+        를 group 내부 흡수 → 빈 결과 (M#6, 500 미발생). EXCLUDE_ALL 이면 전부 제외.
 
         구현체는 supersede chain 을 as_of-time 기준으로 해소 — `PITEnforcer.
         latest_active_record` 의 의미론을 구현체가 가져가거나, 호출 후 PITEnforcer
         에 위임 가능. Protocol 은 시그니처만 강제.
+
+        `ifrs_type` (ADR-0005 K-IFRS 연결/별도): 지정 시 fiscal_period 별 latest
+        active 그룹화 **이전에** 해당 ifrs_type 만 필터. 연결/별도는 별개 fact·별개
+        supersede chain 이므로, 한 (code, account, fiscal_period) 에 연결+별도가
+        공존할 때 그룹 key 충돌을 방지 (None 이면 ifrs_type 무관 — legacy 동작).
+        그룹화 이전 필터라 `max_periods` 절사가 단일 ifrs_type 기준으로 적용됨
+        (trailing-4 분기 / period_begin 이 다른 ifrs_type 으로 희석되지 않음).
+        """
+        ...
+
+    def fetch_restatement_history(
+        self,
+        code: str,
+        *,
+        fiscal_period: str | None = None,
+        as_of: date | None = None,
+    ) -> list[FinancialRecord]:
+        """정정공시 이력 조회 — 해당 code 의 모든 vintage(active + superseded) 반환.
+
+        ADR-0009(chain) / ADR-0020(append-only) — read-only SELECT 만. 어떠한
+        UPDATE / INSERT 도 수행하지 않음. 불변 이력 메타 뷰.
+
+        정렬: (fiscal_period asc, effective_date asc, id asc) — 정정 chain 을
+        시간순으로. id 가 final tiebreaker (결정성 보장).
+
+        PIT look-ahead 차단 (§2.4):
+            `as_of` 가 주어지면 `effective_date <= as_of` vintage 만 포함 — 그
+            시점까지 공시된 정정만 반영. None 이면 전체(현재까지 알려진 모든 정정 =
+            메타 이력 뷰). look-ahead 0 보장.
+
+        No Advice (§2.2):
+            사실(effective_date / value / is_active / superseded_by)만 반환.
+            "정정으로 개선/악화" 같은 판단·라벨 없음. 순수 관측 반환.
+
+        Args:
+            code: KRX 종목코드.
+            fiscal_period: 특정 분기만 필터. None 이면 전 분기 모두.
+            as_of: PIT look-ahead 차단 기준일. None 이면 필터 없음.
+
+        Returns:
+            FinancialRecord list — (fiscal_period, effective_date, id) asc 정렬.
+            code 가 존재하지 않거나 해당 vintage 없으면 빈 list.
         """
         ...
 
@@ -304,6 +548,47 @@ class FinancialRepository(Protocol):
               FK 만족. T19 orchestrator 가 citation → financial 순서.
             - SQL 구현체는 같은 id 중복 시 IntegrityError (id 는 PK). Fake 는
               overwrite (단순화).
+        """
+        ...
+
+
+@runtime_checkable
+class TreasurySharesRepository(Protocol):
+    """자사주 (보통주 자기주식수) — supersede chain 해소 (financials 패턴)."""
+
+    def fetch_latest_active(
+        self,
+        code: str,
+        *,
+        as_of: date,
+        batch_cutoff: BatchCutoff | None = None,
+    ) -> TreasurySharesRecord | None:
+        """`as_of` 시점에 active 였던 최신 fiscal_period 의 자사주 record.
+
+        `batch_cutoff` (M1 T48c 재현): None (default) 이면 무필터. 주입 시 frozen
+        이하 DART batch 가 생산한 row 로 한정 (financials 와 동일 정정 chain ×
+        cutoff 보수 분기 복원, C#1). EXCLUDE_ALL 이면 전부 제외 (→ None).
+
+        구현체는 financials 처럼 `latest_active_by_key` (fiscal_period) 로 정정
+        chain 을 as_of-time 해소한 뒤, 그 중 가장 최신 fiscal_period (effective_
+        date 기준) 1 건을 반환. 없으면 None (정식 N/A — DbFieldProvider 가
+        `shares_treasury` N/A).
+
+        `as_of` 는 keyword-only required — 호출자가 PIT 의도를 type-level 명시.
+        """
+        ...
+
+    def save_treasury_shares(
+        self, records: Sequence[TreasurySharesRecord],
+    ) -> None:
+        """자사주 row bulk insert — DART 일배치 합류 (financials 패턴).
+
+        Invariant:
+            - 정정공시 시 호출자가 `superseded_by` 를 옛 row.id 로 설정 (본
+              메서드는 INSERT-only, 기존 row 변경 X — append-only).
+            - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼
+              있어야 FK 만족 (배치 orchestrator 가 citation → treasury 순서).
+            - SQL 구현체는 같은 id 중복 시 IntegrityError. Fake 는 overwrite.
         """
         ...
 
@@ -323,6 +608,187 @@ class CorporateActionRepository(Protocol):
 
         호출자가 "effective 기준" 으로 필터하려면 결과를 PITEnforcer 의 helper 로 후처리.
         action_types None 이면 모든 종류.
+        """
+        ...
+
+
+@runtime_checkable
+class DividendRepository(Protocol):
+    """현금배당(cash_dividend) — 이중 PIT (announced 가용성 축 + effective 발생 축).
+
+    ## 이중 PIT 축 설계 근거 (ADR-0035 D6)
+
+    ### announced_date 축 (정보 가용성 — look-ahead 방지)
+    `announced_date <= as_of` 조건은 "as_of 시점에 투자자가 공시로 알 수 있었던
+    배당"만 허용한다. announced_date > as_of 인 배당은 as_of 당일에는 존재를
+    알 수 없으므로 PIT 재현에서 제외해야 한다. 이 축은 기존 CorporateActionRepository
+    와 동일하게 PITEnforcer.filter_active_records(date_of=announced_date)로 처리하며
+    정정공시 supersede chain 해소도 포함한다.
+
+    ### effective_date 축 (배당락 사건 발생 — total return 재투자 대상)
+    `effective_date <= as_of` 조건은 "as_of 시점에 배당락(권리락)이 실제로 발생한
+    배당"만 허용한다. 배당락일(effective_date)이 as_of 이후인 경우, 그 배당은
+    공시는 됐으나 아직 배당락 사건이 발생하지 않은 상태다. total return 계산에서
+    배당 재투자 효과를 반영하려면 해당 배당락이 실제로 발생(effective_date ≤ as_of)
+    한 배당만 누적해야 한다.
+
+    ### 왜 두 축 모두 필요한가
+    announced_date 축만 적용하면: 공시는 됐으나 아직 배당락이 미발생인 미래 배당
+    (effective_date > as_of)이 포함된다. 이를 total return 재투자에 포함하면
+    §2.4 PIT 위반(미래 이익을 as_of 시점에 실현한 것으로 가정)이다.
+
+    effective_date 축만 적용하면: 배당락은 발생했으나 아직 공시되지 않은
+    (announced_date > as_of) 배당이 포함될 수 있다 — look-ahead 위반.
+
+    따라서 "as_of 시점에 공시로 알 수 있었고(announced ≤ as_of) 배당락이 이미
+    발생한(effective ≤ as_of) 현금배당"만이 §2.4 PIT 정합 total return 재투자
+    대상이다. 둘 중 하나라도 위반하면 PIT 오염.
+    """
+
+    def fetch_dividends(
+        self,
+        code: str,
+        *,
+        as_of: date,
+    ) -> Sequence[CorporateActionRecord]:
+        """이중 PIT cash_dividend 목록.
+
+        반환 조건 (두 조건 모두 만족):
+            1. announced_date <= as_of  (정보 가용성, supersede chain 해소 포함)
+            2. effective_date <= as_of  (배당락 사건 발생)
+
+        ## supersede chain 해소 범위 (fetch_actions 와 동일 — chain truncation 금지)
+        supersede chain 은 **해당 code 의 전체 corporate_action 집합**에서 해소된다
+        (부분 차집합 truncation 없음). cash_dividend 필터는 chain 해소 **후** 적용한다.
+
+        근거: cash_dividend(orig) 가 다른 action_type(예: split) successor 로
+        superseded 되는 cross-action_type chain 이 존재할 수 있다. 만약 fetch 단계에서
+        action_type=="cash_dividend" 로 먼저 좁히면 successor(non-cash_dividend) 가
+        record_by_id 에 부재하여 `_is_active_one_hop` 가 orig 을 보수적으로 active
+        복원 → superseded 된 orig 부활 오판 (§2.4 위반). 또한 그 truncation 은
+        `fetch_actions(action_types={"cash_dividend"})` 의 corruption 검출(전체 chain
+        integrity 검사) 과 비대칭이 되어 §2.10 재현성 hole 을 만든다.
+
+        따라서 본 메서드의 결과는 "전체 corporate_action chain 해소 **후**
+        cash_dividend 필터 + effective_date <= as_of 필터" 다 (oracle 리뷰 Low-1 —
+        `pit_resolution.resolve_dividends` 가 단일 출처). `fetch_actions(action_types=
+        {"cash_dividend"})` 와는 **cross-action_type chain 이 없을 때만** byte-동일
+        하다(그 helper 는 action_type 을 chain 해소 **전**에 좁힘). cross-action_type
+        chain 이 있으면 본 메서드(해소 후 필터)가 정답이고 fetch_actions 의 좁힘은
+        truncation 오판이 된다 — 즉 본 메서드는 fetch_actions 보다 **안전한 쪽**이다.
+
+        정렬: (effective_date, created_at, str(id)) — CorporateActionRepository 동일.
+        """
+        ...
+
+    def save_dividends(
+        self, records: Sequence[CorporateActionRecord],
+    ) -> None:
+        """cash_dividend row bulk insert (append-only).
+
+        Invariant:
+            - 모든 record 의 action_type 이 "cash_dividend" 이어야 함. 위반 시
+              ValueError (방어).
+            - insert 시 `superseded_by` 는 **반드시 NULL** 이어야 함. non-NULL 이면
+              ValueError. 정정공시 supersede 는 INSERT 가 아닌 `update_superseded_by`
+              로 수행 (financials / treasury_shares / corporate_action 패턴과 동일 —
+              self-FK 순서 의존 제거: successor-first insert 순서를 강제하지 않음).
+            - batch 전체를 먼저 검증(action_type · superseded_by)한 뒤 add/mutate —
+              부분 mutate 후 raise 금지 (atomic). 위반 record 가 하나라도 있으면
+              어떤 record 도 저장되지 않는다.
+            - SQL 구현체는 같은 id 중복 시 IntegrityError. Fake 는 overwrite.
+
+        `details` contract (Fake/SQL round-trip 비대칭 방지):
+            `details` 값은 **JSON-scalar (str/int/float/bool/None) 만** 허용한다.
+            Decimal / date 등은 JSON round-trip 비대칭(SQL 은 JSON 강제 직렬화,
+            Fake 는 Python 객체 보존)을 유발하므로 금지. per_share 같은 금액은
+            문자열로 저장한다 (기존 관행: `{"per_share": "500"}`).
+        """
+        ...
+
+    def update_superseded_by(
+        self, record_id: UUID, successor_id: UUID,
+    ) -> None:
+        """정정공시 chain — cash_dividend 원 row 의 superseded_by 를 NULL→successor set.
+
+        ADR-0020 D4 — cash_dividend 의 유일 허용 UPDATE 경로
+        (SqlCorporateActionRepository.update_superseded_by 와 동일 불변식).
+        save_dividends 가 insert 시 superseded_by=NULL 만 허용하므로, 정정공시
+        처리는 (정정 row insert + 본 메서드로 원 row supersede) 2 단계다 —
+        successor-first insert 순서에 의존하지 않는다.
+
+        불변식 (ADR-0020 D1):
+            - 대상 row 가 존재해야 함.
+            - 대상 row 의 현재 superseded_by 가 NULL 이어야 함 (chain 1 회성).
+            - successor row 가 존재해야 함 (self-FK 무결성).
+            - superseded_by 외 컬럼은 변경하지 않음.
+
+        Raises:
+            AppendOnlyViolationError: 대상/successor 부재 또는 이미 superseded.
+        """
+        ...
+
+
+@runtime_checkable
+class MacroIndicatorRepository(Protocol):
+    """ECOS 거시지표 — vintage 이중 시간축 PIT 조회.
+
+    매크로 지표는 동일 기준 기간(reference_date)에 대해 공표 시점(vintage_date)이
+    다른 여러 값이 append-only 로 누적된다(잠정치 → 확정치). PIT 정합 조회는 이
+    이중 시간축을 모두 as_of 로 제한하여 look-ahead 를 0 으로 차단한다.
+
+    PIT 조회 규약 — fetch_latest 의 선택 기준:
+
+        WHERE indicator_id = ?
+          AND reference_date <= as_of    -- as_of 이후의 미래 기간 제외
+          AND vintage_date   <= as_of    -- as_of 시점에 알 수 있던 관측만 허용
+        ORDER BY reference_date DESC, vintage_date DESC
+        LIMIT 1
+
+    이 쿼리의 의미:
+        "as_of 시점에 알 수 있었던 가장 최근 기준 기간의, 그 기간에 대한 가장
+        최신 관측값."
+
+    잠정→확정 재현 보장:
+        같은 reference_date 에 잠정 vintage(v_prov)와 확정 vintage(v_final) 가
+        있을 때 —
+            as_of ∈ [v_prov, v_final) → vintage_date <= as_of 조건이 v_prov 만
+                통과 → 잠정값 반환.
+            as_of >= v_final → v_final 도 통과 → ORDER BY vintage_date DESC 로
+                v_final(확정값) 선택.
+        이로써 as_of 를 고정하면 항상 동일 값이 재현된다(look-ahead 0, 불변).
+
+    batch_cutoff 파라미터 없음:
+        KRX/DART 의 batch_cutoff 는 "어느 배치 run 이 생산한 row인가"를 제한하는
+        재현 축. 반면 매크로 vintage_date 는 한국은행의 공표 시점 자체이므로
+        vintage_date <= as_of 가 곧 재현 축이다. 별도 batch_cutoff 없이도
+        look-ahead 0 이 보장된다.
+    """
+
+    def fetch_latest(
+        self,
+        indicator_id: str,
+        *,
+        as_of: date,
+    ) -> MacroIndicatorRecord | None:
+        """as_of 시점 PIT 정합 최신 관측값. 없으면 None.
+
+        vintage 이중 시간축 PIT 규약 (look-ahead 0):
+            reference_date <= as_of AND vintage_date <= as_of 를 동시에 만족하는
+            row 중 reference_date DESC, vintage_date DESC 로 정렬한 첫 번째 row.
+
+        잠정→확정 재현:
+            같은 reference_date 에 대해 잠정 vintage 와 확정 vintage 가 모두 존재할
+            때, as_of 가 잠정·확정 사이면 잠정값, 확정 이후면 확정값을 반환한다.
+            as_of 고정 시 결과가 불변이므로 과거 분석을 byte-동일하게 재현 가능.
+
+        Args:
+            indicator_id: ECOS 통계 식별자 (예: "722Y001/0101000").
+            as_of: PIT 기준 시점 (keyword-only required). 호출자가 PIT 의도를
+                type-level 로 명시.
+
+        Returns:
+            MacroIndicatorRecord — 조건을 만족하는 단일 관측값. 데이터 없으면 None.
         """
         ...
 
@@ -349,4 +815,90 @@ class StockSnapshotRepository(Protocol):
         factor_uuids: frozenset[UUID] | None = None,
     ) -> Sequence[StockSnapshotRecord]:
         """`(code, as_of)` 의 여러 factor — Stock Detail 뷰의 지표 카드들."""
+        ...
+
+    def save_snapshots(self, records: Sequence[StockSnapshotRecord]) -> None:
+        """precompute 일배치 합류 — snapshot **UPSERT** (같은 key overwrite).
+
+        Invariant (UPSERT — prices/financials 의 INSERT-only 와 의도적 상이):
+            - snapshot 은 derived recomputable cache 다 — 정정공시 후 재계산하여
+              같은 `(stock_code, as_of_date, factor_uuid)` 를 **overwrite** 하는 것이
+              **routine** (StockSnapshotRecord docstring). 따라서 Sql/Fake 모두
+              UPSERT 로 통일(중복 시 IntegrityError 가 아니라 갱신) — 구현체 간
+              대칭(oracle 리뷰 M2: Sql-raise/Fake-overwrite 비대칭은 배치 cycle 함정).
+            - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼 있어야
+              FK 만족(배치 orchestrator 가 citation → snapshot 순서 강제).
+        """
+        ...
+
+
+# =============================================================================
+# ETF NAV Record + Repository (ADR-0023 D3-a) — R4 deferred
+#
+# canonical_id / factor pack / ORM / migration / 일배치 wiring 미등록.
+# 데이터 영구화 (R4) 진입 전까지 SqlNavRepository / ETF NAV ORM 작성 금지.
+# =============================================================================
+
+@dataclass(frozen=True, slots=True)
+class NavRecord:
+    """ETF 일별 NAV · 시장가 · 괴리율 · AUM — PIT record.
+
+    `NavRow` (adapter canonical) 의 DB record 표현. KRX NAV 는 정정 안 됨 →
+    supersede 없음 (MarketCapRecord 와 동일 구조).
+
+    `effective_date` = 기준일 (KRX 거래일) — `effective_date <= as_of` PIT 의미.
+    `premium_discount_rate` = (market_price - nav) / nav.
+
+    canonical_id / factor pack 미등록 — R4 deferred (ADR-0023 D8).
+    SqlNavRepository / ETF NAV ORM / migration 은 R4 합류 시 구현.
+    """
+
+    id: UUID
+    code: str
+    effective_date: date
+    nav: Decimal
+    market_price: Decimal
+    premium_discount_rate: Decimal
+    aum: Decimal | None
+    citation_id: UUID
+    created_at: datetime
+
+
+@runtime_checkable
+class NavRepository(Protocol):
+    """ETF NAV — KRX NAV 는 정정 안 됨 → supersede 없음 (MarketCapRepository 동형).
+
+    PIT 의미: `effective_date <= as_of` 중 가장 최신 record.
+    `as_of` 는 keyword-only required — 호출자가 PIT 의도를 type-level 로 명시.
+
+    canonical_id / factor pack 미등록 상태 — R4 deferred.
+    SqlNavRepository 구현체는 R4 합류 시 작성.
+    """
+
+    def get_nav(
+        self,
+        code: str,
+        *,
+        as_of: date,
+    ) -> NavRecord | None:
+        """`effective_date <= as_of` 중 가장 최신 NavRecord. 없으면 None.
+
+        Args:
+            code: KRX ETF 종목코드.
+            as_of: PIT 기준일 (keyword-only required).
+
+        Returns:
+            가장 최신 NavRecord 또는 None (해당 ETF 의 데이터 없음).
+        """
+        ...
+
+    def save_navs(self, records: Sequence[NavRecord]) -> None:
+        """NavRecord bulk insert.
+
+        Invariant (MarketCapRepository.save_market_caps 와 동일):
+            - 같은 `(code, effective_date)` 의 중복 insert 는 구현체 정책 (SQL 은
+              UNIQUE constraint raise, Fake 는 overwrite).
+            - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼 있어야
+              FK 만족.
+        """
         ...

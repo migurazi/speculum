@@ -24,6 +24,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { useEffect, useMemo, useState } from "react";
 
 import { FolderSidebar } from "@/components/Watchlist/FolderSidebar";
@@ -45,6 +46,7 @@ import {
 import { useAsOfStore } from "@/state/as-of-store";
 
 export default function WatchlistPage(): JSX.Element {
+  const t = useTranslations("watchlist");
   const qc = useQueryClient();
   const asOf = useAsOfStore((s) => s.asOf);
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(
@@ -198,7 +200,7 @@ export default function WatchlistPage(): JSX.Element {
   if (foldersQuery.isLoading) {
     return (
       <main className="px-6 py-8">
-        <p className="text-sm text-neutral-500">불러오는 중...</p>
+        <p className="text-sm text-neutral-500">{t("loading")}</p>
       </main>
     );
   }
@@ -206,7 +208,7 @@ export default function WatchlistPage(): JSX.Element {
     return (
       <main className="px-6 py-8">
         <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
-          폴더 로드 실패: {(foldersQuery.error as Error).message}
+          {t("foldersLoadError", { message: (foldersQuery.error as Error).message })}
         </div>
       </main>
     );
@@ -234,11 +236,10 @@ export default function WatchlistPage(): JSX.Element {
           // 폴더 삭제는 backend cascade 로 items 도 함께 사라짐 — 우발적
           // click 방지 (oracle T39 C2).
           const folder = folders.find((f) => f.id === id);
-          const label = folder?.name ?? "폴더";
+          const label = folder?.name ?? t("folderFallbackLabel");
           if (
             !window.confirm(
-              `"${label}" 폴더와 그 안의 모든 종목을 삭제하시겠습니까?`
-              + " 이 작업은 되돌릴 수 없습니다.",
+              t("confirmDeleteFolder", { label }),
             )
           ) {
             return;
@@ -265,9 +266,7 @@ export default function WatchlistPage(): JSX.Element {
           onRemove={async (id) => {
             // 종목 삭제 confirm (oracle T39 C2). 메모도 함께 사라짐.
             if (
-              !window.confirm(
-                "이 종목을 워치리스트에서 제거하시겠습니까?",
-              )
+              !window.confirm(t("confirmRemoveItem"))
             ) {
               return;
             }
@@ -278,7 +277,7 @@ export default function WatchlistPage(): JSX.Element {
         />
       ) : (
         <div className="flex-1 p-6">
-          <p className="text-sm text-neutral-500">폴더를 선택하세요.</p>
+          <p className="text-sm text-neutral-500">{t("noFolderSelected")}</p>
         </div>
       )}
     </main>

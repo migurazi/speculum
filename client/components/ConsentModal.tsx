@@ -28,12 +28,15 @@
  */
 
 import * as Dialog from "@radix-ui/react-dialog";
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 import { useConsent } from "@/lib/hooks/useConsent";
 
 export function ConsentModal(): JSX.Element | null {
   const { hasConsented, grantConsent } = useConsent();
+  // 클라이언트 컴포넌트의 i18n 패턴: useTranslations(네임스페이스).
+  const t = useTranslations("legal");
 
   // 3 개 필수 체크박스 state — 모두 true 일 때만 "동의하고 시작" enable.
   const [privacyChecked, setPrivacyChecked] = useState(false);
@@ -59,49 +62,40 @@ export function ConsentModal(): JSX.Element | null {
           onEscapeKeyDown={(event) => event.preventDefault()}
         >
           <Dialog.Title className="text-lg font-semibold text-neutral-900">
-            Speculum 서비스 이용 안내
+            {t("consent.modalTitle")}
           </Dialog.Title>
 
           {/* [1] 본 서비스의 성격 — ADR-0006 D7.1 [1] 본문 그대로 */}
           <section className="mt-4">
             <h3 className="text-sm font-medium text-neutral-800">
-              [1] 본 서비스의 성격
+              {t("consent.section1Heading")}
             </h3>
             <Dialog.Description className="mt-2 text-sm text-neutral-700">
-              Speculum 은 한국 주식 시장의 정량 데이터(재무 지표, 시세, 통계
-              등)를 탐색하는 도구입니다.{" "}
-              <strong>투자 권유, 투자자문, 종목 추천을 제공하지 않습니다.</strong>
+              {t("consent.section1Desc")}{" "}
+              <strong>{t("consent.section1DescStrong")}</strong>
             </Dialog.Description>
             <p className="mt-2 text-sm text-neutral-700">
-              표시되는 모든 정보는 정보 제공 목적이며, 자본시장법상 투자 자문
-              또는 유사투자자문업이 아닙니다. 투자 결정 및 그 결과에 대한 최종
-              책임은 이용자 본인에게 있습니다. 당사는 데이터의 정확성·완전성을
-              보증하지 않으며, 정보 이용으로 인한 손실에 대해 법적 책임을 지지
-              않습니다.
+              {t("consent.section1Body")}
             </p>
           </section>
 
           {/* [2] 개인정보 수집·이용 동의 — ADR-0006 D6.1 + 별도 체크박스 */}
           <section className="mt-5 rounded-md border border-neutral-200 bg-neutral-50 p-3">
             <h3 className="text-sm font-medium text-neutral-800">
-              [2] 개인정보 수집·이용 동의
+              {t("consent.section2Heading")}
             </h3>
             <ul className="mt-2 space-y-1 text-xs text-neutral-700">
               <li>
-                <span className="font-medium">수집 항목</span>: 이메일 주소,
-                Google 프로필 이름·사진, Google 계정 식별자
+                <span className="font-medium">{t("consent.section2CollectionLabel")}</span>: {t("consent.section2CollectionValue")}
               </li>
               <li>
-                <span className="font-medium">수집·이용 목적</span>: 회원 인증,
-                사용자 데이터 (관심 종목·조건셋 등) 저장
+                <span className="font-medium">{t("consent.section2PurposeLabel")}</span>: {t("consent.section2PurposeValue")}
               </li>
               <li>
-                <span className="font-medium">보유·이용 기간</span>: 회원 탈퇴
-                또는 1 년 미접속 시 즉시 파기
+                <span className="font-medium">{t("consent.section2RetentionLabel")}</span>: {t("consent.section2RetentionValue")}
               </li>
               <li>
-                <span className="font-medium">동의 거부 권리</span>: 거부 시
-                서비스 이용 불가
+                <span className="font-medium">{t("consent.section2RefusalLabel")}</span>: {t("consent.section2RefusalValue")}
               </li>
             </ul>
 
@@ -110,12 +104,12 @@ export function ConsentModal(): JSX.Element | null {
                 type="checkbox"
                 checked={privacyChecked}
                 onChange={(e) => setPrivacyChecked(e.target.checked)}
-                aria-label="개인정보 수집·이용 동의 (필수)"
+                aria-label={t("consent.section2PrivacyCheckAriaLabel")}
                 className="mt-0.5 h-4 w-4 cursor-pointer"
               />
               <span>
-                위 개인정보 수집·이용에 동의합니다.{" "}
-                <span className="text-red-700">(필수)</span>
+                {t("consent.section2PrivacyCheckLabel")}{" "}
+                <span className="text-red-700">{t("consent.section2Required")}</span>
               </span>
             </label>
 
@@ -124,13 +118,12 @@ export function ConsentModal(): JSX.Element | null {
                 type="checkbox"
                 checked={overseasChecked}
                 onChange={(e) => setOverseasChecked(e.target.checked)}
-                aria-label="개인정보 국외 이전 동의 (필수)"
+                aria-label={t("consent.section2OverseasCheckAriaLabel")}
                 className="mt-0.5 h-4 w-4 cursor-pointer"
               />
               <span>
-                본 서비스의 사용자 데이터가 해외 (미국) 에 저장됨을 이해하고
-                동의합니다.{" "}
-                <span className="text-red-700">(필수)</span>
+                {t("consent.section2OverseasCheckLabel")}{" "}
+                <span className="text-red-700">{t("consent.section2Required")}</span>
               </span>
             </label>
           </section>
@@ -138,19 +131,19 @@ export function ConsentModal(): JSX.Element | null {
           {/* [3] 연령 확인 — ADR-0006 D6.4 + 개인정보보호법 제22조의2 */}
           <section className="mt-4 rounded-md border border-neutral-200 bg-neutral-50 p-3">
             <h3 className="text-sm font-medium text-neutral-800">
-              [3] 연령 확인
+              {t("consent.section3Heading")}
             </h3>
             <label className="mt-2 flex items-start gap-2 text-sm text-neutral-800">
               <input
                 type="checkbox"
                 checked={age14Checked}
                 onChange={(e) => setAge14Checked(e.target.checked)}
-                aria-label="만 14세 이상 확인 (필수)"
+                aria-label={t("consent.section3CheckAriaLabel")}
                 className="mt-0.5 h-4 w-4 cursor-pointer"
               />
               <span>
-                본인은 만 14세 이상임을 확인합니다.{" "}
-                <span className="text-red-700">(필수)</span>
+                {t("consent.section3CheckLabel")}{" "}
+                <span className="text-red-700">{t("consent.section2Required")}</span>
               </span>
             </label>
           </section>
@@ -158,14 +151,14 @@ export function ConsentModal(): JSX.Element | null {
           {/* [4] 자세한 내용 — 처리방침 / 이용약관 link */}
           <section className="mt-4 text-xs text-neutral-600">
             <p>
-              자세한 내용:{" "}
+              {t("consent.section4Intro")}{" "}
               <a
                 href="/privacy"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="font-medium text-neutral-900 underline"
               >
-                개인정보처리방침
+                {t("consent.section4LinkPrivacy")}
               </a>{" "}
               ·{" "}
               <a
@@ -174,7 +167,7 @@ export function ConsentModal(): JSX.Element | null {
                 rel="noopener noreferrer"
                 className="font-medium text-neutral-900 underline"
               >
-                이용약관
+                {t("consent.section4LinkTerms")}
               </a>{" "}
               ·{" "}
               <a
@@ -183,7 +176,7 @@ export function ConsentModal(): JSX.Element | null {
                 rel="noopener noreferrer"
                 className="font-medium text-neutral-900 underline"
               >
-                면책조항
+                {t("consent.section4LinkDisclaimer")}
               </a>
             </p>
           </section>
@@ -199,10 +192,10 @@ export function ConsentModal(): JSX.Element | null {
                 })
               }
               disabled={!allChecked}
-              aria-label="동의하고 시작"
+              aria-label={t("consent.submitAriaLabel")}
               className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 disabled:cursor-not-allowed disabled:bg-neutral-300"
             >
-              동의하고 시작
+              {t("consent.submitButton")}
             </button>
           </div>
         </Dialog.Content>

@@ -13,9 +13,15 @@
  *   - 본 M0 의 source heuristic 은 단순화 — 운영 시 backend wire schema
  *     확장이 정도.
  *
+ * percent unit 처리 (ADR-0035 D7):
+ *   - backend 가 ratio(소수) 를 반환. 표시 layer 에서만 ×100 변환.
+ *   - `unit === "percent"` 일 때 `parseFloat(value) * 100` 후 소수 2자리 표기.
+ *   - 이중 ×100 금지 — server 는 ratio 그대로 반환, client 만 변환.
+ *
  * 관련 ADR:
  * - ADR-0007 D2 (Source attribution 의무).
  * - ADR-0004 (PER/PBR/ROE 산출 정의).
+ * - ADR-0035 D7 (총수익률/배당수익률 percent 표시).
  * - M0_PLAN T37 / AC-F-04.
  */
 
@@ -24,6 +30,7 @@ import {
   type SourceAttributionProps,
 } from "@/components/SourceAttribution";
 import type { FactorValue } from "@/lib/api/stocks";
+import { formatPercentValue } from "@/lib/factor/format";
 import { inferFactorSource } from "@/lib/factor/source";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +51,7 @@ function describeFormula(factor: FactorValue): string {
   // T22 의 factor pack 본격 활용 시 backend wire 가 formula 추가.
   return factor.canonical_id;
 }
+
 
 export function MetricCard({
   factor,
@@ -89,8 +97,12 @@ export function MetricCard({
         <SourceAttribution
           value={
             <span className="text-base">
-              {factor.value}
-              {factor.unit !== "ratio" && factor.unit !== "" ? (
+              {factor.unit === "percent"
+                ? formatPercentValue(factor.value!)
+                : factor.value}
+              {factor.unit !== "ratio" &&
+              factor.unit !== "percent" &&
+              factor.unit !== "" ? (
                 <span className="ml-1 text-xs text-neutral-500">
                   {factor.unit}
                 </span>

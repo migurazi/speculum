@@ -13,9 +13,19 @@ JCS 의 핵심 규칙 (subset 구현):
 - non-ASCII 보존 (`ensure_ascii=False`)
 - NaN / Infinity 금지 (`allow_nan=False`)
 
-cross-runtime (Python ↔ Node) 동일 hash 보장 — 단, 비-BMP supplementary
-characters 키나 매우 큰/작은 float (지수 표기) 에서 차이 발생 가능. Speculum 의
-모든 key 는 ASCII, numeric 은 int 또는 표준 decimal — 안전.
+cross-runtime (Python ↔ Node ↔ 임의 언어) 동일 hash 보장 — open-format 재현의
+load-bearing 불변식(ADR-0032 D1). 잠재 위험 2가지를 **포맷 레벨에서 봉쇄**한다:
+
+- **float 지수표기·IEEE 754 shortest-repr 차이**: factor pack 의 상수(const/weights/
+  lower/upper)는 schema 가 `decimalString`(지수표기·float 금지) 으로 강제 → JSON 에
+  number 가 들어오지 않으므로 `json.dumps(float)` 직렬화 단계 자체가 없다. 모든
+  numeric 은 decimal **문자열**(언어 무관 동일 직렬화) 또는 int(동일 직렬화).
+- **비-BMP supplementary 문자 키**: 모든 object key 는 ASCII(field/slug/op enum 등
+  schema pattern 강제). 값의 한글 등 BMP 문자는 `ensure_ascii=False` + UTF-8 로
+  결정적(JCS minimal escape).
+
+따라서 본 canonicalizer 에는 runtime-의존 단계가 없다 — 외부 구현자가 RFC 8785 JCS
++ decimalString 규약만 따르면 byte-for-byte 동일 canonical form → 동일 hash.
 
 `_` prefix — 운영 코드가 `from app.services import *` 로 import 하지 않도록.
 명시적 import (`from app.services._jcs import canonicalize_jcs`) 만 허용.

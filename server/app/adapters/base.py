@@ -44,7 +44,9 @@ __all__ = [
     "FinancialStatementRow",
     "IfrsType",
     "KrxCalendarDay",
+    "MacroIndicatorRow",
     "MarketCapRow",
+    "NavRow",
     "OHLCVRow",
     "StockMaster",
 ]
@@ -123,6 +125,36 @@ class MarketCapRow:
 
 
 @dataclass(frozen=True, slots=True)
+class NavRow:
+    """ETF 일별 NAV · 시장가 · 괴리율 · AUM — ADR-0023 D3-a.
+
+    KRX 의 ETF 가격 데이터 (pykrx `get_etf_ohlcv_by_date`) + 괴리율
+    (`get_etf_price_deviation`) 의 adapter canonical 표현. canonical_id /
+    factor pack 미등록 — R4 deferred (데이터 영구화 전 등록 금지, ADR-0023 D8).
+
+    Attributes:
+        code: KRX ETF 종목코드 (6자리 zero-padded).
+        trade_date: 기준일 (KST naive date).
+        nav: ETF 순자산가치 (NAV, 원). KRX 공시 기준.
+        market_price: ETF 시장 종가 (원).
+        premium_discount_rate: 괴리율 = (market_price - nav) / nav.
+            양수 = 프리미엄, 음수 = 디스카운트.
+        aum: 순자산총액 (원). pykrx 미제공 시 None.
+
+    Notes:
+        canonical_id 미등록 상태 — R4 (데이터 영구화 cycle) 진입 전까지
+        SqlNavRepository / ORM / migration / 일배치 wiring 금지.
+    """
+
+    code: str
+    trade_date: date
+    nav: Decimal
+    market_price: Decimal
+    premium_discount_rate: Decimal
+    aum: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
 class StockMaster:
     """KRX 종목 마스터 — ADR-0003 D2 + ADR-0009 D6.
 
@@ -172,7 +204,12 @@ class FinancialStatementRow:
         fiscal_quarter: 분기 (1~4). DART reprt_code 매핑:
             Q=1 → "11013" (1분기보고서), Q=2 → "11012" (반기보고서),
             Q=3 → "11014" (3분기보고서), Q=4 → "11011" (사업보고서 = 연간).
-        effective_date: 공시 효력일 (DART rcept_dt). PIT 의 1차 키.
+        effective_date: 공시 효력일. PIT 의 1차 키. ADR-0012 D6 — rcept_no 의
+            앞 8자리 (YYYYMMDD = DART 접수일자) 에서 직접 도출한 정밀 공시일.
+            도출 실패 (schema drift 등) 시 자본시장법 제160조 신고기한 보수값
+            fallback (`effective_date_precise = False`).
+        effective_date_precise: True 면 effective_date 가 rcept_no 도출 실
+            공시일 (정밀). False 면 신고기한 보수 추정값 (look-ahead 0 보장).
         account: dart_account_mapper 정규화된 canonical key
             (e.g., "total_assets", "net_income_consolidated").
         value: 금액 (Decimal). DART 의 thstrm_amount string 변환.
@@ -192,6 +229,47 @@ class FinancialStatementRow:
     ifrs_type: IfrsType
     rcept_no: str
     currency: str
+    effective_date_precise: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MacroIndicatorRow:
+    """ECOS 거시지표 단일 관측값 — ADR-0003 D2 canonical schema.
+
+    EcosAdapter.fetch_statistic 의 반환 단위. MacroIndicatorRecord (DB) 와 필드
+    정합을 맞춰 배치(T64)가 Row → Record 변환 시 추가 파싱 없이 1:1 복사.
+
+    Attributes:
+        indicator_id: ECOS 통계표코드 + 항목코드 조합 (예: "722Y001/0101000").
+            T62 MacroIndicatorRecord.indicator_id 와 동일 규약. EcosAdapter 가
+            STAT_CODE 와 ITEM_CODE1 을 슬래시로 결합하여 생성.
+        reference_date: 지표의 기준 시점 (KST naive date). ECOS TIME 필드를
+            주기(CYCLE)별로 파싱:
+            - D (일별): YYYYMMDD → 해당일.
+            - M (월별): YYYYMM → 해당 월 1일.
+            - Q (분기별): YYYYQ(5자리) → 분기 시작월 1일 (Q1=01, Q2=04, Q3=07, Q4=10).
+            - A (연간): YYYY → 해당 연도 1월 1일.
+            - S (반기): YYYYS(6자리) → S1=1월 1일, S2=7월 1일.
+        value: 지표 값 (Decimal). ECOS DATA_VALUE 문자열을 Decimal 로 변환.
+            빈 string / null 은 결측으로 간주하여 row 자체를 skip (절대 0 가정 금지).
+        unit: 지표 단위 (ECOS UNIT_NAME 원문, 예: "연%", "지수").
+        vintage_date: **관측 시점 근사** — ECOS API 는 공표일/개정일 필드를 제공하지
+            않는다. 항상 최신값만 반환하기 때문에, batch fetch 일자(observed_date)를
+            "우리가 이 값을 관측한 시점" 으로 vintage_date 에 주입한다. 정확한 한국은행
+            공표일이 아닌 관측 근사임에 주의 (T64 표시 시 disclaimer 대상). 배치 간
+            같은 reference_date 의 값이 바뀌면 새 vintage row 가 누적된다.
+
+    Notes:
+        indicator_id 조합 helper: `make_indicator_id(stat_code, item_code)`.
+        vintage = 관측 근사이므로 MacroIndicatorRecord 영속화 후 vintage_date
+        기반 PIT 쿼리 결과는 "해당 시점 배치가 알고 있던 값" 이라는 해석이 정확.
+    """
+
+    indicator_id: str    # STAT_CODE + "/" + ITEM_CODE1
+    reference_date: date  # TIME 파싱 결과 (주기별 date 정규화)
+    value: Decimal       # DATA_VALUE 문자열 → Decimal
+    unit: str            # UNIT_NAME 원문
+    vintage_date: date   # 관측 시점 근사 (batch fetch 일자 주입)
 
 
 @dataclass(frozen=True, slots=True)

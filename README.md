@@ -27,6 +27,39 @@
 
 ---
 
+## 데모 실행 (dev)
+
+빈 DB 로 실행하면 모든 factor 가 N/A 로 보입니다. dev 데모 seed 스크립트가
+샘플 종목/재무/가격/시총/자사주를 심어 실제 PER/PBR/ROE/EPS/시가총액 카드 +
+작동하는 Screener 를 볼 수 있게 합니다 (`as_of=2024-06-28`).
+
+```bash
+# 1) seed — server/ 에서. 기본 DB = sqlite:///./speculum_dev.db
+cd server
+python -m scripts.seed_demo
+#   (또는 명시 URL: SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db python -m scripts.seed_demo)
+
+# 2) 백엔드 — seed 와 동일 DB URL 로
+SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db uvicorn app.main:app --reload --port 8000
+
+# 3) 프론트 — client/ 에서
+cd ../client
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 pnpm dev
+```
+
+브라우저에서 http://localhost:3000 접속 후 `as_of` 를 **2024-06-28** 로 지정합니다.
+
+API 직접 확인:
+- `GET http://localhost:8000/api/stocks/005930?as_of=2024-06-28`
+- `POST http://localhost:8000/api/screen`
+  `{"as_of":"2024-06-28","conditions":[{"factor":"per:ttm-consolidated-ifrs","op":"<","value":"100"}]}`
+
+seed 스크립트는 멱등합니다 (재실행 시 같은 종목 데이터를 정리 후 재삽입). 심는
+종목: 005930·000660·035420·005380·051910·035720 (KOSPI). dev 전용이며 운영
+데이터는 일배치(`batch/`)가 생산합니다.
+
+---
+
 ## 10 핵심 기둥
 
 1. **Fidelity** — 거울은 왜곡하지 않는다 (출처·식·시점 항상 동반)

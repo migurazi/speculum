@@ -366,6 +366,7 @@ def test_convert_to_financial_records_fiscal_period() -> None:
             ifrs_type=IfrsType.CFS,
             rcept_no="C001",
             currency="KRW",
+            effective_date_precise=True,
         ),
     )
     records = _convert_to_financial_records(rows=rows, citation_id=citation_id)
@@ -378,6 +379,8 @@ def test_convert_to_financial_records_fiscal_period() -> None:
     # IfrsType.CFS.value = "consolidated" — DB schema 일관.
     assert r.ifrs_type == "consolidated"
     assert r.citation_id == citation_id
+    # ADR-0012 D6 — row 의 precise flag 가 record 로 전파.
+    assert r.effective_date_precise is True
     # superseded_by 본 cycle 미설정.
     assert r.superseded_by is None
 
@@ -396,11 +399,13 @@ def test_convert_to_financial_records_ofs_value() -> None:
             ifrs_type=IfrsType.OFS,
             rcept_no="O001",
             currency="KRW",
+            effective_date_precise=False,
         ),
     )
     records = _convert_to_financial_records(rows=rows, citation_id=citation_id)
     assert records[0].fiscal_period == "2023Q2"
     assert records[0].ifrs_type == "separate"
+    assert records[0].effective_date_precise is False
 
 
 # =============================================================================
@@ -496,3 +501,154 @@ def test_citation_saved_before_financial() -> None:
     assert summary.success_count == 1
     # 매 IFRS type 마다 citation → financial 순서. CFS+OFS 두 짝.
     assert save_order == ["citation", "financial", "citation", "financial"]
+
+
+# =============================================================================
+# 자사주 fetch + 영구화 (treasury_repo 주입)
+# =============================================================================
+
+def _totqy_row_b(
+    *,
+    se: str = "보통주",
+    istc_totqy: str = "5,969,782,550",
+    tesstk_co: str = "538,000,000",
+    rcept_no: str = "T001",
+) -> dict[str, Any]:
+    return {
+        "se": se,
+        "istc_totqy": istc_totqy,
+        "tesstk_co": tesstk_co,
+        "distb_stock_co": istc_totqy,
+        "rcept_no": rcept_no,
+        "stlm_dt": "2023-12-31",
+    }
+
+
+def _totqy_response_b(
+    *,
+    rows: list[dict[str, Any]] | None = None,
+    status: str = "000",
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "message": "정상" if status == "000" else "에러",
+        "list": rows or [],
+    }
+
+
+def _endpoint_dispatch_handler(
+    *,
+    cfs_payload: dict[str, Any],
+    ofs_payload: dict[str, Any],
+    totqy_payload: dict[str, Any],
+) -> Any:
+    """endpoint path 로 재무 (fnlttSinglAcntAll) vs 자사주 (stockTotqySttus) 분기."""
+    def _handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("stockTotqySttus.json"):
+            return httpx.Response(200, json=totqy_payload)
+        fs_div = request.url.params.get("fs_div", "")
+        if fs_div == "CFS":
+            return httpx.Response(200, json=cfs_payload)
+        if fs_div == "OFS":
+            return httpx.Response(200, json=ofs_payload)
+        return httpx.Response(400, text=f"unknown request: {path} {fs_div}")
+    return _handler
+
+
+def test_run_persists_treasury_shares_with_citation_fk() -> None:
+    """treasury_repo 주입 시 자사주 fetch + citation→treasury 순서 영구화."""
+    from app.repositories.fakes import FakeTreasurySharesRepository
+
+    adapter = _adapter_with_handler(
+        _endpoint_dispatch_handler(
+            cfs_payload=_dart_response(rows=[_dart_row(thstrm_amount="100", rcept_no="C001")]),
+            ofs_payload=_dart_response(rows=[_dart_row(thstrm_amount="200", rcept_no="O001")]),
+            totqy_payload=_totqy_response_b(rows=[_totqy_row_b(tesstk_co="538,000,000")]),
+        ),
+    )
+    mapping = CorpCodeMapping.from_dict({"005930": "00126380"})
+    citation_repo = FakeCitationRepository()
+    financial_repo = FakeFinancialRepository(records=())
+    treasury_repo = FakeTreasurySharesRepository(records=())
+
+    batch = DartDailyBatch(
+        adapter=adapter,
+        corp_mapping=mapping,
+        citation_repo=citation_repo,
+        financial_repo=financial_repo,
+        treasury_repo=treasury_repo,
+        throttle_seconds=0,
+    )
+    summary = batch.run(
+        stock_codes=["005930"], fiscal_year=2023, fiscal_quarter=4,
+    )
+    assert summary.success_count == 1
+    # CFS + OFS (2) + treasury (1) = 3.
+    assert summary.total_rows_saved == 3
+
+    # 자사주 영구화 확인 — fetch_latest_active.
+    rec = treasury_repo.fetch_latest_active("005930", as_of=date(2024, 6, 1))
+    assert rec is not None
+    assert rec.shares_treasury == 538_000_000
+    assert rec.fiscal_period == "2023Q4"
+    # citation FK — treasury citation 도 영구화 (C001/O001/T001 = 3).
+    cited = citation_repo.fetch_by_batch(summary.batch_id)
+    assert len(cited) == 3
+    assert "T001" in {c.identifier for c in cited}
+    # treasury record 의 citation_id 가 영구화된 citation 과 일치.
+    assert rec.citation_id in {c.id for c in cited}
+
+
+def test_run_skips_treasury_save_when_missing() -> None:
+    """자사주 결측 (tesstk_co '-') 시 treasury row 저장 skip — 0 가정 금지."""
+    from app.repositories.fakes import FakeTreasurySharesRepository
+
+    adapter = _adapter_with_handler(
+        _endpoint_dispatch_handler(
+            cfs_payload=_dart_response(rows=[_dart_row(thstrm_amount="100", rcept_no="C001")]),
+            ofs_payload=_dart_response(rows=[_dart_row(thstrm_amount="200", rcept_no="O001")]),
+            totqy_payload=_totqy_response_b(rows=[_totqy_row_b(tesstk_co="-")]),
+        ),
+    )
+    mapping = CorpCodeMapping.from_dict({"005930": "00126380"})
+    treasury_repo = FakeTreasurySharesRepository(records=())
+    batch = DartDailyBatch(
+        adapter=adapter,
+        corp_mapping=mapping,
+        citation_repo=FakeCitationRepository(),
+        financial_repo=FakeFinancialRepository(records=()),
+        treasury_repo=treasury_repo,
+        throttle_seconds=0,
+    )
+    summary = batch.run(
+        stock_codes=["005930"], fiscal_year=2023, fiscal_quarter=4,
+    )
+    assert summary.success_count == 1
+    # 결측 → treasury 저장 안 됨. CFS + OFS = 2.
+    assert summary.total_rows_saved == 2
+    assert treasury_repo.fetch_latest_active("005930", as_of=date(2024, 6, 1)) is None
+
+
+def test_run_without_treasury_repo_is_backward_compatible() -> None:
+    """treasury_repo 미주입 (None) 시 자사주 fetch/save skip (기존 경로 무변경)."""
+    adapter = _adapter_with_handler(
+        _fs_div_response_handler(
+            cfs_payload=_dart_response(rows=[_dart_row(thstrm_amount="100", rcept_no="C001")]),
+            ofs_payload=_dart_response(rows=[_dart_row(thstrm_amount="200", rcept_no="O001")]),
+        ),
+    )
+    mapping = CorpCodeMapping.from_dict({"005930": "00126380"})
+    batch = DartDailyBatch(
+        adapter=adapter,
+        corp_mapping=mapping,
+        citation_repo=FakeCitationRepository(),
+        financial_repo=FakeFinancialRepository(records=()),
+        throttle_seconds=0,
+        # treasury_repo 미주입.
+    )
+    summary = batch.run(
+        stock_codes=["005930"], fiscal_year=2023, fiscal_quarter=4,
+    )
+    assert summary.success_count == 1
+    assert summary.total_rows_saved == 2  # treasury 미합류.

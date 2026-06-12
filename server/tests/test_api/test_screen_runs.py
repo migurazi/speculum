@@ -66,13 +66,19 @@ def client() -> Iterator[TestClient]:
 # 1. POST /api/screen
 # =============================================================================
 
-def test_screen_returns_active_codes(client: TestClient) -> None:
+def test_screen_no_backing_data_excludes_all(client: TestClient) -> None:
+    """조건 매칭 (M1) — fact (price/financial) 미주입 fixture 면 모든 factor 가
+    N/A → 모든 종목이 조건 (PER<10) 불충족으로 제외.
+
+    M0 stub 시절엔 active universe 전체를 무조건 반환했으나, M1 은 condition 을
+    실평가하며 N/A 종목을 정직하게 제외한다 (값 없는 종목이 'PER<10' 을
+    만족한다고 주장하지 않음 — Fidelity §2.1).
+    """
     res = client.post("/api/screen?as_of=2024-05-07", json=_VALID_BODY)
     assert res.status_code == 200
     body = res.json()
-    # fixture 의 2 종목 모두 active (1975, 1996 listing) at 2024-05-07.
-    assert set(body["result_codes"]) == {"005930", "000660"}
-    assert body["total"] == 2
+    assert body["result_codes"] == []
+    assert body["total"] == 0
 
 
 def test_screen_includes_data_versions(client: TestClient) -> None:
@@ -293,12 +299,13 @@ def test_screen_uses_repository_list_active_protocol(client: TestClient) -> None
     """oracle 2 차 C1 — Repository.list_active Protocol 호출 (Fake 의 _records
     직접 접근 X).
 
-    fixture 의 active 종목 그대로 반환되면 Protocol 사용 invariant 만족.
+    M1 조건 매칭 — fact 미주입 fixture 라 결과는 빈 list 이나, list_active 가
+    universe 진입점으로 호출됨 (200 정상 응답). 조건 통과 종목의 실제 매칭은
+    test_screen_conditions.py 의 fact-backed 종목으로 검증.
     """
     res = client.post("/api/screen?as_of=2024-05-07", json=_VALID_BODY)
     assert res.status_code == 200
-    # fixture 두 종목 모두 active → 정렬됨 (current_code asc).
-    assert res.json()["result_codes"] == ["000660", "005930"]
+    assert res.json()["result_codes"] == []
 
 
 def test_repo_list_active_directly() -> None:

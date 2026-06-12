@@ -154,7 +154,12 @@ def test_screener_set_idor_protection(client: TestClient, monkeypatch) -> None:
 # =============================================================================
 
 def test_list_orders_by_updated_at_desc(client: TestClient) -> None:
-    """가장 최근에 만든 게 먼저."""
+    """가장 최근에 만든 게 먼저.
+
+    동일 timestamp tie (Windows datetime.now 해상도 ~16ms 로 빠른 연속 생성 시)
+    에도 결정적이어야 함 — repository 가 삽입(생성) 순서를 tiebreaker 로 사용하므로
+    클럭 해상도와 무관하게 second (나중 생성) 가 먼저.
+    """
     _r1 = client.post("/api/screener-sets",
                       json={**_VALID_SET, "name": "first"})
     _r2 = client.post("/api/screener-sets",

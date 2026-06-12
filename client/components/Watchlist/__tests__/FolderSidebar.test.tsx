@@ -9,12 +9,13 @@
  *   5. 선택 indicator
  */
 
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { FolderSidebar } from "../FolderSidebar";
 import type { WatchlistFolder } from "@/lib/api/watchlist";
+import { renderWithIntl } from "@/test-utils/intl";
 
 const DEFAULT_FOLDER: WatchlistFolder = {
   id: "f-default",
@@ -48,7 +49,7 @@ function renderSidebar(
   const onCreate = vi.fn(async () => undefined);
   const onRename = vi.fn(async () => undefined);
   const onDelete = vi.fn(async () => undefined);
-  render(
+  renderWithIntl(
     <FolderSidebar
       folders={[DEFAULT_FOLDER, USER_FOLDER]}
       selectedFolderId={DEFAULT_FOLDER.id}

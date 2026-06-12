@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | ACCEPTED (M0 v0.1.0, 변호사 자문 ADR-0019 와 함께 release 전 재검토) |
-| **Date** | 2026-05-28 |
+| **Status** | ACCEPTED (M0 v0.1.0; M1 minor revision 2026-05-29 — D6 정밀화: rcept_no 직접 도출, list.json 폐기) |
+| **Date** | 2026-05-28 (rev. 2026-05-29) |
 | **Deciders** | 사용자 |
-| **Related** | [[adr-0002-factor-fact-model]] D3, [[adr-0003-data-source-adapter]] D2, `docs/CONCEPT.md §2.4 PIT`, `docs/work-orders/m0-conformance-review-rev1.md` V1 |
+| **Related** | [[adr-0002-factor-fact-model]] D3, [[adr-0003-data-source-adapter]] D2, `docs/CONCEPT.md §2.4 PIT`, `docs/work-orders/m0-conformance-review-rev1.md` V1, `docs/work-orders/m1-milestone.md` T53/T54 |
 
 ## Context
 
@@ -57,13 +57,20 @@ Momus M0 conformance review V1 (Critical) 발견:
 `_fiscal_quarter_end` → `_disclosure_deadline`. 의미가 "분기말" 이 아닌 "신고기한
 완료 시점" 임을 명확화. 함수 시그니처는 동일 (`year: int, quarter: int → date`).
 
-### D3. estimated_fields marker 보존
+### D3. estimated_fields marker (M0) → effective_date_precise 컬럼 (M1)
 
-`FetchResult.estimated_fields = frozenset({"effective_date"})` 는 그대로 유지.
-이유:
-- 실제 rcept_dt (= 회사가 일찍 공시한 경우) 와 신고기한 사이의 lag 가 잔여 추정.
-- M1+ 에서 list.json endpoint fetch 도입 시 marker 가 자연스럽게 제거됨 (정확한 값).
-- ConflictDetector / 운영 alerting 의 추정 신호 channel 보존.
+**M0 v0.1.0 (구)**: `FetchResult.estimated_fields = frozenset({"effective_date"})`
+를 항상 보존 (effective_date 가 항상 신고기한 추정값이었음).
+
+**M1 (현)**: effective_date 가 rcept_no 도출 정밀 공시일 (D6) 인지, 신고기한
+보수 추정값인지에 따라 분기:
+- 정밀 (rcept_no 도출 성공) → `estimated_fields = frozenset()` (marker 불요).
+- 보수 fallback (도출 실패) → `estimated_fields = frozenset({"effective_date"})`.
+
+이 정밀 여부는 in-memory marker 를 넘어 `financials.effective_date_precise`
++ `treasury_shares.effective_date_precise` BOOLEAN 컬럼 (Alembic 0010) 으로
+영속화 — record/ORM round-trip. ConflictDetector / 운영 alerting 의 추정 신호
+channel 은 fallback 시 estimated_fields 로 그대로 보존.
 
 ### D4. PIT Enforcer 변경 없음
 
@@ -77,14 +84,49 @@ Enforcer 의 schema 확장 (estimated_fields 인식) 은 M1+ backlog.
 effective_date 는 자본시장법 신고기한 기준 보수적 근사" 명시 — T46 V2 fix 의
 disclaimer 페이지에 이미 포함됨.
 
-### D6. M1+ 정확 fetch 후속 cycle
+### D6. M1 정밀화 — rcept_no 직접 도출 (list.json 폐기)
 
-`docs/work-orders/dart-rcept-dt-precision.md` (신규 work-order, M1 우선순위):
-- DART list.json endpoint 통해 정확한 rcept_dt fetch.
-- batch (dart_daily) 통합 — rate limit 고려한 효율 fetch.
-- 본 ADR 의 보수 정책은 fallback 으로 유지 (list.json 실패 시).
-- estimated_fields 가 empty 인 경우 (정확한 fetch 성공) 와 frozen({"effective_date"})
-  의 경우 (보수 정책 적용) 의 분기 명시.
+**M0 (구 계획)**: DART `list.json` endpoint 를 별도 fetch 하여 정확한 rcept_dt
+취득 (work order T53/T54). 호출 +1, rate limit 영향.
+
+**M1 (현 결정)**: **list.json fetch 불필요 — rcept_no 에서 직접 도출**.
+
+조사 결과:
+- `fetch_financial_statement` 의 응답 (fnlttSinglAcntAll.json) 각 row 에
+  `rcept_no` (접수번호) 가 **필수 필드**로 이미 존재 (없으면 AdapterError).
+  코드가 이미 citation identifier + DART 뷰어 URL (`rcpNo={rcept_no}`) 로 사용.
+- DART `rcept_no` = 14자리 = **앞 8자리 YYYYMMDD = 접수일자 (공시일)** + 6자리
+  일련번호. 즉 정확한 공시일이 이미 응답에 포함.
+- treasury (stockTotqySttus.json) 도 `rcept_no` 보유 (`_parse_treasury_response`
+  추출).
+
+→ `dart_adapter._rcept_date(rcept_no: str) -> date | None` helper 가 rcept_no
+앞 8자리에서 정밀 공시일을 직접 도출 (별도 fetch 0, rate-limit 무관, 더 정확).
+
+**방어 fallback** (schema 예상 외 시 look-ahead 0 유지):
+- rcept_no 가 14자리 숫자가 아니거나 (placeholder/빈값/drift 포함) 앞 8자리가
+  유효 date (YYYYMMDD, 연도 2000~2100) 가 아니면 `_rcept_date` 가 None →
+  D1 의 자본시장법 신고기한 보수값 + `effective_date_precise = False` +
+  `estimated_fields = {"effective_date"}` 로 안전 fallback.
+- 도출 성공 시 `effective_date = 실 공시일`, `effective_date_precise = True`,
+  `estimated_fields = frozenset()`.
+
+**list.json 접근 폐기 사유**: rcept_no 가 이미 정확한 공시일을 담고 있어 별도
+endpoint 호출이 중복·비효율. work order T53 의 list.json fetch / rate-limit
+스크립트는 구현하지 않음 (moot).
+
+**기존 estimate row backfill 제외**: 신규 fetch 는 처음부터 precise 이므로 moot.
+정정공시 batch 처리 (supersede-chain 정밀화) 는 별도 cycle (M3 deferred).
+
+**지각 공시 (precise > 신고기한) 거동** (T66 Momus M1 review 명문화 권고): 회사가
+자본시장법 신고기한을 넘겨 지각 공시한 경우 rcept_no 의 실 공시일(precise)이 D1 의
+신고기한 보수값보다 **늦다**. 이때도 도출 성공이면 정밀 공시일을 그대로 채택한다
+(`effective_date_precise = True`). 이는 look-ahead 0 을 더 강하게 보장(실제 시장
+가용 시점이 보수 추정보다 늦으므로 PIT 안전)하나, M0 의 "보수값만" 거동 대비
+`effective_date` 가 **늦어질 수 있다** — 정상 동작이며 회귀 아님. early disclosure
+불변식 `precise ≤ deadline` 은 **기한 내 정상 공시에만** 적용되며(테스트
+`test_dart_adapter.py::test_precise_disclosure_not_later_than_deadline` 가 그 케이스를
+검증), 지각 공시는 그 늦은 가용 시점을 사실대로 반영하는 것이 PIT 정합이다.
 
 ### D7. ADR-0002 D3 의 docstring 정정
 
@@ -95,10 +137,11 @@ docstring:
 
 > `effective_date` 의 의미:
 > - KRX (가격): trade_date (정확).
-> - DART (재무제표): 본 record 가 시장에 100% 가용해진 시점. M0 v0.1.0 은
->   자본시장법 신고기한 (Q1~Q3 = +45일, Q4 = +90일) 으로 보수 산출
->   (ADR-0012 D1). 실 rcept_dt 의 정확한 값은 estimated_fields marker 보존 +
->   M1+ list.json fetch 합류 시 갱신.
+> - DART (재무제표): 본 record 가 시장에 100% 가용해진 시점. M1 정밀화 —
+>   DART 응답 rcept_no (14자리) 앞 8자리 (YYYYMMDD = 접수일자 = 공시일) 에서
+>   직접 도출 (ADR-0012 D6, `effective_date_precise = True`). 도출 실패 시
+>   자본시장법 신고기한 (Q1~Q3 = +45일, Q4 = +90일) 보수값 fallback
+>   (ADR-0012 D1, `effective_date_precise = False`). 어느 경우든 look-ahead 0.
 
 ## Rationale
 
@@ -114,10 +157,13 @@ docstring:
 
 ### Positive
 
-- **Silent look-ahead bias 제거** — Momus V1 Critical 해결.
-- **Minimal fix** — `_fiscal_quarter_end` 1 함수 + test 갱신만.
-- **법적 명확성** — 자본시장법 제160조 의 단단한 인용.
-- **estimated_fields marker 보존** — M1+ 정확 fetch 합류 시 자연 갱신.
+- **Silent look-ahead bias 제거** — Momus V1 Critical 해결 (M0).
+- **M1 정밀화 (D6)** — rcept_no 직접 도출로 신규 fetch 가 정확한 공시일 사용.
+  별도 list.json fetch 0 (rate-limit 무관). 도출 실패 시 보수 fallback 으로
+  look-ahead 0 유지.
+- **법적 명확성** — 자본시장법 제160조 의 단단한 인용 (fallback 근거).
+- **effective_date_precise 영속화** — 정밀/보수 구분이 in-memory marker 를
+  넘어 컬럼 (Alembic 0010) 으로 보존 → 재현·감사 가능.
 
 ### Negative
 
@@ -136,8 +182,10 @@ docstring:
 
 ## Alternatives Considered
 
-- **A. DART list.json endpoint fetch** — 정확한 rcept_dt. M0 scope 큼 (호출
-  +1, rate limit 영향). M1+ work-order 로 분리. **거부 (현 cycle)**.
+- **A. DART list.json endpoint fetch** — 정확한 rcept_dt. M0 에서 M1 work-order
+  로 분리했으나, M1 조사 결과 **rcept_no 가 이미 응답 필수 필드로 정확한 공시일
+  (앞 8자리) 을 담고 있어 list.json 호출이 중복·비효율 → 영구 폐기** (D6).
+  rcept_no 직접 도출 (호출 +0) 채택. **거부 (list.json), 채택 (rcept_no 도출)**.
 - **B. PIT Enforcer 가 estimated_fields 인식 + lag 적용** — schema 변경 (Source
   Citation 7-tuple 에 confidence 필드 추가). M0 minimal fix 정신 위반. **거부**.
 - **C. 분기말 그대로 + ConsentModal 에 한계 명시** — silent look-ahead bias 가

@@ -11,7 +11,7 @@
  *   7. delete 호출
  */
 
-import { render, screen } from "@testing-library/react";
+import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -20,6 +20,7 @@ import type {
   WatchlistFolder,
   WatchlistItem,
 } from "@/lib/api/watchlist";
+import { renderWithIntl } from "@/test-utils/intl";
 
 const FOLDER: WatchlistFolder = {
   id: "f-1",
@@ -59,7 +60,7 @@ function renderList(
   const onAdd = vi.fn(async () => undefined);
   const onUpdateNote = vi.fn(async () => undefined);
   const onRemove = vi.fn(async () => undefined);
-  render(
+  renderWithIntl(
     <ItemList
       folder={FOLDER}
       items={[ITEM1, ITEM2]}

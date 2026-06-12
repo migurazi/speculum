@@ -25,6 +25,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    Boolean,
     Date,
     ForeignKey,
     Index,
@@ -52,10 +53,10 @@ class FinancialORM(Base):
     code_lineage_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), nullable=False,
     )
-    # `effective_date` = M0 v0.1.0 의 자본시장법 제160조 신고기한 보수 정책
-    # (ADR-0012 D1): Q1~Q3 = 분기 종료 + 45일, Q4 = 사업연도 종료 + 90일.
-    # 실 DART rcept_dt 의 정확한 값은 estimated_fields marker 보존 + M1+
-    # list.json fetch 합류 시 갱신 (ADR-0012 D6).
+    # `effective_date` = ADR-0012 D6 — DART 응답 row 의 rcept_no (14자리 접수번호)
+    # 앞 8자리 (YYYYMMDD = 접수일자 = 공시일) 에서 직접 도출한 정밀 공시일.
+    # 도출 실패 시 자본시장법 제160조 신고기한 보수값 fallback (ADR-0012 D1):
+    # Q1~Q3 = 분기 종료 + 45일, Q4 = 사업연도 종료 + 90일.
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     fiscal_period: Mapped[str] = mapped_column(String(16), nullable=False)
     # "net_income_consolidated_ifrs" 등 dart_account_mapper 정규화된 account 키.
@@ -64,6 +65,12 @@ class FinancialORM(Base):
     unit: Mapped[str] = mapped_column(String(16), nullable=False)
     # "consolidated" | "separate" — ADR-0005.
     ifrs_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # ADR-0012 D6 — effective_date 가 rcept_no 도출 실 공시일이면 True, 신고기한
+    # 보수값 fallback 이면 False. 구 estimated_fields={"effective_date"} marker 의
+    # 영구 컬럼화. server-side default false (기존 보수 row 호환).
+    effective_date_precise: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false",
+    )
     citation_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("source_citations.id"),

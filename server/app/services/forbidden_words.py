@@ -52,10 +52,14 @@ from typing import Final
 
 
 class ForbiddenKind(Enum):
-    """금지 어휘의 분류 — ADR-0007 D4.1 / D4.2."""
+    """금지 어휘의 분류 — ADR-0007 D4.1 / D4.2 + ADR-0031 D2(sentiment)."""
 
     KO_ABSOLUTE = "ko-absolute"
     EN_ABSOLUTE = "en-absolute"
+    # sentiment(가치판단) 어휘 — LLM 출력 게이트 전용(opt-in). absolute 와 분리해
+    # conformance CLI/미들웨어 기본 검사에서 제외(ADR-0031 D2 scope 분리).
+    KO_SENTIMENT = "ko-sentiment"
+    EN_SENTIMENT = "en-sentiment"
 
 
 class ForbiddenWordsAssertError(ValueError):
@@ -109,10 +113,14 @@ class CheckScope(Enum):
 _VOCAB_PATH: Final[Path] = Path(__file__).resolve().parents[3] / "shared" / "forbidden-words.json"
 
 
-def _load_vocab() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
-    """`shared/forbidden-words.json` 에서 (ko, en, allowed) 어휘 로드.
+def _load_vocab() -> tuple[
+    tuple[str, ...], tuple[str, ...], tuple[str, ...],
+    tuple[str, ...], tuple[str, ...],
+]:
+    """`shared/forbidden-words.json` 에서 (ko_abs, en_abs, allowed, ko_sent, en_sent) 로드.
 
     SoT 가 단일 JSON 이므로 양 언어 구현이 분기 불가. 빌드 시 1 회 로드.
+    sentiment 키는 ADR-0031 D2 추가분 — 구버전 JSON 호환 위해 `.get` 기본 빈 list.
     """
     with _VOCAB_PATH.open(encoding="utf-8") as f:
         data = json.load(f)
@@ -120,10 +128,18 @@ def _load_vocab() -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
         tuple(data["ko_absolute"]),
         tuple(data["en_absolute"]),
         tuple(data["allowed_phrases"]),
+        tuple(data.get("ko_sentiment", ())),
+        tuple(data.get("en_sentiment", ())),
     )
 
 
-_KO_FORBIDDEN_RAW, _EN_FORBIDDEN_RAW, _ALLOWED_PHRASES = _load_vocab()
+(
+    _KO_FORBIDDEN_RAW,
+    _EN_FORBIDDEN_RAW,
+    _ALLOWED_PHRASES,
+    _KO_SENTIMENT_RAW,
+    _EN_SENTIMENT_RAW,
+) = _load_vocab()
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +189,25 @@ _KO_PATTERN: Final[re.Pattern[str]] = _build_korean_pattern(_KO_FORBIDDEN_RAW)
 _EN_PATTERN: Final[re.Pattern[str]] = _build_english_pattern(_EN_FORBIDDEN_RAW)
 
 
+def _build_optional_korean_pattern(words: tuple[str, ...]) -> re.Pattern[str] | None:
+    """빈 list 면 None — 빈 패턴(`""`)이 every-position 빈 매치를 내는 것을 방지."""
+    return _build_korean_pattern(words) if words else None
+
+
+def _build_optional_english_pattern(words: tuple[str, ...]) -> re.Pattern[str] | None:
+    """빈 list 면 None — 빈 패턴(`\\b(?:)\\b`)의 부작용 방지."""
+    return _build_english_pattern(words) if words else None
+
+
+# sentiment 패턴 — LLM 출력 게이트 전용(opt-in). 빈 list(en_sentiment 기본)는 None.
+_KO_SENTIMENT_PATTERN: Final[re.Pattern[str] | None] = (
+    _build_optional_korean_pattern(_KO_SENTIMENT_RAW)
+)
+_EN_SENTIMENT_PATTERN: Final[re.Pattern[str] | None] = (
+    _build_optional_english_pattern(_EN_SENTIMENT_RAW)
+)
+
+
 # =============================================================================
 # Allowed-phrase span detection (false positive 차단)
 # =============================================================================
@@ -208,12 +243,21 @@ def normalize(text: str) -> str:
     return unicodedata.normalize("NFKC", text)
 
 
-def scan_text(text: str) -> list[Match]:
+def scan_text(text: str, *, include_sentiment: bool = False) -> list[Match]:
     """주어진 텍스트에서 금지 어휘 모두 검출 (등장 순서).
 
     내부적으로 NFKC normalize 후 검사. 반환되는 Match.index 는 normalize 된
     텍스트 기준. NFKC 가 일반적으로 길이를 보존 (fullwidth → halfwidth 는 같은
     code unit count) 하므로 대부분의 경우 원본 index 와 일치.
+
+    Args:
+        text: 검사 대상.
+        include_sentiment: **기본 False** — absolute 어휘만 검사(기존 동작 그대로).
+            conformance CLI·미들웨어·일반 SYSTEM 검사는 이 기본을 쓰므로, sentiment
+            어휘("호재/악재/긍정적/부정적")가 server 주석/docstring·일반 응답에
+            정당하게 등장해도 검출하지 않는다(ADR-0031 D2 scope 분리, 회귀 0).
+            True 면 sentiment 어휘도 검출 — **LLM 추출 텍스트(생성 텍스트) 게이트
+            전용**(`disclosure_fact_extraction`). 가치판단·hallucination 2차 차단.
     """
     if not text:
         return []
@@ -251,6 +295,37 @@ def scan_text(text: str) -> list[Match]:
                 index=m.start(),
             )
         )
+
+    # sentiment 매치 — opt-in(LLM 출력 게이트 전용). allowed_spans 동일 적용.
+    if include_sentiment:
+        if _KO_SENTIMENT_PATTERN is not None:
+            for m in _KO_SENTIMENT_PATTERN.finditer(text):
+                if _is_inside_any(m.start(), m.end(), allowed_spans):
+                    continue
+                results.append(
+                    Match(
+                        word=m.group(0),
+                        canonical=m.group(0),
+                        kind=ForbiddenKind.KO_SENTIMENT,
+                        index=m.start(),
+                    )
+                )
+        if _EN_SENTIMENT_PATTERN is not None:
+            for m in _EN_SENTIMENT_PATTERN.finditer(text):
+                if _is_inside_any(m.start(), m.end(), allowed_spans):
+                    continue
+                canonical = next(
+                    (w for w in _EN_SENTIMENT_RAW if w.lower() == m.group(0).lower()),
+                    m.group(0),
+                )
+                results.append(
+                    Match(
+                        word=m.group(0),
+                        canonical=canonical,
+                        kind=ForbiddenKind.EN_SENTIMENT,
+                        index=m.start(),
+                    )
+                )
 
     results.sort(key=lambda r: r.index)
     return results
@@ -320,6 +395,7 @@ def assert_clean(
     *,
     scope: CheckScope = CheckScope.SYSTEM,
     context: str = "",
+    include_sentiment: bool = False,
 ) -> None:
     """텍스트가 깨끗하지 않으면 ValueError.
 
@@ -328,6 +404,10 @@ def assert_clean(
         scope: 검사 정책 (CheckScope 참조). USER_PRIVATE / EXTERNAL_QUOTE 는 검사 skip.
         context: 에러 메시지의 디버깅용 컨텍스트 (예: "stock_detail.card.title").
             **호출자는 사용자 입력을 그대로 context 로 넘기지 말 것** (oracle B4).
+        include_sentiment: 기본 False(absolute 만). True 면 sentiment 어휘도 차단 —
+            **LLM 추출 텍스트 게이트 전용**(ADR-0031 D2). `disclosure_fact_extraction`
+            이 SYSTEM scope + include_sentiment=True 로 호출해 "호재/악재" 등 가치판단
+            을 2차 차단. 미들웨어·일반 SYSTEM 검사는 기본(False)이라 회귀 0.
 
     Raises:
         ValueError: 금지 어휘 검출 시.
@@ -340,7 +420,7 @@ def assert_clean(
     if scope in (CheckScope.USER_PRIVATE, CheckScope.EXTERNAL_QUOTE):
         return
 
-    matches = scan_text(text)
+    matches = scan_text(text, include_sentiment=include_sentiment)
     if matches:
         details = ", ".join(f"{m.word!r}@{m.index}" for m in matches)
         # context 의 control character 제거 (log injection 방어).

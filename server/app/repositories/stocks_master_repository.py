@@ -105,6 +105,26 @@ class StocksMasterRepository(Protocol):
         """
         ...
 
+    def list_delisted_before(
+        self, *, cutoff: date,
+    ) -> Sequence[StockMasterRecord]:
+        """`delisting_date <= cutoff` 인 폐지 lineage — survivorship backfill universe.
+
+        `list_active` 의 보집합(폐지분). 과거 시점 universe(`list_active(as_of=t)`)
+        복원 시, t 에는 상장 중이었으나 이후 폐지된 종목은 현 일배치(활성 종목만
+        수집)에서 OHLCV 가 누락된다 — survivorship bias 로 백테스트 결과가 환상이
+        된다(ADR-0027 §7.3). 본 method 가 그 소급 backfill 대상(폐지 종목 전체)을
+        조회해 `SurvivorshipBackfillBatch` 가 과거 OHLCV 를 채운다.
+
+        Args:
+            cutoff: 이 날짜 이하에 폐지된 종목만(보통 today — 전 폐지 종목).
+
+        Returns:
+            폐지 종목 record(delisting_date asc 결정적 정렬). 폐지 종목은
+            `current_code` 가 None 일 수 있어 정렬 key 로 못 쓴다(delisting_date + id).
+        """
+        ...
+
 
 class FakeStocksMasterRepository(StocksMasterRepository):
     """In-memory KRX 마스터 — T13 SQLAlchemy 구현체의 contract reference.
@@ -209,3 +229,19 @@ class FakeStocksMasterRepository(StocksMasterRepository):
             active.append(r)
         # 결정적 정렬 — current_code asc (None 은 active 정의상 미존재).
         return tuple(sorted(active, key=lambda r: r.current_code or ""))
+
+    def list_delisted_before(
+        self, *, cutoff: date,
+    ) -> Sequence[StockMasterRecord]:
+        """폐지 lineage — delisting_date IS NOT NULL AND delisting_date <= cutoff."""
+        delisted = [
+            r
+            for r in self._records
+            if r.delisting_date is not None and r.delisting_date <= cutoff
+        ]
+        # 결정적 정렬 — 폐지일 asc, 동일 폐지일은 lineage id 로 tie-break.
+        # (current_code 는 폐지 시 None 가능이라 정렬 key 부적합. delisting_date 는
+        # 필터로 not-None 이 보장되나 mypy 협조 위해 date.min fallback — 미발생.)
+        return tuple(
+            sorted(delisted, key=lambda r: (r.delisting_date or date.min, str(r.id)))
+        )

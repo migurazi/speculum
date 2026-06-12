@@ -1,4 +1,4 @@
-"""T18/T19 M1 통합 테스트 — SQLite 위에서 종목/회사별 SAVEPOINT rollback.
+"""T18/T19/KOSIS M1 통합 테스트 — SQLite 위에서 종목/회사/지표별 SAVEPOINT rollback.
 
 oracle T18/T19 M1 — 일배치의 종목/회사 처리 중 DB write 실패 시 partial
 commit 차단. session.begin_nested() SAVEPOINT 가 정확히 그 종목/회사의
@@ -10,6 +10,9 @@ write 만 rollback.
     2. DartDailyBatch — 회사 1 성공 + 회사 2 의 financial save 실패 → 회사 1
        만 영구화.
     3. session=None (Fake mode) — savepoint 없이 기존 동작 (역호환).
+    4. KosisDailyBatch idempotent SAVEPOINT — 같은 observed_date 2회 run:
+       1차 적재 성공, 2차는 지표별 UNIQUE IntegrityError → skip, PendingRollbackError
+       없이 지표 2·3 정상 처리 (연쇄 실패 0). Critical 버그 재현·검증.
 """
 
 from __future__ import annotations
@@ -221,15 +224,15 @@ def test_dart_savepoint_rolls_back_failed_company_only(
 
     # oracle T19 L2 — financial row 직접 검증. 회사 1 영구화 + 회사 2 rollback.
     # _dart_row 의 default account_id = "ifrs-full_Assets" → canonical
-    # "total_assets". as_of 는 fiscal_quarter=4 의 신고기한 (ADR-0012 D1) =
-    # 2023-12-31 + 90일 = 2024-03-30 이후. 2024-04-01 으로 안전 마진.
+    # "total_assets". effective_date 는 rcept_no="20240501000123" 도출 정밀
+    # 공시일 (ADR-0012 D6) = 2024-05-01. as_of=2024-05-15 으로 안전 마진.
     fin_005930 = financial_repo.fetch_financials(
-        "005930", as_of=date(2024, 4, 1),
+        "005930", as_of=date(2024, 5, 15),
         account="total_assets",
     )
     assert len(fin_005930) > 0
     fin_000660 = financial_repo.fetch_financials(
-        "000660", as_of=date(2024, 4, 1),
+        "000660", as_of=date(2024, 5, 15),
         account="total_assets",
     )
     assert fin_000660 == ()
@@ -265,3 +268,142 @@ def test_krx_session_none_uses_nullcontext() -> None:
     )
     summary = batch.run(as_of=date(2024, 5, 7), market="KOSPI")
     assert summary.success_count == 1
+
+
+# =============================================================================
+# T-KOSIS — KosisDailyBatch idempotent SAVEPOINT (Critical 버그 재현·검증)
+# =============================================================================
+
+def test_kosis_savepoint_idempotent_no_cascading_failure(
+    db_session: Session,
+) -> None:
+    """KOSIS idempotent 재수집 — 지표 1 IntegrityError 가 지표 2·3 막지 않음.
+
+    Critical 버그 재현 + 수정 검증:
+        구버전: _process_indicator 내 session.rollback() 호출 → 외부 트랜잭션
+        abort → 지표 2·3 PendingRollbackError 연쇄 실패.
+        수정 후: begin_nested() SAVEPOINT 자동 rollback → 지표 1 skip,
+        지표 2·3 정상 처리, session 상태 정상 유지.
+
+    시나리오:
+        1차 run: 지표 3개 × 2 rows 적재 → total_rows_saved=6.
+        2차 run (same observed_date): UNIQUE IntegrityError → 지표 3개 모두
+        skip, success_count=0, skipped_count=3, failure_count=0.
+        PendingRollbackError 발생 시 테스트 실패 (연쇄 실패 재현).
+    """
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from app.adapters.base import FetchResult, MacroIndicatorRow
+    from app.models.source_citation import SourceCitation, SourceKind
+    from app.repositories.citation_repository import SqlCitationRepository
+    from batch.kosis_daily import KosisDailyBatch, _KosisIndicator
+
+    observed = date(2024, 6, 1)
+
+    # 지표 3개 정의 — 실제 _KOSIS_INDICATORS 와 유사한 구조.
+    indicators = [
+        _KosisIndicator(
+            org_id="101", tbl_id="DT_A", itm_id="T10",
+            obj_l="ALL", prd_se="M", label="ind_a",
+        ),
+        _KosisIndicator(
+            org_id="101", tbl_id="DT_B", itm_id="T20",
+            obj_l="ALL", prd_se="M", label="ind_b",
+        ),
+        _KosisIndicator(
+            org_id="101", tbl_id="DT_C", itm_id="T30",
+            obj_l="ALL", prd_se="M", label="ind_c",
+        ),
+    ]
+
+    def _make_kosis_fetch_result(
+        tbl_id: str, batch_id: object, observed_date: date,
+    ) -> FetchResult:
+        """지표별 2 rows FetchResult 생성 — indicator_id 를 tbl_id 로 구분."""
+        citation = SourceCitation(
+            id=uuid4(),
+            source=SourceKind.KOSIS,
+            identifier=f"101/{tbl_id}/T10",
+            retrieved_at=datetime.now(UTC),
+            effective_date=observed_date,
+            adapter_version="1.0.0",
+            batch_id=batch_id,  # type: ignore[arg-type]
+            url=f"https://kosis.kr/test/{tbl_id}",
+        )
+        rows = (
+            MacroIndicatorRow(
+                indicator_id=f"kosis/101/{tbl_id}/T10",
+                reference_date=date(2024, 4, 1),
+                value=Decimal("3.5"),
+                unit="%",
+                vintage_date=observed_date,
+            ),
+            MacroIndicatorRow(
+                indicator_id=f"kosis/101/{tbl_id}/T10",
+                reference_date=date(2024, 5, 1),
+                value=Decimal("3.6"),
+                unit="%",
+                vintage_date=observed_date,
+            ),
+        )
+        return FetchResult(data=rows, citations=(citation,), warnings=())
+
+    class _RealKosisAdapter:
+        """실 DB 통합 테스트용 KosisAdapter stub."""
+
+        SOURCE_KIND = "KOSIS"
+
+        def fetch_statistic(
+            self,
+            *,
+            tbl_id: str,
+            batch_id: object,
+            observed_date: date,
+            **_kw: object,
+        ) -> FetchResult:
+            return _make_kosis_fetch_result(tbl_id, batch_id, observed_date)
+
+    citation_repo = SqlCitationRepository(db_session)
+
+    # FakeBatchRunRepository — SqlBatchRunRepository auto-creation 방지 아님.
+    # 실 batch_runs 영속화가 필요하므로 session 을 사용하는 SqlBatchRunRepository
+    # 가 자동 생성되도록 batch_run_repo=None (session 주입 시 default).
+    batch = KosisDailyBatch(
+        adapter=_RealKosisAdapter(),  # type: ignore[arg-type]
+        citation_repo=citation_repo,
+        session=db_session,
+        throttle_seconds=0,
+        indicators=indicators,
+        # batch_run_repo=None → SqlBatchRunRepository(session) auto-create.
+    )
+
+    # ── 1차 run ──────────────────────────────────────────────────────────────
+    summary1 = batch.run(observed_date=observed)
+
+    assert summary1.success_count == 3, (
+        f"1차 run: 지표 3개 모두 성공해야 함 (got {summary1.success_count})"
+    )
+    assert summary1.failure_count == 0
+    assert summary1.skipped_count == 0
+    assert summary1.total_rows_saved == 6  # 3 지표 × 2 rows
+
+    # ── 2차 run (same observed_date) ─────────────────────────────────────────
+    # 지표별 UNIQUE IntegrityError → SAVEPOINT 자동 rollback → skip.
+    # Critical 검증: PendingRollbackError 없이 지표 2·3 정상 처리.
+    summary2 = batch.run(observed_date=observed)
+
+    # 지표 3개 모두 UNIQUE 충돌 → skip (실패 아님).
+    assert summary2.skipped_count == 3, (
+        f"2차 run: 지표 3개 모두 UNIQUE skip 이어야 함 (got {summary2.skipped_count}). "
+        f"failure_count={summary2.failure_count}, failures={summary2.failures} — "
+        "PendingRollbackError 연쇄 실패 의심."
+    )
+    assert summary2.success_count == 0
+    assert summary2.failure_count == 0, (
+        f"2차 run: failure 는 0 이어야 함 (got {summary2.failure_count}). "
+        f"failures={summary2.failures} — "
+        "지표 1 IntegrityError 가 지표 2·3 PendingRollbackError 로 연쇄 실패."
+    )
+    assert summary2.total_rows_saved == 0

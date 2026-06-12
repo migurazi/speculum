@@ -25,6 +25,7 @@
  * - M0_PLAN T39 / AC-F-06
  */
 
+import { useTranslations } from "next-intl";
 import { useState } from "react";
 
 import type { WatchlistFolder, WatchlistItem } from "@/lib/api/watchlist";
@@ -54,6 +55,7 @@ export function ItemList({
   isMutating,
   addError,
 }: ItemListProps): JSX.Element {
+  const t = useTranslations("watchlist");
   const [codeInput, setCodeInput] = useState<string>("");
   const [noteInput, setNoteInput] = useState<string>("");
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -93,8 +95,8 @@ export function ItemList({
           {folder.name}
         </h2>
         <p className="mt-0.5 text-xs text-neutral-500">
-          {items.length} 종목
-          {folder.is_default ? " · 기본 폴더" : ""}
+          {t("itemCount", { count: items.length })}
+          {folder.is_default ? t("defaultFolderSuffix") : ""}
         </p>
       </header>
 
@@ -104,8 +106,8 @@ export function ItemList({
             type="text"
             value={codeInput}
             onChange={(e) => setCodeInput(e.target.value)}
-            placeholder="종목코드 (예: 005930)"
-            aria-label="종목코드"
+            placeholder={t("codeInputPlaceholder")}
+            aria-label={t("codeInputAriaLabel")}
             className="w-40 rounded border border-neutral-300 px-2 py-1 font-mono text-sm"
             disabled={isMutating}
           />
@@ -113,8 +115,8 @@ export function ItemList({
             type="text"
             value={noteInput}
             onChange={(e) => setNoteInput(e.target.value)}
-            placeholder="메모 (선택, 최대 280 자)"
-            aria-label="메모"
+            placeholder={t("noteInputPlaceholder")}
+            aria-label={t("noteInputAriaLabel")}
             maxLength={MAX_NOTE_LEN}
             className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm"
             disabled={isMutating}
@@ -125,12 +127,12 @@ export function ItemList({
             disabled={!canAdd}
             className="rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 disabled:cursor-not-allowed disabled:bg-neutral-300"
           >
-            추가
+            {t("addButton")}
           </button>
         </div>
         {codeInput.length > 0 && !codeIsValid ? (
           <p className="text-xs text-amber-700">
-            종목코드는 1~6 자리 숫자여야 합니다.
+            {t("codeInvalidMessage")}
           </p>
         ) : null}
         {addError !== null ? (
@@ -145,7 +147,7 @@ export function ItemList({
 
       {items.length === 0 ? (
         <p className="text-sm text-neutral-500">
-          이 폴더에는 아직 종목이 없습니다.
+          {t("emptyFolder")}
         </p>
       ) : (
         <ul className="space-y-2">
@@ -172,7 +174,7 @@ export function ItemList({
                           if (e.key === "Escape") setEditingId(null);
                         }}
                         maxLength={MAX_NOTE_LEN}
-                        aria-label="메모 변경"
+                        aria-label={t("editNoteAriaLabel")}
                         className="flex-1 rounded border border-neutral-300 px-2 py-1 text-sm"
                         autoFocus
                       />
@@ -181,13 +183,13 @@ export function ItemList({
                         onClick={() => void commitEdit(item.id)}
                         className="rounded bg-neutral-800 px-2 py-1 text-xs text-white hover:bg-neutral-700"
                       >
-                        저장
+                        {t("saveButton")}
                       </button>
                     </div>
                   ) : (
                     <div className="text-sm text-neutral-700">
                       {item.note ?? (
-                        <span className="text-neutral-400">메모 없음</span>
+                        <span className="text-neutral-400">{t("noNote")}</span>
                       )}
                     </div>
                   )}
@@ -199,7 +201,7 @@ export function ItemList({
                       onClick={() => startEdit(item)}
                       className="hover:underline"
                     >
-                      메모 수정
+                      {t("editNoteButton")}
                     </button>
                   ) : null}
                   <button
@@ -207,7 +209,7 @@ export function ItemList({
                     onClick={() => void onRemove(item.id)}
                     className="hover:underline"
                   >
-                    삭제
+                    {t("removeItemButton")}
                   </button>
                 </div>
               </div>

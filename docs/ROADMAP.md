@@ -26,7 +26,7 @@ DART/KRX   PIT 토글            Notes              Pack share
 | **M0** | `0.1.0` | 2026-08~10 | 3~5 개월 | **planning** |
 | **M1** | `0.5.0` | M0 + 2~4 개월 | 2~4 개월 | outlook |
 | **M2** | `1.0.0` | M1 + 4~6 개월 | 4~6 개월 | outlook |
-| **M3+** | `1.x~2.x` | M2 + ? | ? | outlook |
+| **M3** | `1.x` | M2 + ? | ? | **구현 완료 (release blocker: 자문)** |
 
 ---
 
@@ -117,14 +117,29 @@ DART/KRX   PIT 토글            Notes              Pack share
 
 ---
 
-## 5. M3+ — outlook
+## 5. M3 v1.x — outlook 6항목 구현 완료 (release blocker: 자문)
 
-- **백테스트 모듈**: M1 의 PIT 위에서 본격 backtest engine
-- **공시 metadata 표시**: 사용자 요청 종목 1개의 DART 공시 list (제목·시각만, 본문 X — §2.7 Observation over Speculation 경계)
-- **Factor pack community**: 사용자 간 공유 + import 시 명시적 매핑 (Norma §2.3 identity 3 원칙 적용)
-- **Portfolio 회계 (검토)**: 보유 수량·평단·실현/미실현 손익 — 정보 제공 도구의 경계 신중 검토
-- **세금 계산 (검토)**: 양도소득세·증권거래세 — 법적 책임 영역
-- **AI 통합 (검토)**: 사용자 요청 종목의 공시 요약 정도. 8기둥 §2.7 와 충돌 위험 신중 검토
+ROADMAP §5 의 6개 후보를 **단일 M3** 로 확정·구현 완료(2026-06-02). 상세 task 분해 + 가드레일은
+[M3_PLAN.md](M3_PLAN.md). 각 항목은 ADR 로 8기둥 경계를 명문화하고 visual-gate/디스클레이머
+게이트로 강제했다(기존 ForbiddenWordsGuard·PackRegistry freeze 인프라 재사용).
+
+| # | 항목 | ADR | 상태 |
+|---|------|-----|------|
+| 2 | **공시 metadata 표시** | ADR-0026 | 완료 — 제목·시각·DART링크만, 본문 0, on-demand 1종목 |
+| 1 | **백테스트 모듈** | ADR-0027 | 완료 — PIT rebalance 순회·거래비용 강제·survivorship 디스클로저·grayscale 출력게이트·freeze |
+| 3 | **Factor pack community** | ADR-0028 | 완료 — visibility 공유·USER_SHARED 게이트·중립정렬·import content_hash fail-loud |
+| 4 | **Portfolio 회계** | ADR-0029 | 완료 — 거래내역 사실 회계·회계≠평가 분리·등락색0·세전·수동입력 |
+| 5 | **세금 계산** | ADR-0030 | 완료(증권거래세) — 단순 산식·디스클레이머 게이트. 양도세는 자문 후 유보 |
+| 6 | **AI 통합** | ADR-0031 | 완료 — 구조화 사실추출(요약 아님)·LLM 출력 게이트·LLM adapter 추상화 |
+
+### release blocker (운영 노출 전 필수)
+1. **세무사+변호사 자문** (ADR-0030 D6 + ADR-0006 D9) — 세금(#5) 양도세·세율 정확성·Portfolio 손익 표시.
+2. **LLM 운영 연동 + Momus §2.7 검토** (ADR-0031 D6) — AI(#6) 운영 LLM adapter·sentiment 어휘 보강.
+3. **백테스트 survivorship 소급 backfill** (ADR-0027) — 폐지 종목 과거 OHLCV 데이터 운영 cycle.
+
+### M4+ 향후 검토 (M3 범위 외)
+- 백테스트 가중 최적화/리스크 패리티 (§2.2 — 영구 범위 외 가능성)
+- 증권사 계좌 연동(MyData) — ADR-0029 D4 에서 기각, 재검토 시 자본시장법·개인정보 신중
 
 ---
 

@@ -6,7 +6,8 @@
 핵심 결정:
     - **conditions / selected_factors JSON** — tuple[dict] / tuple[str] 의
       직렬화. PG=JSONB, SQLite=JSON.
-    - **user_id 인덱스** — list_all hot path. FK 없음 (M0 single-user).
+    - **user_id 인덱스 + FK → users.id** (ADR-0021 D2, migration 0012). M2
+      user 격리 anchor. 기존 SYSTEM-owned set 은 sentinel row 참조.
     - **이름 중복 허용** — ScreenerSet 은 UUID 식별 (Fake docstring 일관).
 """
 
@@ -16,7 +17,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import JSON, Index, String, Uuid
+from sqlalchemy import JSON, ForeignKey, Index, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -30,7 +31,13 @@ class ScreenerSetORM(Base):
     __tablename__ = "screener_sets"
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    user_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # user_id FK → users.id (ADR-0021 D2, migration 0012). M2 부터 user 격리의
+    # FK anchor — 기존 SYSTEM-owned set 은 sentinel(00000000-…-0001) 참조.
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", name="fk_screener_sets_user_id_users"),
+        nullable=False,
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     # conditions: list of {"factor": "per:ttm", "op": "<", "value": "10"}.
     conditions: Mapped[list[dict[str, Any]]] = mapped_column(

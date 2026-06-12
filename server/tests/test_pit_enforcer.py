@@ -34,6 +34,7 @@ from app.repositories.fakes import (
     FakePriceRepository,
     FakeStockSnapshotRepository,
 )
+from app.repositories.pit_protocols import MacroIndicatorRecord
 from app.services.as_of_policy import PIT_POLICY_VERSION
 from app.services.pit_enforcer import (
     LookAheadError,
@@ -130,6 +131,27 @@ def _ca(
     )
 
 
+def _macro(
+    *,
+    reference_date: date,
+    vintage_date: date,
+    indicator_id: str = "722Y001/0101000",
+    value: float = 3.5,
+    record_id: UUID | None = None,
+) -> MacroIndicatorRecord:
+    """vintage 이중 시간축 macro record builder — reference/vintage 만 의미 있음."""
+    return MacroIndicatorRecord(
+        id=record_id or uuid4(),
+        indicator_id=indicator_id,
+        reference_date=reference_date,
+        value=Decimal(str(value)),
+        unit="percent",
+        vintage_date=vintage_date,
+        citation_id=_DUMMY_CITATION_ID,
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+
+
 # =============================================================================
 # 1. filter_records_at_or_before
 # =============================================================================
@@ -179,6 +201,112 @@ def test_assert_no_lookahead_raises_on_future_record() -> None:
     assert exc.value.record_id == UUID("00000000-0000-0000-0000-000000000001")
     assert exc.value.effective_date == date(2024, 7, 1)
     assert exc.value.as_of == date(2024, 5, 1)
+
+
+# =============================================================================
+# 2b. assert_no_lookahead — date_of strategy (M5_PLAN #1 — 이중 PIT 의 announced_date)
+# =============================================================================
+
+def test_assert_no_lookahead_date_of_passes_when_announced_valid() -> None:
+    """date_of=announced_date — announced 정상이면 effective 미래여도 통과.
+
+    corporate action 의 announced_date 축 검사. announced_date <= as_of 면
+    effective_date 가 as_of 이후여도 announced 축 assert 는 통과 (이중 PIT 의
+    한 축씩 별도 검사라는 점 확인).
+    """
+    enforcer = PITEnforcer()
+    ca = _ca(announced_date=date(2024, 3, 1), effective_date=date(2024, 9, 1))
+    enforcer.assert_no_lookahead(
+        [ca], date(2024, 5, 1), date_of=lambda r: r.announced_date,
+    )  # no raise — announced(2024-03-01) <= as_of(2024-05-01)
+
+
+def test_assert_no_lookahead_date_of_raises_on_future_announced() -> None:
+    """date_of=announced_date — announced_date > as_of 이면 LookAheadError.
+
+    effective_date 는 정상(<= as_of)이지만 announced_date 가 as_of 이후인 case.
+    예외에 담기는 위반 date 는 announced_date (effective 아님).
+    """
+    enforcer = PITEnforcer()
+    ca_id = UUID("00000000-0000-0000-0000-0000000000c9")
+    # effective_date 정상(<= as_of), announced_date 위반(> as_of).
+    ca = _ca(
+        announced_date=date(2024, 7, 1),
+        effective_date=date(2024, 4, 1),
+        record_id=ca_id,
+    )
+    with pytest.raises(LookAheadError) as exc:
+        enforcer.assert_no_lookahead(
+            [ca], date(2024, 5, 1), date_of=lambda r: r.announced_date,
+        )
+    assert exc.value.record_id == ca_id
+    assert exc.value.effective_date == date(2024, 7, 1)  # 위반한 announced_date
+    assert exc.value.as_of == date(2024, 5, 1)
+
+
+def test_assert_no_lookahead_default_unchanged_with_future_effective() -> None:
+    """date_of None (default) — 기존 effective_date 검사 동작 무영향 회귀.
+
+    같은 record (effective 정상 + announced 위반 형태) 라도 date_of 미지정이면
+    effective_date 만 검사 → 통과. date_of 파라미터 추가가 기존 무인자 호출의
+    의미를 바꾸지 않음을 확인.
+    """
+    enforcer = PITEnforcer()
+    ca = _ca(announced_date=date(2024, 7, 1), effective_date=date(2024, 4, 1))
+    enforcer.assert_no_lookahead([ca], date(2024, 5, 1))  # no raise
+
+
+# =============================================================================
+# 2c. assert_no_vintage_lookahead — macro 이중 시간축 (M5_PLAN #1)
+# =============================================================================
+
+def test_assert_no_vintage_lookahead_passes_when_both_axes_valid() -> None:
+    """reference_date <= as_of AND vintage_date <= as_of → 통과 (거짓양성 0)."""
+    enforcer = PITEnforcer()
+    m = _macro(reference_date=date(2024, 1, 1), vintage_date=date(2024, 2, 15))
+    enforcer.assert_no_vintage_lookahead([m], date(2024, 3, 1))  # no raise
+
+
+def test_assert_no_vintage_lookahead_raises_on_future_reference() -> None:
+    """reference_date > as_of → LookAheadError (vintage 는 정상)."""
+    enforcer = PITEnforcer()
+    m_id = UUID("00000000-0000-0000-0000-0000000000e7")
+    # reference 위반, vintage 정상.
+    m = _macro(
+        reference_date=date(2024, 6, 1),
+        vintage_date=date(2024, 2, 1),
+        record_id=m_id,
+    )
+    with pytest.raises(LookAheadError) as exc:
+        enforcer.assert_no_vintage_lookahead([m], date(2024, 3, 1))
+    assert exc.value.record_id == m_id
+    assert exc.value.effective_date == date(2024, 6, 1)  # 위반한 reference_date
+    assert exc.value.as_of == date(2024, 3, 1)
+
+
+def test_assert_no_vintage_lookahead_raises_on_future_vintage() -> None:
+    """vintage_date > as_of → LookAheadError (reference 는 정상)."""
+    enforcer = PITEnforcer()
+    m_id = UUID("00000000-0000-0000-0000-0000000000e8")
+    # reference 정상, vintage 위반.
+    m = _macro(
+        reference_date=date(2024, 1, 1),
+        vintage_date=date(2024, 6, 1),
+        record_id=m_id,
+    )
+    with pytest.raises(LookAheadError) as exc:
+        enforcer.assert_no_vintage_lookahead([m], date(2024, 3, 1))
+    assert exc.value.record_id == m_id
+    assert exc.value.effective_date == date(2024, 6, 1)  # 위반한 vintage_date
+    assert exc.value.as_of == date(2024, 3, 1)
+
+
+def test_assert_no_vintage_lookahead_inclusive_boundary() -> None:
+    """reference_date == as_of AND vintage_date == as_of → inclusive 통과."""
+    enforcer = PITEnforcer()
+    as_of = date(2024, 3, 1)
+    m = _macro(reference_date=as_of, vintage_date=as_of)
+    enforcer.assert_no_vintage_lookahead([m], as_of)  # no raise
 
 
 # =============================================================================
@@ -515,6 +643,7 @@ def test_fake_stock_snapshot_repository_exact_match() -> None:
         inputs={},
         citation_id=_DUMMY_CITATION_ID,
         computed_at=datetime(2024, 5, 1, 17, 0, tzinfo=UTC),
+        data_versions={},
     )
     repo = FakeStockSnapshotRepository([snap])
 
@@ -537,12 +666,14 @@ def test_fake_stock_snapshot_repository_fetches_multiple_factors() -> None:
         value=Decimal("12.34"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
         computed_at=datetime(2024, 5, 1, tzinfo=UTC),
+        data_versions={},
     )
     snap_b = StockSnapshotRecord(
         stock_code="005930", as_of_date=date(2024, 5, 1), factor_uuid=factor_b,
         value=Decimal("1.2"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
         computed_at=datetime(2024, 5, 1, tzinfo=UTC),
+        data_versions={},
     )
     repo = FakeStockSnapshotRepository([snap_a, snap_b])
 
@@ -645,6 +776,7 @@ def test_stock_snapshot_record_id_is_cached() -> None:
         value=Decimal("12.34"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
         computed_at=datetime(2024, 5, 1, tzinfo=UTC),
+        data_versions={},
     )
     id_a = snap.id
     id_b = snap.id
@@ -740,9 +872,14 @@ def test_fakes_all_export_is_explicit() -> None:
     from app.repositories import fakes as fakes_mod
     expected = {
         "FakeCorporateActionRepository",
+        "FakeDividendRepository",
         "FakeFinancialRepository",
+        "FakeMacroIndicatorRepository",
+        "FakeMarketCapRepository",
+        "FakeNavRepository",
         "FakePriceRepository",
         "FakeStockSnapshotRepository",
+        "FakeTreasurySharesRepository",
     }
     assert set(fakes_mod.__all__) == expected
 
@@ -754,6 +891,7 @@ def test_stock_snapshot_record_satisfies_pit_record_protocol() -> None:
         value=Decimal("12.34"), value_unit="ratio", inputs={},
         citation_id=_DUMMY_CITATION_ID,
         computed_at=datetime(2024, 5, 1, tzinfo=UTC),
+        data_versions={},
     )
     # property 노출 — effective_date / id / created_at
     assert snap.effective_date == snap.as_of_date

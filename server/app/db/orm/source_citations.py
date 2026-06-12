@@ -19,7 +19,7 @@
     - `retrieved_at` ↔ `retrieved_at` (UTC tz-aware datetime)
     - `effective_date` ↔ `effective_date` (KST date)
     - `adapter_version` ↔ `adapter_version` (String(64))
-    - `batch_id` ↔ `batch_id` (UUID)
+    - `batch_id` ↔ `batch_id` (UUID, FK → batch_runs.id — M1 T48a SoT)
     - `url` ↔ `url` (String(2048), nullable)
     - `created_at` ↔ `created_at` (UTC tz-aware datetime, default now)
 """
@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from uuid import UUID
 
-from sqlalchemy import Date, Index, String, Uuid
+from sqlalchemy import Date, ForeignKey, Index, String, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -51,7 +51,24 @@ class SourceCitationORM(Base):
     )
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
-    batch_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # M1 T48a — batch_runs.id 로의 FK. **DEFERRABLE INITIALLY DEFERRED** 가
+    # 필수: 일배치는 citation 을 실행 중에 INSERT 하지만 batch_runs row 는 배치
+    # 종료 시에 INSERT (BatchSummary 영속화). 즉시 검사 FK 라면 citation flush
+    # 시점에 batch_runs row 가 아직 없어 위반 → deferred 로 COMMIT 시점에 검사하여
+    # "종목별 SAVEPOINT 안에서 citation INSERT → 배치 종료 시 batch_runs INSERT →
+    # outer COMMIT" 순서를 허용. PostgreSQL + SQLite(PRAGMA foreign_keys=ON) 모두
+    # DEFERRABLE INITIALLY DEFERRED 절을 존중. (M1 지시서 T48a SoT 불변식:
+    # 모든 source_citations.batch_id ∈ batch_runs.id.)
+    batch_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey(
+            "batch_runs.id",
+            name="fk_source_citations_batch_id_batch_runs",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    )
     # ADR-0002 D3 — url None 허용 (FDR 등 일부 source).
     url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

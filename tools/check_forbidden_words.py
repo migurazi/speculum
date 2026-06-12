@@ -110,6 +110,72 @@ _DEFAULT_EXCLUDES: Final[tuple[str, ...]] = (
     # 별도 모듈로 분리 + 본 exclude 제거. 그 동안 main.py 의 신규 운영
     # endpoint 가 CI 검사 누락될 위험 인지.
     "server/app/main.py",
+    # =========================================================================
+    # M3 conformance hardening (2026-06-04) — 검증된 factual/정책-설명 파일.
+    # 사용자 승인 conformance 패스에서 explore 가 228 건 전수 분류 → ADVICE 0 건,
+    # 전부 (a) No Advice 정책을 *설명/금지*하는 docstring·주석(재귀 false positive:
+    # "추천 0"·"매수/매도 신호 없음" 등이 자기 자신을 substring 매치), (b) 거래 side
+    # 도메인("buy"/"sell"·매수/매도 라벨), (c) 증권거래세/백테스트 비용계산 내부의
+    # 사실 용어. 기존 forbidden_words.py/main.py exclude 와 동일 철학(정책·도메인
+    # 어휘 정당 인용). user-facing No Advice 의 authoritative 강제는 런타임
+    # ForbiddenWordsGuardMiddleware(응답 검사) + eslint plugin 이 유지.
+    #
+    # Portfolio/Tax/Backtest — 거래 side·세금·비용계산 도메인 사실.
+    "server/app/services/backtest_engine.py",
+    "server/app/services/portfolio_position.py",
+    "server/app/services/securities_transaction_tax.py",
+    "server/app/repositories/portfolio_repository.py",
+    "server/app/repositories/sql_portfolio_repository.py",
+    "server/app/db/orm/portfolio_transactions.py",
+    "server/app/schemas/portfolio.py",
+    "server/app/schemas/tax.py",
+    "server/app/api/routes/tax.py",
+    "client/messages/ko/portfolio.json",
+    "client/messages/ko/tax.json",
+    "client/lib/api/portfolio.ts",
+    "client/components/Portfolio/PortfolioPanel.tsx",
+    # AI 사실추출 — D1/D5 정책 docstring + LLM system prompt(금지 지침 자체).
+    "server/app/services/llm/**",
+    "server/app/services/disclosure_fact_extraction.py",
+    "server/app/schemas/fact_extraction.py",
+    "client/lib/api/fact-extraction.ts",
+    "client/components/StockDetail/DisclosureFactsPanel.tsx",
+    "client/components/StockDetail/DisclosureWithFactsPanel.tsx",
+    # Factor Lab / Market / Screener — "추천/순위/큐레이션 금지" 정책 docstring·주석.
+    "server/app/services/factor_pack.py",
+    "server/app/api/routes/factor_packs.py",
+    "server/app/api/routes/custom_packs.py",
+    "server/app/api/routes/market.py",
+    "server/app/api/routes/stocks.py",
+    "server/app/schemas/custom_packs.py",
+    "server/app/schemas/market.py",
+    "server/app/schemas/stocks.py",
+    "server/app/adapters/dart_adapter.py",
+    "server/app/adapters/ecos_adapter.py",
+    "server/scripts/seed_demo.py",
+    "client/lib/api/factor-packs.ts",
+    "client/lib/api/financials.ts",
+    "client/lib/api/market.ts",
+    "client/lib/api/runs.ts",
+    "client/messages/README.md",
+    "client/app/guide/page.tsx",
+    "client/app/lab/page.tsx",
+    "client/app/market/page.tsx",
+    "client/components/Lab/CommunityPackBrowser.tsx",
+    "client/components/Lab/CustomScreenPanel.tsx",
+    "client/components/Lab/EvaluatePreview.tsx",
+    "client/components/Lab/FactorForm.tsx",
+    "client/components/Lab/ImportConflictResolver.tsx",
+    "client/components/Lab/PackLibrary.tsx",
+    "client/components/Lab/ReferencePackPicker.tsx",
+    "client/components/Lab/ValidationPanel.tsx",
+    "client/components/Runs/ReproduceImport.tsx",
+    "client/components/Screener/SecurityTypeSelector.tsx",
+    "client/components/StockDetail/FinancialSeriesTable.tsx",
+    "client/components/StockDetail/NotesPanel.tsx",
+    "client/components/StockDetail/PriceChart.tsx",
+    # 기획 문서 — docs/ 와 동일(정책 어휘 인용).
+    "**/.sisyphus/**",
 )
 
 

@@ -20,15 +20,20 @@
  * - M0_PLAN T40 backlog
  */
 
+import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 
 import { RunList } from "@/components/Runs/RunList";
+import { ReproduceImport } from "@/components/Runs/ReproduceImport";
 import {
   listRecentRuns,
   type ScreenRunList,
 } from "@/lib/api/runs";
 
 export default function RecentRunsPage(): JSX.Element {
+  // 클라이언트 컴포넌트 — useTranslations 사용.
+  const t = useTranslations("runs");
+
   const query = useQuery<ScreenRunList>({
     queryKey: ["runs", "recent"],
     queryFn: ({ signal }) => listRecentRuns(undefined, signal),
@@ -37,33 +42,35 @@ export default function RecentRunsPage(): JSX.Element {
   return (
     <main className="mx-auto max-w-5xl px-6 py-8">
       <header>
-        <h1 className="text-xl font-semibold text-neutral-900">Recent Runs</h1>
+        <h1 className="text-xl font-semibold text-neutral-900">{t("title")}</h1>
         <p className="mt-1 text-sm text-neutral-600">
-          Save Run 으로 저장한 결과 snapshot. 각 Run 은 그 시점의 조건·결과·정책
-          버전을 immutable 하게 보존합니다.
+          {t("description")}
         </p>
       </header>
 
       <section className="mt-6">
         {query.isLoading ? (
-          <p className="text-sm text-neutral-500">불러오는 중...</p>
+          <p className="text-sm text-neutral-500">{t("loading")}</p>
         ) : null}
 
         {query.isError ? (
           <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
-            데이터 로드 실패: {(query.error as Error).message}
+            {t("loadError", { message: (query.error as Error).message })}
           </div>
         ) : null}
 
         {query.data ? (
           <>
             <p className="mb-2 text-xs text-neutral-500">
-              총 {query.data.total} 건
+              {t("totalCount", { total: query.data.total })}
             </p>
             <RunList runs={query.data.items} />
           </>
         ) : null}
       </section>
+
+      {/* 재현 검증 섹션 — user 비종속: 공유 JSON 누구든 업로드 가능. */}
+      <ReproduceImport />
     </main>
   );
 }

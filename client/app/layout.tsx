@@ -23,6 +23,8 @@
  */
 
 import type { Metadata, Viewport } from "next";
+import { NextIntlClientProvider } from "next-intl";
+import { getMessages, getTranslations } from "next-intl/server";
 import type { ReactNode } from "react";
 
 import { AsOfBanner } from "@/components/AsOfDatePicker";
@@ -33,11 +35,18 @@ import { NavBar } from "@/components/NavBar";
 import "./globals.css";
 import { Providers } from "./providers";
 
-export const metadata: Metadata = {
-  title: "Speculum",
-  description:
-    "한국 주식 시장의 정량 데이터 탐색기 — 본 도구는 정보 제공 목적이며 투자 자문이 아닙니다.",
-};
+/**
+ * 서버 컴포넌트의 i18n 패턴 (Phase B 골든 샘플 ①):
+ * 메타데이터 같은 비동기 서버 영역에서는 getTranslations 로 네임스페이스를
+ * 받아 t(key) 로 조회한다. useTranslations(클라이언트) 와 대비.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("common");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+  };
+}
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -48,23 +57,30 @@ interface RootLayoutProps {
   readonly children: ReactNode;
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
-}: RootLayoutProps): JSX.Element {
+}: RootLayoutProps): Promise<JSX.Element> {
+  // next-intl: 서버에서 머지된 messages 를 받아 클라이언트 컴포넌트
+  // (useTranslations) 에 제공. NextIntlClientProvider 는 DisclaimerFooter 까지
+  // 포함해 body 전체를 감싼다 — Providers(react-query/next-auth) 와 공존.
+  const messages = await getMessages();
+
   return (
     <html lang="ko">
       <body className="flex min-h-screen flex-col">
-        <Providers>
-          <NavBar />
-          <AsOfBanner />
-          <div className="flex-1">{children}</div>
-          {/* ConsentModal 은 useConsent hook 의 hasConsented === false 일 때만
-              render. SSR 단계는 null 반환 (hydration 안전). */}
-          <ConsentModal />
-        </Providers>
-        {/* footer 는 provider context 미의존 — Providers 밖에 두어 렌더 트리
-            의미론 명시 (oracle T31 L-3). */}
-        <DisclaimerFooter />
+        <NextIntlClientProvider messages={messages}>
+          <Providers>
+            <NavBar />
+            <AsOfBanner />
+            <div className="flex-1">{children}</div>
+            {/* ConsentModal 은 useConsent hook 의 hasConsented === false 일 때만
+                render. SSR 단계는 null 반환 (hydration 안전). */}
+            <ConsentModal />
+          </Providers>
+          {/* footer 는 provider context 미의존 — Providers 밖에 두어 렌더 트리
+              의미론 명시 (oracle T31 L-3). */}
+          <DisclaimerFooter />
+        </NextIntlClientProvider>
       </body>
     </html>
   );

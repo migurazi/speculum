@@ -24,6 +24,7 @@ import pytest
 
 from app.repositories.screen_run_repository import (
     FakeScreenRunRepository,
+    ScreenRunAlreadyExistsError,
     ScreenRunRepository,
 )
 from app.services.screen_run import (
@@ -195,6 +196,124 @@ def test_result_hash_changes_when_data_versions_change() -> None:
     snap_a = ScreenRunBuilder.build(**common, data_versions={"factor_pack_version": "1.0.0"})
     snap_b = ScreenRunBuilder.build(**common, data_versions={"factor_pack_version": "1.0.1"})
     assert snap_a.result_hash != snap_b.result_hash
+
+
+def test_schema_version_bump_does_not_recompute_stored_11key_hash() -> None:
+    """M1 T48b freeze 약속 — SNAPSHOT_SCHEMA_VERSION "1.0"→"1.1" bump 이 이미
+    저장된 11 키 run 의 result_hash 를 재계산하지 않음.
+
+    저장된 run 의 data_versions (예: "1.0" 시점의 11 키) 를 그대로 명시 주입하면
+    bump 후에도 result_hash 가 byte-동일 — hash 는 빌드 시 입력 data_versions 로
+    결정되며 (snapshot_schema_version 값 포함) build 가 호출자의 dict 를 verbatim
+    사용하기 때문. ORM round-trip 도 stored result_hash 를 그대로 복원 (재계산 X).
+    """
+    stored_11key = {
+        "factor_pack_content_hash": "abc",
+        "factor_pack_slug": "speculum-builtin",
+        "factor_pack_version": "1.0.0",
+        "calendar_content_hash": "cal",
+        "calendar_version": "1.0.0",
+        "pit_policy_version": "1.0.0",
+        "price_adjustment_policy_hash": "pa",
+        "adjustment_policy_version": "1.0.0",
+        "ca_policy_version": "1.0.0",
+        "evaluator_version": "1.0.0",
+        # 저장 시점은 "1.0" — bump 후에도 stored 값으로 hash 재현되어야 함.
+        "snapshot_schema_version": "1.0",
+    }
+    common = dict(
+        run_id=uuid4(),
+        conditions=[{"factor": "PER", "op": "<", "value": "10"}],
+        selected_factors=["PER"],
+        as_of=date(2024, 5, 1),
+        result_codes=["005930"],
+        computed_at=_NOW,
+    )
+    h1 = ScreenRunBuilder.build(**common, data_versions=dict(stored_11key)).result_hash
+    h2 = ScreenRunBuilder.build(**common, data_versions=dict(stored_11key)).result_hash
+    assert h1 == h2  # 동일 stored 입력 → byte-동일 (bump 무관).
+
+
+# §2.10 anchor 의 golden result_hash — 아래 stored "1.2" 14 키 dict + 고정
+# query/as_of/result_codes 로 산출한 **불변 hex 리터럴**. M7 #5 (schema 1.3, 신규
+# 3 키 도입) 후 그 stored dict 를 verbatim 주입했을 때 이 값과 byte-동일해야 한다.
+# 값이 바뀌면 = builder 가 외부 data_versions 를 verbatim 사용하지 않거나(신규 키
+# 소급 삽입), result_hash 입력 정규화가 drift 한 것 — frozen run 재현 파손 신호.
+# run_id 는 hash 입력에서 제외되므로(presentation-only) 이 값은 run_id 무관 안정.
+# 갱신은 의도된 hash-input 변경 시에만(ADR-0008 D7 / ADR-0035 D5 freeze 약속).
+_GOLDEN_1_2_RESULT_HASH = (
+    "sha256:40d490832ae398460a96ab536f34509a44670f4d20c674781a43db47016827f5"
+)
+
+
+def test_schema_1_3_bump_does_not_recompute_stored_1_2_run_hash() -> None:
+    """M7 #5 (§2.10 anchor, ADR-0035 D5) — SNAPSHOT_SCHEMA_VERSION "1.2"→"1.3"
+    bump 이 이미 저장된 "1.2" run (총수익/배당 신규 키 부재) 의 result_hash 를
+    재계산하지 않음. **golden hex 리터럴 anchor** 로 증명 (형식적 결정성 아닌
+    byte-불변 — oracle-medium M7 #5 §2.10 증명력 강화).
+
+    저장된 "1.2" 시점의 14 키 (정책 12 + batch 2, total_return_* / dividend_batch_id
+    부재) data_versions 를 그대로 명시 주입하면 schema 1.3 도입 후에도 result_hash
+    가 `_GOLDEN_1_2_RESULT_HASH` 와 byte-동일 — hash 는 호출자가 verbatim 주입한
+    dict 로 결정되며 신규 키가 소급 삽입되지 않기 때문. 또한 diff_versions 는 신규
+    1.3 키 3 개를 모두 `("", new)` 로 표시 (key-added 하위호환, matches 무영향).
+    """
+    stored_1_2 = {
+        "factor_pack_content_hash": "abc",
+        "factor_pack_slug": "speculum-builtin",
+        "factor_pack_version": "1.0.0",
+        "calendar_content_hash": "cal",
+        "calendar_version": "1.0.0",
+        "pit_policy_version": "1.0.0",
+        "price_adjustment_policy_hash": "pa",
+        "adjustment_policy_version": "1.0.0",
+        "ca_policy_version": "1.0.0",
+        "evaluator_version": "1.0.0",
+        "distribution_policy_version": "1.0",
+        "krx_batch_id": "krx-uuid",
+        "dart_batch_id": "dart-uuid",
+        # 저장 시점은 "1.2" — total_return_* / dividend_batch_id 키 부재.
+        "snapshot_schema_version": "1.2",
+    }
+    common = dict(
+        run_id=uuid4(),
+        conditions=[{"factor": "PER", "op": "<", "value": "10"}],
+        selected_factors=["PER"],
+        as_of=date(2024, 5, 1),
+        result_codes=["005930"],
+        computed_at=_NOW,
+    )
+    snap = ScreenRunBuilder.build(**common, data_versions=dict(stored_1_2))
+    h_rebuild = ScreenRunBuilder.build(
+        **common, data_versions=dict(stored_1_2),
+    ).result_hash
+    # 동일 stored "1.2" 입력 → byte-동일 (schema 1.3 도입 무관).
+    assert snap.result_hash == h_rebuild
+    # **§2.10 anchor** — golden hex 리터럴과 byte-동일. M7 #5 신규 3 키 도입이
+    # stored "1.2" run 의 hash 를 변경하지 않음을 hex 비교로 못박음 (builder 가
+    # 외부 data_versions verbatim 사용 + 신규 키 소급 삽입 안 함 증명).
+    assert snap.result_hash == _GOLDEN_1_2_RESULT_HASH
+
+    # 현재 활성 (1.3) data_versions 와 비교 — 신규 3 키가 ("", new) 로만 표시.
+    from app.services.snapshot_versions import collect_active_policy_versions
+
+    active = dict(collect_active_policy_versions())
+    active["krx_batch_id"] = "krx-uuid"
+    active["dart_batch_id"] = "dart-uuid"
+    # 신규 run 이 FSC 배당 배치를 가졌다고 가정 (added-key 표시 검증).
+    active["dividend_batch_id"] = "fsc-uuid"
+    diff = dict(snap.diff_versions(active))
+    # 신규 1.3 키는 stored "1.2" 에 부재 → ("", new) 로 added 표시.
+    assert "total_return_policy_hash" in diff
+    assert diff["total_return_policy_hash"][0] == ""
+    assert diff["total_return_policy_hash"][1] == active["total_return_policy_hash"]
+    assert "total_return_policy_version" in diff
+    assert diff["total_return_policy_version"][0] == ""
+    assert "dividend_batch_id" in diff
+    assert diff["dividend_batch_id"] == ("", "fsc-uuid")
+    # stored "1.2" 에 이미 존재한 키는 added(("", ·)) 가 아니라 양쪽 값을 가짐
+    # — 신규 1.3 키만 old=="" 로 식별됨 (key-added 격리).
+    assert diff["adjustment_policy_version"][0] != ""
 
 
 def test_result_hash_does_not_depend_on_computed_at() -> None:
@@ -440,7 +559,8 @@ def test_repo_fetch_recent_empty_for_unknown_user() -> None:
     assert tuple(repo.fetch_recent(user_id=_USER_A)) == ()
 
 
-def test_repo_save_overwrites_same_id() -> None:
+def test_repo_save_same_id_rejected_append_only() -> None:
+    """Fake 도 append-only(ADR-0021 D2) — 같은 id 재저장 거부, 기존 불변."""
     repo = FakeScreenRunRepository()
     run_id = uuid4()
     snap1 = ScreenRunBuilder.build(
@@ -456,10 +576,11 @@ def test_repo_save_overwrites_same_id() -> None:
         computed_at=_NOW,
     )
     repo.save(snap1)
-    repo.save(snap2)
+    with pytest.raises(ScreenRunAlreadyExistsError):
+        repo.save(snap2)
+    # 기존 snap1 불변 — overwrite 되지 않음.
     fetched = repo.fetch_by_id(run_id, user_id=_USER_A)
-    assert fetched == snap2
-    # recent 에 1 개만.
+    assert fetched == snap1
     runs = repo.fetch_recent(user_id=_USER_A)
     assert len(runs) == 1
 

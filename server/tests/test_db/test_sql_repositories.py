@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from app.db.converters import (
     corporate_action_record_to_orm,
     financial_record_to_orm,
+    market_cap_record_to_orm,
     price_record_to_orm,
     stocks_master_record_to_orm,
 )
@@ -46,18 +47,21 @@ from app.repositories.citation_repository import (
 from app.repositories.fakes import (
     FakeCorporateActionRepository,
     FakeFinancialRepository,
+    FakeMarketCapRepository,
     FakePriceRepository,
 )
 from app.repositories.pit_protocols import (
     CodeHistoryEntry,
     CorporateActionRecord,
     FinancialRecord,
+    MarketCapRecord,
     PriceRecord,
     StockMasterRecord,
 )
 from app.repositories.sql_repositories import (
     SqlCorporateActionRepository,
     SqlFinancialRepository,
+    SqlMarketCapRepository,
     SqlPriceRepository,
     SqlStocksMasterRepository,
 )
@@ -118,6 +122,31 @@ def _price(
     )
 
 
+def _mc(
+    *,
+    code: str = "005930",
+    effective_date: date,
+    market_cap: float = 400_000_000_000_000.0,
+    shares_outstanding: int = 5_969_782_550,
+    shares_treasury: int | None = None,
+    record_id: UUID | None = None,
+) -> MarketCapRecord:
+    return MarketCapRecord(
+        id=record_id or uuid4(),
+        code=code,
+        code_lineage_id=_DUMMY_LINEAGE_ID,
+        effective_date=effective_date,
+        market_cap=Decimal(str(market_cap)),
+        shares_outstanding=shares_outstanding,
+        shares_treasury=shares_treasury,
+        citation_id=_DUMMY_CITATION_ID,
+        created_at=datetime(
+            effective_date.year, effective_date.month, effective_date.day,
+            17, 0, tzinfo=UTC,
+        ),
+    )
+
+
 def _fin(
     *,
     fiscal_period: str,
@@ -128,6 +157,7 @@ def _fin(
     created_at: datetime | None = None,
     superseded_by: UUID | None = None,
     record_id: UUID | None = None,
+    effective_date_precise: bool = False,
 ) -> FinancialRecord:
     return FinancialRecord(
         id=record_id or uuid4(),
@@ -139,6 +169,7 @@ def _fin(
         value=Decimal(str(value)),
         unit="krw",
         ifrs_type="consolidated",
+        effective_date_precise=effective_date_precise,
         citation_id=_DUMMY_CITATION_ID,
         superseded_by=superseded_by,
         created_at=created_at or datetime(2024, 1, 1, tzinfo=UTC),
@@ -286,6 +317,109 @@ def test_sql_price_repository_inverted_range_returns_empty(
 
 
 # =============================================================================
+# SqlMarketCapRepository — Fake 와 contract 동일성 (Phase B)
+# =============================================================================
+
+def test_sql_market_cap_repository_matches_fake_latest(
+    db_session: Session,
+) -> None:
+    """fetch_latest — effective_date <= as_of 중 최신. Fake 와 동등."""
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    records = [
+        _mc(effective_date=date(2024, 1, 15), market_cap=390_000_000_000_000.0),
+        _mc(effective_date=date(2024, 3, 1), market_cap=400_000_000_000_000.0),
+        _mc(effective_date=date(2024, 5, 10), market_cap=410_000_000_000_000.0),
+    ]
+    for r in records:
+        db_session.add(market_cap_record_to_orm(r))
+    db_session.flush()
+
+    sql_repo = SqlMarketCapRepository(db_session)
+    fake_repo = FakeMarketCapRepository(records)
+
+    # as_of = 2024-04-01 → 최신은 2024-03-01 (2024-05-10 은 look-ahead 제외).
+    sql_result = sql_repo.fetch_latest("005930", as_of=date(2024, 4, 1))
+    fake_result = fake_repo.fetch_latest("005930", as_of=date(2024, 4, 1))
+    assert sql_result is not None and fake_result is not None
+    assert sql_result.effective_date == date(2024, 3, 1)
+    assert sql_result.effective_date == fake_result.effective_date
+    assert sql_result.market_cap == fake_result.market_cap
+    assert sql_result.market_cap == Decimal("400000000000000.0")
+
+
+def test_sql_market_cap_repository_pit_excludes_future(
+    db_session: Session,
+) -> None:
+    """effective_date > as_of 인 row 미사용 (look-ahead 0)."""
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    db_session.add(market_cap_record_to_orm(
+        _mc(effective_date=date(2024, 5, 10)),
+    ))
+    db_session.flush()
+    sql_repo = SqlMarketCapRepository(db_session)
+    assert sql_repo.fetch_latest("005930", as_of=date(2024, 5, 1)) is None
+
+
+def test_sql_market_cap_repository_unknown_code_returns_none(
+    db_session: Session,
+) -> None:
+    sql_repo = SqlMarketCapRepository(db_session)
+    assert sql_repo.fetch_latest("999999", as_of=date(2024, 4, 1)) is None
+
+
+def test_sql_market_cap_repository_save_and_fetch(
+    db_session: Session,
+) -> None:
+    """save_market_caps → fetch_latest round-trip (citation FK 만족)."""
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    sql_repo = SqlMarketCapRepository(db_session)
+    sql_repo.save_market_caps([
+        _mc(effective_date=date(2024, 5, 2), shares_treasury=None),
+    ])
+    fetched = sql_repo.fetch_latest("005930", as_of=date(2024, 5, 2))
+    assert fetched is not None
+    assert fetched.shares_outstanding == 5_969_782_550
+    # pykrx None 자사주는 None 그대로 보존 (0 으로 변환 금지).
+    assert fetched.shares_treasury is None
+
+
+def test_sql_market_cap_repository_preserves_shares_treasury(
+    db_session: Session,
+) -> None:
+    """shares_treasury non-None 도 round-trip 보존 (DART 보강 합류 대비)."""
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    sql_repo = SqlMarketCapRepository(db_session)
+    sql_repo.save_market_caps([
+        _mc(effective_date=date(2024, 5, 2), shares_treasury=123_456),
+    ])
+    fetched = sql_repo.fetch_latest("005930", as_of=date(2024, 5, 2))
+    assert fetched is not None
+    assert fetched.shares_treasury == 123_456
+
+
+def test_sql_market_cap_repository_rejects_duplicate_id(
+    db_session: Session,
+) -> None:
+    """market_caps.id UNIQUE 강제 — silent overwrite 차단 (prices C2 미러)."""
+    from sqlalchemy.exc import IntegrityError
+
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    fixed_id = UUID("00000000-0000-0000-0000-0000000000e1")
+    sql_repo = SqlMarketCapRepository(db_session)
+    sql_repo.save_market_caps([
+        _mc(effective_date=date(2024, 5, 1), code="005930", record_id=fixed_id),
+    ])
+    # 같은 id, 다른 (code, effective_date) — composite PK 만족, id UNIQUE 위반.
+    with pytest.raises(IntegrityError):
+        sql_repo.save_market_caps([
+            _mc(
+                effective_date=date(2024, 5, 1), code="005931",
+                record_id=fixed_id,
+            ),
+        ])
+
+
+# =============================================================================
 # SqlFinancialRepository — supersede chain (Fake 동일)
 # =============================================================================
 
@@ -336,6 +470,46 @@ def test_sql_financial_repository_resolves_supersede_chain(
         account="net_income_consolidated_ifrs",
     )
     assert [r.id for r in sql_result] == [r.id for r in fake_result] == [v2_id]
+
+
+def test_sql_financial_effective_date_precise_round_trip(
+    db_session: Session,
+) -> None:
+    """ADR-0012 D6 — financials.effective_date_precise ORM ↔ record round-trip.
+
+    precise=True / precise=False (default) 두 row 를 저장 후 fetch 하여 컬럼이
+    정확히 복원되는지 검증 (Sql 경로 — converters 양방향).
+    """
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    precise = _fin(
+        fiscal_period="2024Q1",
+        effective_date=date(2024, 5, 1),
+        record_id=UUID("00000000-0000-0000-0000-0000000000b1"),
+        effective_date_precise=True,
+    )
+    fallback = _fin(
+        fiscal_period="2024Q1",
+        account="total_assets",
+        effective_date=date(2024, 5, 15),
+        record_id=UUID("00000000-0000-0000-0000-0000000000b2"),
+        effective_date_precise=False,
+    )
+    repo = SqlFinancialRepository(db_session)
+    repo.save_financials([precise, fallback])
+
+    got_precise = repo.fetch_financials(
+        "005930", as_of=date(2024, 9, 1),
+        account="net_income_consolidated_ifrs",
+    )
+    assert len(got_precise) == 1
+    assert got_precise[0].effective_date == date(2024, 5, 1)
+    assert got_precise[0].effective_date_precise is True
+
+    got_fallback = repo.fetch_financials(
+        "005930", as_of=date(2024, 9, 1), account="total_assets",
+    )
+    assert len(got_fallback) == 1
+    assert got_fallback[0].effective_date_precise is False
 
 
 def test_sql_financial_repository_groups_by_fiscal_period(

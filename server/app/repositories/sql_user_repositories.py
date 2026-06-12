@@ -22,8 +22,9 @@ T13 Phase C 의 ScreenRunSnapshot 추가.
 5. **delete_folder cascade** — DB level `ondelete="CASCADE"` (watchlist_items)
    가 item 삭제. 자식 폴더는 ORM 단계에서 명시 삭제 (Fake 와 동일 logic).
 
-6. **SqlScreenRunRepository (T13 Phase C)** — save 시 같은 id overwrite (Fake
-   와 동일 M0 정책). nested query JSON 직렬화는 converters.
+6. **SqlScreenRunRepository (T13 Phase C + ADR-0021 D2)** — save 는 append-only
+   (같은 id 재저장 거부, owner 무관). M0 의 merge overwrite 정책 폐기 — IDOR
+   (타 user run overwrite) 차단 + 재현 자산 보존. nested query 직렬화는 converters.
 
 관련 ADR / 문서:
 - ADR-0011 D1 (depth ≤ 2), D2 (folder + item schema), D7 (is_default)
@@ -53,8 +54,16 @@ from app.db.converters import (
 )
 from app.db.orm.screen_runs import ScreenRunSnapshotORM
 from app.db.orm.screener_sets import ScreenerSetORM
+from app.db.orm.users import UserORM
 from app.db.orm.watchlists import WatchlistFolderORM, WatchlistItemORM
-from app.repositories.screen_run_repository import ScreenRunRepository
+from app.repositories.screen_run_repository import (
+    ScreenRunAlreadyExistsError,
+    ScreenRunRepository,
+)
+from app.repositories.user_repository import (
+    UserRecord,
+    UserRepository,
+)
 from app.repositories.watchlist_repository import (
     ScreenerSet,
     ScreenerSetRepository,
@@ -68,6 +77,7 @@ from app.services.screen_run import ScreenRunSnapshot
 __all__ = [
     "SqlScreenRunRepository",
     "SqlScreenerSetRepository",
+    "SqlUserRepository",
     "SqlWatchlistRepository",
 ]
 
@@ -374,10 +384,17 @@ class SqlScreenerSetRepository(ScreenerSetRepository):
         return record
 
     def list_all(self, *, user_id: UUID) -> Sequence[ScreenerSet]:
+        # 정렬 결정성 — updated_at 만으로는 동일 timestamp (Windows datetime.now
+        # 해상도 ~16ms 로 빠른 연속 생성 시 tie) 의 순서가 비결정. created_at /
+        # id 를 보조 key 로 추가해 API 출력 재현성 보장 (id = 최종 tiebreaker).
         stmt = (
             select(ScreenerSetORM)
             .where(ScreenerSetORM.user_id == user_id)
-            .order_by(ScreenerSetORM.updated_at.desc())
+            .order_by(
+                ScreenerSetORM.updated_at.desc(),
+                ScreenerSetORM.created_at.desc(),
+                ScreenerSetORM.id.desc(),
+            )
         )
         result = self._session.execute(stmt).scalars().all()
         return tuple(screener_set_orm_to_record(o) for o in result)
@@ -402,28 +419,52 @@ class SqlScreenerSetRepository(ScreenerSetRepository):
 # =============================================================================
 
 class SqlScreenRunRepository(ScreenRunRepository):
-    """SQLAlchemy 기반 ScreenRun snapshot repository — ADR-0008 D7.
+    """SQLAlchemy 기반 ScreenRun snapshot repository — ADR-0008 D7 + ADR-0021 D2.
 
     Fake (`FakeScreenRunRepository`) 와 동일 contract — save / fetch_by_id /
-    fetch_recent. M0 정책 = 같은 id overwrite (Fake 와 일관).
+    fetch_recent. **M2 정책 = append-only** (ADR-0021 D2): 같은 id 재저장 금지.
     """
 
     def __init__(self, session: Session) -> None:
         self._session = session
 
     def save(self, snapshot: ScreenRunSnapshot) -> None:
-        """snapshot 저장. id 중복 시 overwrite (Fake 정책).
+        """snapshot 저장 — append-only (ADR-0021 D2). 같은 id 재저장 거부.
 
-        SQLAlchemy 의 `Session.merge` 가 INSERT/UPDATE 통합 — 같은 PK row 가
-        있으면 UPDATE, 없으면 INSERT. Fake 의 overwrite 의미와 동일.
+        **M0 의 `merge` overwrite 정책 폐기**(ADR-0021 D2 — 갭 A IDOR 폐쇄).
+        구 `merge` 는 owner 검증 없이 같은 PK row 를 UPDATE 했다. 그 결과:
+            ① 타 user 가 user A 의 run id 로 save 시 user A 의 run 을 덮어씀
+               (IDOR — 재현 자산 위조/파괴).
+            ② 같은 user 의 재저장도 freeze 된 run 을 변조(§2.10 위반).
 
-        oracle 리뷰 M1 — `autoflush=True` 의 session 에서 merge 호출 직전에
-        pending INSERT 가 flush 되는 race 차단. `no_autoflush` context 안에서
-        merge 후 명시 flush — 단일 INSERT/UPDATE 결정 보장.
+        append-only 로 전환하면 두 갭이 동시에 닫힌다:
+            - 같은 id 가 이미 있으면 owner 무관 거부 → IDOR 차단 + 재현 자산
+              보존. run 은 한 번 freeze 되면 불변(정정공시 chain 과 동일 철학).
+            - run_id 는 매 Save Run 마다 `uuid4()` 신규 생성(`runs.py:97`)이라
+              정상 경로는 절대 충돌하지 않음 — 거부는 악의적/버그성 재저장만.
+
+        Note: owner-mismatch 와 same-owner re-save 를 구별하지 않고 통일 거부
+        (append-only). user_id 정보 누출 차단(ADR-0021 D2 — mismatch 와 미존재
+        구별 안 함) 측면도 만족.
+
+        Raises:
+            ScreenRunAlreadyExistsError: 같은 id 의 row 가 이미 존재.
         """
-        orm = screen_run_record_to_orm(snapshot)
+        # 1. 기존 동일 id row 확인 — append-only 위반 검사(owner 무관).
+        #    `no_autoflush` 로 pending INSERT 가 이 SELECT 를 trigger 하지 않게.
         with self._session.no_autoflush:
-            self._session.merge(orm)
+            existing = self._session.get(ScreenRunSnapshotORM, snapshot.id)
+        if existing is not None:
+            # owner 일치 여부 무관 거부 — append-only(ADR-0021 D2). IDOR(타 user
+            # overwrite) + 자기 run 변조 둘 다 차단.
+            raise ScreenRunAlreadyExistsError(
+                f"screen_run {snapshot.id} 는 이미 존재 — append-only "
+                f"(ADR-0021 D2): run 은 한 번 freeze 되면 재저장 불가"
+            )
+
+        # 2. 신규 INSERT.
+        orm = screen_run_record_to_orm(snapshot)
+        self._session.add(orm)
         self._session.flush()
 
     def fetch_by_id(
@@ -451,3 +492,51 @@ class SqlScreenRunRepository(ScreenRunRepository):
         )
         result = self._session.execute(stmt).scalars().all()
         return tuple(screen_run_orm_to_record(o) for o in result)
+
+
+# =============================================================================
+# User — SqlUserRepository (T68 NextAuth JIT provision)
+# =============================================================================
+
+class SqlUserRepository(UserRepository):
+    """SQLAlchemy 기반 User repository — T68 NextAuth (ADR-0021 D1.1).
+
+    Fake (`FakeUserRepository`) 와 동일 contract — get_by_google_sub / provision.
+    `auth.get_current_user`(AUTH_SECRET 설정 경로)만 사용한다. fallback 경로
+    (미설정)는 본 repository 를 호출하지 않으므로, SQL wiring 환경에서도 무토큰
+    SYSTEM_USER_ID 동작은 본 repository 와 무관(회귀 0).
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_by_google_sub(self, google_sub: str) -> UserRecord | None:
+        stmt = select(UserORM).where(UserORM.google_sub == google_sub)
+        orm = self._session.execute(stmt).scalars().first()
+        if orm is None:
+            return None
+        return UserRecord(
+            id=orm.id,
+            google_sub=orm.google_sub,
+            email=orm.email,
+        )
+
+    def provision(
+        self, google_sub: str, email: str | None,
+    ) -> UserRecord:
+        # JIT 신규 user — uuid4 + created_at. google_sub unique 인덱스가 중복
+        # 최종 방어(호출자는 get_by_google_sub None 후에만 호출하는 계약).
+        record = UserRecord(
+            id=uuid4(),
+            google_sub=google_sub,
+            email=email,
+        )
+        orm = UserORM(
+            id=record.id,
+            created_at=datetime.now(UTC),
+            google_sub=google_sub,
+            email=email,
+        )
+        self._session.add(orm)
+        self._session.flush()
+        return record

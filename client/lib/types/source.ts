@@ -20,6 +20,7 @@
  * | ECOS    | 한국은행 경제통계시스템 (M1+ 거시지표)            |
  * | KOSIS   | 통계청 (M1+ 산업·경제 통계)                    |
  * | USER_INPUT | 사용자 manual 입력 (M2+ Factor Lab)        |
+ * | FSC     | 금융위원회 공공데이터 (배당 정보, M7 #2 ADR-0035) |
  */
 export type SourceLabel =
   | "DART"
@@ -28,7 +29,8 @@ export type SourceLabel =
   | "FDR"
   | "ECOS"
   | "KOSIS"
-  | "USER_INPUT";
+  | "USER_INPUT"
+  | "FSC";
 
 /**
  * 한글 표시명 — Tooltip / footer 의 사용자 visible 라벨.
@@ -45,4 +47,5 @@ export const SOURCE_LABEL_KO = {
   ECOS: "한국은행 경제통계시스템(ECOS)",
   KOSIS: "통계청 KOSIS",
   USER_INPUT: "사용자 입력",
+  FSC: "금융위원회 공공데이터(FSC)",
 } as const satisfies Record<SourceLabel, string>;

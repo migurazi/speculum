@@ -16,6 +16,8 @@ function-scoped session 으로 isolation 보장.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from uuid import UUID
 
 import pytest
 from sqlalchemy import create_engine, event
@@ -27,13 +29,28 @@ from app.db.base import Base
 from app.db.orm import (  # noqa: F401  ← Base.metadata 등록 side-effect
     CorporateActionORM,
     FinancialORM,
+    MacroIndicatorORM,
+    MarketCapDailyORM,
     PriceDailyORM,
+    PublisherORM,
     ScreenerSetORM,
     ScreenRunSnapshotORM,
     SourceCitationORM,
     StocksMasterORM,
+    TreasurySharesORM,
+    UserORM,
     WatchlistFolderORM,
     WatchlistItemORM,
+)
+
+# user_id FK(ADR-0021 D2, migration 0012) anchor — watchlists/screener_sets/
+# screen_runs 가 users.id 를 참조하므로, test 가 사용하는 well-known user_id 를
+# users 테이블에 미리 seed 해야 FK 충족(PRAGMA foreign_keys=ON 환경). sentinel
+# (00000000-…-0001, SYSTEM_USER_ID) + 테스트 표준 _USER_A/_USER_B.
+_SEED_USER_IDS: tuple[UUID, ...] = (
+    UUID("00000000-0000-0000-0000-000000000001"),  # SYSTEM_USER_ID sentinel.
+    UUID("00000000-0000-0000-0000-00000000000a"),  # _USER_A (테스트 표준).
+    UUID("00000000-0000-0000-0000-00000000000b"),  # _USER_B (테스트 표준).
 )
 
 
@@ -60,6 +77,17 @@ def db_engine() -> Iterator[Engine]:
         cursor.close()
 
     Base.metadata.create_all(engine)
+
+    # user_id FK anchor seed — 표준 테스트 user_id 를 users 에 미리 삽입.
+    # FK 부재 시점의 기존 테스트가 watchlists/screen_runs 등에 임의 user_id 로
+    # row 를 만들었으나, 이제 FK 가 그 user_id 의 users row 존재를 요구한다.
+    now = datetime.now(UTC)
+    with engine.begin() as conn:
+        conn.execute(
+            UserORM.__table__.insert(),
+            [{"id": uid, "created_at": now} for uid in _SEED_USER_IDS],
+        )
+
     try:
         yield engine
     finally:

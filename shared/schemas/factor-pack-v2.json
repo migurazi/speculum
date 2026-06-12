@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://speculum.dev/schemas/factor-pack-v2.json",
+  "title": "Speculum Factor Pack v2 (인증된 publisher namespace)",
+  "description": "Quantitative factor definitions for the Korean equity market. ADR-0002 §D6 + ADR-0034 (identity v2). v1 과 동일하나 pack_slug 가 fully-qualified '@{publisher}/{slug}' namespace(ADR-0034 D1). content_hash recipe(RFC 8785 JCS + SHA-256 + ADR-0032 D1 decimalString) 는 v1 동일 — cross-runtime 재현 불변. v1↔v2 자동 마이그레이션 없음(ADR-0034 D5).",
+  "type": "object",
+  "additionalProperties": false,
+  "patternProperties": {
+    "^(__proto__|constructor|prototype)$": false
+  },
+  "required": [
+    "$schema",
+    "type",
+    "pack_slug",
+    "version",
+    "publisher",
+    "license",
+    "created_at",
+    "citation",
+    "factors",
+    "content_hash"
+  ],
+  "properties": {
+    "$schema": { "type": "string", "format": "uri" },
+    "type": { "const": "factor-pack" },
+    "pack_slug": {
+      "type": "string",
+      "description": "ADR-0034 D1 — fully-qualified namespace '@{publisher}/{slug}'. '@' prefix 로 v1 형식(speculum-builtin/community//user/)과 disjoint(ADR-0034 D2 — frozen run v1/v2 판별). publisher 는 인증된 handle(ADR-0034 D4, publishers 테이블), slug 는 pack 이름. identity 의 단일 출처 = 본 slug(publisher 필드는 display-only — ADR-0034 D1 SoT).",
+      "pattern": "^@[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$",
+      "maxLength": 128
+    },
+    "version": {
+      "type": "string",
+      "description": "Semver. Patch = 오타 보정 / minor = 추가 / major = 식 변경.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "publisher": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "description": "ADR-0034 D1 — **display-only**. identity 의 출처는 pack_slug 의 @{publisher} 이며(SoT 단일), 본 필드는 표시·인용용 보조(예: 사람이 읽는 발행자명)."
+    },
+    "license": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date",
+      "description": "ISO 8601 YYYY-MM-DD."
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "citation": { "$ref": "#/$defs/citation" },
+    "factors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/factor" }
+    },
+    "content_hash": {
+      "type": "string",
+      "description": "RFC 8785 JCS + SHA-256 of the canonical pack content (content_hash 필드 자체 제외). 'sha256:<hex>' 형식. recipe 는 v1 동일(ADR-0034 D2/D5 — content_hash 정의 불변).",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  },
+
+  "$defs": {
+    "citation": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["title"],
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "version": { "type": "string", "maxLength": 50 },
+        "url": { "type": "string", "format": "uri", "maxLength": 1000 },
+        "publisher": { "type": "string", "maxLength": 200 },
+        "doi": { "type": "string", "maxLength": 200 },
+        "note": { "type": "string", "maxLength": 1000 }
+      }
+    },
+
+    "canonicalId": {
+      "type": "string",
+      "description": "Canonical factor ID — Norma identity 3-tier 패턴. 빌트인 = '<slug>:<variant>'. ADR-0002 D2.",
+      "pattern": "^[a-z][a-z0-9-]*(:[a-z][a-z0-9-]*)+$",
+      "maxLength": 200
+    },
+
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+
+    "factor": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["canonical_id", "uuid", "name", "description", "formula", "unit"],
+      "properties": {
+        "canonical_id": { "$ref": "#/$defs/canonicalId" },
+        "uuid": { "$ref": "#/$defs/uuid" },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "사람이 읽는 이름. ADR-0007 §D4 의 금지 어휘 검사 통과 필수 (예: '추천' 금지)."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "description": "산출 정의 — 누구가 봐도 명확한 정의 텍스트. K-IFRS 연결/별도 명시."
+        },
+        "alt_names": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "maxItems": 10
+        },
+        "formula": { "$ref": "#/$defs/formula" },
+        "unit": {
+          "enum": ["ratio", "percent", "krw", "shares", "unitless", "days"],
+          "description": "결과 단위. ratio = 12.3, percent = 12.3% (사용자 표시 시 ×100 표기), krw = 원, shares = 주, unitless = N/A, days = 일수."
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "maxLength": 50
+          },
+          "maxItems": 10
+        },
+        "ifrs_type": {
+          "enum": ["consolidated", "separate", "either", "n/a"],
+          "description": "재무제표 종류 의존성. ADR-0005."
+        },
+        "citation": { "$ref": "#/$defs/citation" }
+      }
+    },
+
+    "formula": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["ast", "inputs"],
+      "properties": {
+        "ast": { "$ref": "#/$defs/expression" },
+        "inputs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 100
+          },
+          "description": "이 factor 가 입력으로 요구하는 field 이름 목록 — adapter / repository 와 contract."
+        }
+      }
+    },
+
+    "decimalString": {
+      "type": "string",
+      "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+      "maxLength": 40,
+      "description": "ADR-0032 D1 — 상수/가중치/경계는 JSON number 가 아닌 **decimal 문자열**. content_hash 의 cross-runtime 재현(JCS) 보장을 위해 float 직렬화(지수표기·IEEE 754 shortest-repr 의 Python↔Node 차이) 를 schema 레벨에서 봉쇄한다. 부호(-) + 정수부(선행 0 금지, '0' 단독 허용) + 선택 소수부. 지수표기(e/E)·선행0·'+' 금지. 예: \"100\", \"-1.5\", \"0.001\"."
+    },
+
+    "expression": {
+      "oneOf": [
+        { "$ref": "#/$defs/exprConst" },
+        { "$ref": "#/$defs/exprField" },
+        { "$ref": "#/$defs/exprOp" }
+      ]
+    },
+
+    "exprConst": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["const"],
+      "properties": {
+        "const": { "$ref": "#/$defs/decimalString" }
+      }
+    },
+
+    "exprField": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["field"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 100
+        }
+      }
+    },
+
+    "exprOp": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^(__proto__|constructor|prototype)$": false },
+      "required": ["op"],
+      "properties": {
+        "op": {
+          "enum": [
+            "add", "sub", "mul", "div",
+            "sum_last_n_quarters",
+            "avg",
+            "ratio_pct",
+            "weighted_sum",
+            "zscore", "percentile", "min_max_scale",
+            "winsorize"
+          ],
+          "description": "ADR-0022 D1 의 허용 연산자 집합. rank/top_n/bottom_n/sign/step 은 절대 부재 — 서수 라벨·임계 신호 = No Advice 경계 위반 (ADR-0007 D5.2 시스템 큐레이션 우회). 추가는 별도 ADR + ADR-0007 D9 절차."
+        },
+        "left":  { "$ref": "#/$defs/expression" },
+        "right": { "$ref": "#/$defs/expression" },
+        "args":  {
+          "type": "array",
+          "items": { "$ref": "#/$defs/expression" },
+          "minItems": 1,
+          "maxItems": 16
+        },
+        "field": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 100
+        },
+        "n": { "type": "integer", "minimum": 1, "maximum": 20 },
+        "weights": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/decimalString" },
+          "minItems": 1,
+          "maxItems": 16,
+          "description": "ADR-0022 D1 weighted_sum 전용 — args 와 동일 길이의 가중치 상수 배열(ADR-0032 D1: decimal 문자열). 길이 일치는 evaluator 가 강제 (pack 무결성). 가중치 합=1 정규화는 강제 안 함 (ADR-0022 미해결)."
+        },
+        "lower": {
+          "$ref": "#/$defs/decimalString",
+          "description": "ADR-0022 D1 winsorize 전용 — 하한 상수 경계 (value < lower → lower, ADR-0032 D1: decimal 문자열). 분위수 경계(유니버스-상대) 버전은 T72 deferred."
+        },
+        "upper": {
+          "$ref": "#/$defs/decimalString",
+          "description": "ADR-0022 D1 winsorize 전용 — 상한 상수 경계 (value > upper → upper, ADR-0032 D1: decimal 문자열)."
+        }
+      }
+    }
+  }
+}

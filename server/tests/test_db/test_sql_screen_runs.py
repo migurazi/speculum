@@ -21,7 +21,10 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.orm import Session
 
-from app.repositories.screen_run_repository import FakeScreenRunRepository
+from app.repositories.screen_run_repository import (
+    FakeScreenRunRepository,
+    ScreenRunAlreadyExistsError,
+)
 from app.repositories.sql_user_repositories import SqlScreenRunRepository
 from app.services.screen_run import (
     ScreenRunBuilder,
@@ -160,10 +163,11 @@ def test_fetch_recent_negative_limit_raises(db_session: Session) -> None:
 
 
 # =============================================================================
-# 4. save id 중복 → overwrite (Fake 와 동일 정책)
+# 4. save id 중복 → append-only 거부 (ADR-0021 D2 — overwrite 정책 폐기)
 # =============================================================================
 
-def test_save_overwrites_same_id(db_session: Session) -> None:
+def test_save_same_id_rejected_append_only(db_session: Session) -> None:
+    """같은 id 재저장 거부 — append-only. 기존 row 불변(재현 자산 보존)."""
     repo = SqlScreenRunRepository(db_session)
     run_id = uuid4()
     first = _make_snapshot(
@@ -172,18 +176,57 @@ def test_save_overwrites_same_id(db_session: Session) -> None:
         computed_at=datetime(2024, 5, 1, tzinfo=UTC),
     )
     repo.save(first)
-    # 같은 id 로 다른 데이터 save.
+    # 같은 id 로 재저장 시도 → 거부 (owner 동일해도 append-only).
     second = _make_snapshot(
         run_id=run_id,
         result_codes=["005930", "000660"],
         computed_at=datetime(2024, 5, 7, tzinfo=UTC),
     )
-    repo.save(second)
-    # fetch 시 second 가 보존.
+    with pytest.raises(ScreenRunAlreadyExistsError):
+        repo.save(second)
+    # 거부 후 기존 first 가 불변 — overwrite 되지 않음.
     fetched = repo.fetch_by_id(run_id, user_id=_USER_A)
     assert fetched is not None
-    assert fetched.result_codes == ("000660", "005930")
-    assert fetched.computed_at == datetime(2024, 5, 7, tzinfo=UTC)
+    assert fetched.result_codes == ("005930",)
+    assert fetched.computed_at == datetime(2024, 5, 1, tzinfo=UTC)
+
+
+def test_save_idor_user_b_cannot_overwrite_user_a_run(
+    db_session: Session,
+) -> None:
+    """AC-M2-C-04 IDOR negative — user B 가 user A 의 run id 로 save(overwrite
+    시도) → 거부 + user A 의 run 불변(타 user 자산 위조/파괴 차단, ADR-0021 D2).
+    """
+    repo = SqlScreenRunRepository(db_session)
+    run_id = uuid4()
+    # user A 가 run 저장.
+    a_run = _make_snapshot(
+        run_id=run_id,
+        user_id=_USER_A,
+        result_codes=["005930"],
+        computed_at=datetime(2024, 5, 1, tzinfo=UTC),
+    )
+    repo.save(a_run)
+
+    # user B 가 같은 run id 로 자신의 user_id + 다른 데이터로 overwrite 시도.
+    b_overwrite = _make_snapshot(
+        run_id=run_id,
+        user_id=_USER_B,
+        result_codes=["000660"],
+        computed_at=datetime(2024, 5, 7, tzinfo=UTC),
+    )
+    with pytest.raises(ScreenRunAlreadyExistsError):
+        repo.save(b_overwrite)
+
+    # user A 의 run 이 불변 — owner / 데이터 모두 보존(IDOR 차단).
+    a_fetched = repo.fetch_by_id(run_id, user_id=_USER_A)
+    assert a_fetched is not None
+    assert a_fetched.user_id == _USER_A
+    assert a_fetched.result_codes == ("005930",)
+    # user B 는 여전히 그 run 을 조회 불가(owner mismatch → None).
+    assert repo.fetch_by_id(run_id, user_id=_USER_B) is None
+    # user B 의 recent 에도 그 run 이 없음(저장 실패).
+    assert repo.fetch_recent(user_id=_USER_B, limit=10) == ()
 
 
 # =============================================================================

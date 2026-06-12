@@ -1,0 +1,91 @@
+{
+  "noCode": "종목코드가 필요합니다.",
+  "loading": "불러오는 중...",
+  "loadError": "데이터 로드 실패: {message}",
+  "noData": "데이터 없음.",
+  "listingDate": "상장일",
+  "delistingDate": "폐지일",
+  "fiscalMonth": "결산월",
+  "fiscalMonthUnit": "월",
+  "ifrs": "IFRS",
+  "metricsHeading": "지표",
+  "noMetrics": "표시할 지표가 없습니다.",
+  "metricsPreTaxDisclosure": "세전 기준 — 배당소득세·양도세 미반영, 실제 수익과 상이",
+  "codeHistory": {
+    "heading": "종목코드 변경 history",
+    "colCode": "코드",
+    "colReason": "사유",
+    "colFrom": "시작",
+    "colTo": "종료"
+  },
+  "chart": {
+    "title": "가격 차트",
+    "rawMode": "원본 종가",
+    "adjustedMode": "수정 종가",
+    "loadingAriaLabel": "가격 차트 로딩 중",
+    "loadError": "가격 데이터 로드 실패: {message}",
+    "empty": "해당 기간 가격 데이터 없음"
+  },
+  "financials": {
+    "heading": "재무 시계열",
+    "colAccount": "항목",
+    "empty": "재무 데이터가 없습니다.",
+    "loadError": "재무 데이터 로드 실패: {message}"
+  },
+  "restatementHistory": {
+    "heading": "정정공시 이력",
+    "colEffectiveDate": "공시일",
+    "colVintageSeq": "회차",
+    "colValue": "값",
+    "colStatus": "상태",
+    "statusActive": "현행",
+    "statusSuperseded": "과거",
+    "restatementCount": "정정 {count}회",
+    "empty": "정정공시 이력이 없습니다.",
+    "loadError": "정정공시 이력 로드 실패: {message}"
+  },
+  "disclosures": {
+    "heading": "공시 목록",
+    "colReportName": "공시 제목",
+    "colRceptDate": "접수일",
+    "colDartLink": "DART 원문",
+    "dartLinkLabel": "DART 원문 보기",
+    "empty": "해당 기간 공시가 없습니다.",
+    "loadError": "공시 목록 로드 실패: {message}"
+  },
+  "factExtraction": {
+    "extractButton": "AI 사실 추출",
+    "collapseButton": "닫기",
+    "extracting": "추출 중...",
+    "disclaimer": "AI 가 추출한 사실이며 원문 확인이 필수입니다. hallucination 가능성이 있습니다.",
+    "source": "출처:",
+    "dartLinkLabel": "DART 원문 확인",
+    "slotDisclosureType": "공시유형",
+    "slotAmounts": "금액",
+    "slotDates": "일자",
+    "slotParties": "당사자",
+    "slotQuantities": "수량",
+    "serviceUnavailable": "AI 사실추출 기능은 현재 비활성화되어 있습니다.",
+    "gateRejected": "추출 결과가 표시 기준을 통과하지 못했습니다.",
+    "extractError": "사실 추출 실패: {message}"
+  },
+  "notes": {
+    "heading": "메모",
+    "writeLabel": "작성",
+    "bodyPlaceholder": "Markdown 형식으로 입력하세요 (최대 10,000자)",
+    "saveButton": "저장",
+    "cancelButton": "취소",
+    "editButton": "편집",
+    "deleteButton": "삭제",
+    "previewTab": "미리보기",
+    "writeTab": "작성",
+    "empty": "메모가 없습니다.",
+    "loadError": "메모 로드 실패: {message}",
+    "saveError": "저장 실패: {message}",
+    "deleteError": "삭제 실패: {message}",
+    "confirmDelete": "이 메모를 삭제하시겠습니까?",
+    "bodyTooLong": "메모는 10,000자를 초과할 수 없습니다.",
+    "bodyEmpty": "내용을 입력하세요.",
+    "dateLabel": "작성일"
+  }
+}

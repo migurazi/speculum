@@ -17,15 +17,22 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-from app.repositories.pit_protocols import StockMasterRecord
+from app.repositories.pit_protocols import FinancialRecord, StockMasterRecord
 from app.services.factor_evaluator import EvaluationResult
 
 __all__ = [
     "DEFAULT_DISPLAY_FACTORS",
     "CodeHistoryItemOut",
+    "CorporateActionOut",
     "FactorValueOut",
+    "FinancialHistoryOut",
+    "FinancialHistoryVintageOut",
+    "FinancialSeriesItemOut",
+    "FinancialSeriesOut",
     "StockCompareOut",
     "StockDetailOut",
+    "StockPriceBarOut",
+    "StockPricesOut",
     "StockSearchPageOut",
     "StockStatus",
     "StockSummaryOut",
@@ -40,6 +47,8 @@ DEFAULT_DISPLAY_FACTORS: Final[tuple[str, ...]] = (
     "pbr:consolidated-ifrs",
     "roe:ttm-avg-equity-consolidated-ifrs",
     "eps:basic-ttm-consolidated-ifrs",
+    "dividend-yield:trailing-annual",
+    "price-return:total-annual",
 )
 
 _STRICT_MODEL_CONFIG = ConfigDict(strict=True, extra="forbid", frozen=True)
@@ -219,6 +228,162 @@ class StockSearchPageOut(BaseModel):
     items: tuple[StockSummaryOut, ...]
     total: int | None
     next_cursor: str | None
+
+
+class StockPriceBarOut(BaseModel):
+    """가격 차트의 단일 일봉 — `/api/stocks/{code}/prices` 의 element.
+
+    Decimal → str wire (JSON number drift 회피, 본 모듈 설계 원칙). frontend 차트
+    (lightweight-charts) 가 str → number 파싱 (차트는 financial 정밀도 불요).
+    raw OHLC + `close_adjusted`(ADR-0001 보정 종가) 둘 다 노출 — frontend 가
+    raw/adjusted 토글 (ADR-0001 D6).
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    date: date
+    open: str
+    high: str
+    low: str
+    close: str
+    close_adjusted: str
+    volume: int
+
+
+class CorporateActionOut(BaseModel):
+    """가격 차트 ▾ 마커용 단일 corporate action — No Advice (사실만).
+
+    No Advice (ADR-0007 T59 gate):
+        effective_date / action_type / ratio 같은 시장 사실만 노출. 매수·매도
+        판단·해석 0. 프론트가 ▾ 마커로 사실을 표시하는 것에만 사용.
+
+    PIT: announced_date <= as_of 기준으로 repo 가 active chain 반환.
+    effective_date 가 prices 범위 내인 것만 응답에 포함 (endpoint 가 필터).
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    effective_date: date
+    action_type: str   # "split" / "dividend" / "merger" 등 — ADR-0009 D2 enum
+    ratio: str | None  # Decimal → str wire. None 이면 ratio 없음 (현금배당 등).
+
+
+class StockPricesOut(BaseModel):
+    """가격 시계열 응답 — `[start, as_of]` 범위의 일봉 (effective_date asc).
+
+    PIT: 모든 bar 의 date(=effective_date) <= as_of (PriceRepository 가 강제).
+
+    actions: effective_date 가 [start, as_of] 범위 내인 corporate action 목록.
+        차트 ▾ 마커 렌더링용. 데이터 없으면 빈 tuple (200).
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    code: str
+    as_of: date
+    bars: tuple[StockPriceBarOut, ...]
+    actions: tuple[CorporateActionOut, ...]
+
+
+class FinancialSeriesItemOut(BaseModel):
+    """재무 시계열 표의 단일 account 행.
+
+    values 는 periods 와 같은 길이 (결손 분기 = None). Decimal → str wire.
+    unit 은 FinancialRecord.unit 그대로 전달 — "krw", "ratio" 등.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    account: str        # canonical_id (예: "revenue")
+    name: str           # 표시명 (예: "매출액")
+    unit: str           # "krw", "ratio", …
+    values: tuple[str | None, ...]  # periods 순서와 1:1 대응
+
+
+class FinancialSeriesOut(BaseModel):
+    """재무 시계열 endpoint `GET /{code}/financials` 의 응답 schema.
+
+    periods: 오름차순 정렬된 fiscal_period 합집합 (예: ["2022Q4","2023Q1",…]).
+        fiscal_period 는 DART 표준 `f"{year}Q{quarter}"` 형식.
+    items: 각 account 의 시계열. 적재 데이터 없는 account 는 제외 (빈 row 표시 안 함).
+    데이터 전혀 없으면 periods=() / items=() 로 200 반환 (차트·표가 "데이터 없음" 표시).
+
+    PIT: FinancialRepository.fetch_financials 가 effective_date<=as_of 강제 —
+        endpoint 가 별도 필터 없이 PIT 보장.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    code: str
+    as_of: date
+    periods: tuple[str, ...]          # 오름차순 정렬
+    items: tuple[FinancialSeriesItemOut, ...]
+
+
+class FinancialHistoryVintageOut(BaseModel):
+    """정정공시 이력의 단일 vintage — 재무 account 별 한 공시 회차.
+
+    No Advice (§2.2): effective_date / value / is_active / superseded_by 같은
+    관측 사실만 노출. "정정으로 개선/악화" 판단·라벨 없음. 순수 관측.
+
+    vintage_seq: fiscal_period 내 정정 회차 (1-based). 원본=1, 1차 정정=2, …
+        프론트가 "원본 vs 정정 n회차" 표시에 사용.
+
+    is_active: superseded_by is None → True (현재 유효한 최신 vintage).
+        False = 후속 정정에 의해 supersede 된 vintage (역사적 보존).
+
+    Decimal → str wire (JSON number drift 회피, Risk-C4). 프론트가 BigNumber
+    / decimal.js 로 처리.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    vintage_seq: int          # fiscal_period 내 정정 회차 (1-based, 원본=1)
+    effective_date: date      # 공시일 (DART rcept_no 도출 또는 법적 신고기한 보수값)
+    account: str              # canonical account 키 (예: "revenue")
+    value: str                # Decimal → str wire
+    unit: str                 # "krw", "ratio" 등
+    ifrs_type: str            # "consolidated" | "separate"
+    is_active: bool           # superseded_by is None — 현재 유효 여부
+    superseded_by: UUID | None  # 후속 vintage id. None = 이 vintage 가 최신
+
+    @classmethod
+    def from_record(
+        cls, record: FinancialRecord, *, vintage_seq: int,
+    ) -> FinancialHistoryVintageOut:
+        """FinancialRecord → wire 단방향 factory."""
+        return cls(
+            vintage_seq=vintage_seq,
+            effective_date=record.effective_date,
+            account=record.account,
+            value=str(record.value),
+            unit=record.unit,
+            ifrs_type=record.ifrs_type,
+            is_active=(record.superseded_by is None),
+            superseded_by=record.superseded_by,
+        )
+
+
+class FinancialHistoryOut(BaseModel):
+    """정정공시 이력 endpoint `GET /{code}/financials/history` 응답 schema.
+
+    vintages: (fiscal_period asc, effective_date asc, id asc) 정렬된 전체 vintage.
+        각 vintage 에 vintage_seq(정정 회차) + is_active(현재 유효 여부) 포함.
+        프론트가 fiscal_period 별 그룹화 / 정정 chain 시각화에 사용.
+
+    PIT look-ahead 차단 (§2.4): as_of 가 있으면 effective_date <= as_of 인
+        vintage 만 포함 (그 시점까지 공시된 정정만). None 이면 전체 이력.
+
+    No Advice (§2.2): effective_date / value / is_active 같은 사실만.
+        "정정으로 개선/악화" 판단 없음.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    code: str
+    as_of: date | None          # PIT look-ahead 차단 기준일. None = 전체 이력
+    fiscal_period_filter: str | None  # 요청된 fiscal_period 필터. None = 전 분기
+    vintages: tuple[FinancialHistoryVintageOut, ...]
 
 
 # =============================================================================

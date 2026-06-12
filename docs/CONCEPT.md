@@ -488,7 +488,7 @@ Metis 사전 검토 결과, M0 진입 전 별도 ADR 문서로 결정해야 할 
 | ADR-010 | 홈 화면 정체성 (Active Inspection vs 사용성 trade-off) | H |
 | ADR-011 | Watchlist scope (알림 기능 포함 여부) | H |
 | ADR-012 | KRX/K-IFRS Conformance Review work-order 템플릿 (Tessera 동형) | M |
-| ADR-013 | ETF/우선주 v0.2 분리의 통계적 한계 명시 (UI 디스클로저) | M |
+| ADR-0024 | ETF/우선주 분리의 통계적 한계 명시 (소표본 percentile 디스클로저) | M | (원 예약 "ADR-013" → 0013 은 forbidden-word ADR 이 ACCEPTED 선점, ADR-0023 D5 에서 0024 재배정) |
 | ADR-014 | Screen Run snapshot DB schema (§2.10 구체화) | M (M0~M1 경계) |
 
 각 ADR 은 `docs/adr/` 디렉토리에 `adr-NNN-{slug}.md` 파일로 작성. Tessera 의 ADR 문화 일관.

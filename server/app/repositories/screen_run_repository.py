@@ -18,6 +18,7 @@ from app.services.screen_run import ScreenRunSnapshot
 
 __all__ = [
     "FakeScreenRunRepository",
+    "ScreenRunAlreadyExistsError",
     "ScreenRunNotFoundError",
     "ScreenRunRepository",
 ]
@@ -25,6 +26,15 @@ __all__ = [
 
 class ScreenRunNotFoundError(Exception):
     """`fetch_by_id` 의 not-found case — `None` 반환 vs raise 정책 선택은 호출자."""
+
+
+class ScreenRunAlreadyExistsError(Exception):
+    """`save` 의 append-only 위반 — 같은 id 의 run 이 이미 존재 (ADR-0021 D2).
+
+    M2 부터 screen_runs 는 append-only — 한 번 freeze 된 run 은 재저장 불가.
+    owner 일치 여부와 무관하게 거부(IDOR 차단 + 재현 자산 보존). 정상 경로는
+    매 Save Run 마다 신규 `uuid4()` 라 발생하지 않음 — 악의적/버그성 재저장만.
+    """
 
 
 @runtime_checkable
@@ -36,7 +46,11 @@ class ScreenRunRepository(Protocol):
     """
 
     def save(self, snapshot: ScreenRunSnapshot) -> None:
-        """snapshot 저장. id 중복 시 정책은 구현체 결정 (overwrite vs raise)."""
+        """snapshot 저장 — append-only (ADR-0021 D2). 같은 id 재저장 거부.
+
+        M0 의 overwrite 정책 폐기. 같은 id 의 row 가 이미 있으면 owner 무관
+        `ScreenRunAlreadyExistsError` (IDOR 차단 + 재현 자산 보존).
+        """
         ...
 
     def fetch_by_id(
@@ -68,14 +82,16 @@ class FakeScreenRunRepository(ScreenRunRepository):
         self._by_user: dict[UUID, list[ScreenRunSnapshot]] = defaultdict(list)
 
     def save(self, snapshot: ScreenRunSnapshot) -> None:
-        # M0 정책: overwrite 허용 (id 충돌 시 새 값). 운영 시 SQLAlchemy 의
-        # UNIQUE constraint 가 처리. Fake 는 단순.
+        # M2 정책: append-only (ADR-0021 D2). 같은 id 가 이미 있으면 owner 무관
+        # 거부 — SqlScreenRunRepository 와 동일 contract(IDOR 차단 + 재현 자산
+        # 보존). 정상 경로(매 Save Run 신규 uuid4)는 충돌 없음.
+        if snapshot.id in self._by_id:
+            raise ScreenRunAlreadyExistsError(
+                f"screen_run {snapshot.id} 는 이미 존재 — append-only "
+                f"(ADR-0021 D2)"
+            )
         self._by_id[snapshot.id] = snapshot
-        # by_user index 갱신.
-        bucket = self._by_user[snapshot.user_id]
-        # 중복 id 제거 후 append (overwrite 의미 보존).
-        bucket[:] = [s for s in bucket if s.id != snapshot.id]
-        bucket.append(snapshot)
+        self._by_user[snapshot.user_id].append(snapshot)
 
     def fetch_by_id(
         self, run_id: UUID, *, user_id: UUID,

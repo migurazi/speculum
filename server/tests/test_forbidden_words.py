@@ -402,3 +402,52 @@ def test_korean_english_mixed_text() -> None:
     found_words = {m.word for m in matches}
     assert "Buy" in found_words
     assert "추천" in found_words
+
+
+# =============================================================================
+# N. sentiment 어휘 scope 분리 — ADR-0031 D2 (LLM 출력 게이트 전용 opt-in)
+# =============================================================================
+
+@pytest.mark.parametrize("word", ["호재", "악재", "긍정적", "부정적"])
+def test_sentiment_not_detected_by_default(word: str) -> None:
+    # 기본(include_sentiment=False) — sentiment 어휘 미검출. conformance CLI·
+    # 미들웨어·일반 SYSTEM 검사가 이 기본을 쓰므로 소스 주석/응답에 정당 등장 허용.
+    assert scan_text(f"이번 공시는 {word} 으로 평가된다") == []
+
+
+@pytest.mark.parametrize("word", ["호재", "악재", "긍정적", "부정적"])
+def test_sentiment_detected_with_opt_in(word: str) -> None:
+    # include_sentiment=True — LLM 출력 게이트 전용. sentiment 검출.
+    matches = scan_text(f"{word} 평가", include_sentiment=True)
+    assert word in {m.word for m in matches}
+    assert any(m.kind is ForbiddenKind.KO_SENTIMENT for m in matches)
+
+
+def test_sentiment_opt_in_still_catches_absolute() -> None:
+    # opt-in 모드에서도 기존 absolute 어휘는 함께 검출(중첩 아님).
+    matches = scan_text("매수 추천 호재", include_sentiment=True)
+    words = {m.word for m in matches}
+    assert {"매수", "추천", "호재"} <= words
+
+
+def test_assert_clean_default_allows_sentiment() -> None:
+    # 기본 assert_clean — sentiment 통과(회귀 0). 미들웨어/일반 SYSTEM 경로 보존.
+    assert_clean("호재 가능성", scope=CheckScope.SYSTEM)  # raise 안 함
+
+
+def test_assert_clean_opt_in_blocks_sentiment() -> None:
+    # include_sentiment=True — LLM 게이트. sentiment raise.
+    with pytest.raises(ForbiddenWordsAssertError):
+        assert_clean("호재", scope=CheckScope.SYSTEM, include_sentiment=True)
+
+
+def test_sentiment_opt_in_respects_skip_scopes() -> None:
+    # EXTERNAL_QUOTE/USER_PRIVATE 는 opt-in 이어도 검사 skip(원문 인용 보존).
+    assert_clean(
+        "호재", scope=CheckScope.EXTERNAL_QUOTE, include_sentiment=True,
+    )  # raise 안 함
+
+
+def test_api_response_scan_ignores_sentiment() -> None:
+    # scan_api_response(미들웨어 응답 검사)는 absolute 만 — sentiment 응답 통과.
+    assert scan_api_response({"note": "긍정적 흐름", "x": "악재"}) == []

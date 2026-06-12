@@ -19,6 +19,7 @@
  * - M0_PLAN T40 (Save Run) backlog
  */
 
+import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchRunDiff, type VersionsDiff } from "@/lib/api/runs";
@@ -30,6 +31,9 @@ interface VersionsDiffBadgeProps {
 export function VersionsDiffBadge({
   runId,
 }: VersionsDiffBadgeProps): JSX.Element {
+  // 클라이언트 컴포넌트 — useTranslations 사용.
+  const t = useTranslations("runs");
+
   const query = useQuery<VersionsDiff>({
     queryKey: ["runs", "diff", runId],
     queryFn: ({ signal }) => fetchRunDiff(runId, signal),
@@ -37,7 +41,7 @@ export function VersionsDiffBadge({
 
   if (query.isLoading) {
     return (
-      <span className="text-[10px] text-neutral-400">버전 확인중...</span>
+      <span className="text-[10px] text-neutral-400">{t("versionChecking")}</span>
     );
   }
   if (query.isError) {
@@ -46,7 +50,7 @@ export function VersionsDiffBadge({
         className="rounded-md border border-neutral-300 bg-neutral-50 px-1.5 py-0.5 text-[10px] text-neutral-600"
         title={(query.error as Error).message}
       >
-        버전 확인 실패
+        {t("versionCheckFailed")}
       </span>
     );
   }
@@ -60,7 +64,7 @@ export function VersionsDiffBadge({
   if (diffKeys.length === 0) {
     return (
       <span className="rounded-md border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800">
-        재현 가능
+        {t("reproducible")}
       </span>
     );
   }
@@ -74,7 +78,7 @@ export function VersionsDiffBadge({
       className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-900"
       title={tooltipLines}
     >
-      재현 변경: {diffKeys.length} 키
+      {t("reproducibleChanged", { count: diffKeys.length })}
     </span>
   );
 }

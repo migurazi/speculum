@@ -7,8 +7,9 @@ frozen dataclass 의 DB 표현.
     - **parent_id self-FK** — folder 가 다른 folder 의 parent. depth ≤ 2 는
       DB 차원 CHECK constraint X (구현 복잡) — Repository / endpoint layer 가
       강제.
-    - **user_id FK 없음** — M0 single-user, users 테이블 미존재. user_id 는
-      단순 UUID 컬럼 + 인덱스. T31 NextAuth 합류 시 users.id FK 추가 backlog.
+    - **user_id FK → users.id (ADR-0021 D2, migration 0012)** — M2 멀티유저
+      전환에서 user 격리 FK anchor 추가. 기존 SYSTEM-owned folder 는 sentinel
+      (00000000-…-0001) row 를 참조(UPDATE 0건, system-owned 유지).
     - **is_default** — ADR-0011 D7 의 "내 관심 종목" 빌트인 폴더 marker.
     - **display_order** — 같은 parent 내 정렬 키. Fake 의 max+1 정책 유지.
     - **watchlist_items.code_lineage_id** — stocks_master.id 의 lineage UUID.
@@ -43,7 +44,13 @@ class WatchlistFolderORM(Base):
     __tablename__ = "watchlists"
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True)
-    user_id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), nullable=False)
+    # user_id FK → users.id (ADR-0021 D2, migration 0012). M2 부터 user 격리의
+    # FK anchor — 기존 SYSTEM-owned folder 는 sentinel(00000000-…-0001) 참조.
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", name="fk_watchlists_user_id_users"),
+        nullable=False,
+    )
     # parent_id self-FK — None = root, 있으면 다른 폴더의 자식.
     parent_id: Mapped[UUID | None] = mapped_column(
         Uuid(as_uuid=True),

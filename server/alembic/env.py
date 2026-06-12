@@ -28,9 +28,11 @@ from app.db.base import Base
 from app.db.orm import (  # noqa: F401  ← import side-effect 가 핵심
     CorporateActionORM,
     FinancialORM,
+    MarketCapDailyORM,
     PriceDailyORM,
     SourceCitationORM,
     StocksMasterORM,
+    TreasurySharesORM,
 )
 
 config = context.config

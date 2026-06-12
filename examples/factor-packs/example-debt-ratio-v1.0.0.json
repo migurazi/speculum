@@ -1,0 +1,41 @@
+{
+  "$schema": "https://speculum.dev/schemas/factor-pack-v1.json",
+  "type": "factor-pack",
+  "pack_slug": "community/example-author-debt-ratio",
+  "version": "1.0.0",
+  "publisher": "example-author",
+  "license": "CC-BY-4.0",
+  "created_at": "2026-06-04",
+  "description": "Factor pack open-format 예제 — 외부 저자가 git 에 올려 공유하는 템플릿(ADR-0032). 공개 재무 사실의 단순 비율만 정의하며 권유·가치판단을 담지 않는다.",
+  "citation": {
+    "title": "Example Factor Pack — Debt Ratio",
+    "version": "1.0.0",
+    "publisher": "example-author",
+    "url": "https://github.com/example-author/speculum-packs"
+  },
+  "factors": [
+    {
+      "canonical_id": "example:debt-ratio-winsorized",
+      "uuid": "01910000-0000-7000-8000-000000000001",
+      "name": "부채비율 (상하한 절단, %)",
+      "description": "부채총계 ÷ 자기자본 × 100 을 [0, 1000]% 로 절단한 비율. 공개 재무 사실의 단순 산식이며 가치판단이 아니다. winsorize 의 lower/upper 는 ADR-0032 D1 에 따라 decimal 문자열.",
+      "unit": "percent",
+      "formula": {
+        "ast": {
+          "op": "winsorize",
+          "args": [
+            {
+              "op": "ratio_pct",
+              "left": { "field": "total_liabilities" },
+              "right": { "field": "equity" }
+            }
+          ],
+          "lower": "0",
+          "upper": "1000"
+        },
+        "inputs": ["total_liabilities", "equity"]
+      }
+    }
+  ],
+  "content_hash": "sha256:f01bf1db06e392cfa5db1bcb7819600b2eae5adf6065e7e2a865f4693540ddd2"
+}

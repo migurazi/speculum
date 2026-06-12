@@ -42,7 +42,7 @@ import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
 
 from sqlalchemy.orm import Session
@@ -53,11 +53,18 @@ from app.adapters.base import (
     FinancialStatementRow,
     IfrsType,
 )
-from app.adapters.dart_adapter import DartAdapter
+from app.adapters.dart_adapter import DartAdapter, TreasurySharesResult
+from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS
+from app.repositories.batch_run_repository import (
+    BatchRunRepository,
+    SqlBatchRunRepository,
+)
 from app.repositories.citation_repository import CitationRepository
 from app.repositories.pit_protocols import (
     FinancialRecord,
     FinancialRepository,
+    TreasurySharesRecord,
+    TreasurySharesRepository,
 )
 from app.services.corp_code_mapping import CorpCodeMapping
 from batch.alerts import BatchAlertHandler, NullAlertHandler
@@ -116,6 +123,14 @@ class DartDailyBatch:
             throttling. test=0, 운영 default 6.0 (일 10,000 호출 안전 마진).
         alert_handler: BatchAlertHandler. None 이면 NullAlertHandler — alert
             no-op. KrxDailyBatch 와 동일 인터페이스 (T43 / AC-O-02).
+        batch_run_repo: M1 T48a 의 batch_runs 영속화 repository. None + session
+            있으면 `SqlBatchRunRepository(session)` default 구성 (배치 종료 시
+            DartBatchSummary → batch_runs INSERT, source="DART", market=None).
+            session 도 None 이면 (Fake 모드) 영속화 skip. dry_run 도 skip.
+        treasury_repo: 자사주 (보통주 자기주식수) 영속화 repository. None (미주입)
+            이면 treasury fetch + save skip (하위호환 — 기존 호출 경로 무변경).
+            주입 시 회사별로 stockTotqySttus.json fetch + citation→treasury 순서
+            (financials 패턴) 영구화. corp_code 매핑은 재무 경로 재사용.
     """
 
     def __init__(
@@ -129,11 +144,15 @@ class DartDailyBatch:
         throttle_seconds: float = 6.0,
         session: Session | None = None,
         alert_handler: BatchAlertHandler | None = None,
+        batch_run_repo: BatchRunRepository | None = None,
+        treasury_repo: TreasurySharesRepository | None = None,
     ) -> None:
         self._adapter = adapter
         self._mapping = corp_mapping
         self._citation_repo = citation_repo
         self._financial_repo = financial_repo
+        # treasury_repo None → 자사주 fetch/save skip (하위호환).
+        self._treasury_repo = treasury_repo
         self._ifrs_types = tuple(ifrs_types)
         self._throttle = throttle_seconds
         # oracle T19 M1 — session 있으면 회사별 SAVEPOINT 활성. DB write
@@ -142,6 +161,12 @@ class DartDailyBatch:
         # KrxDailyBatch 와 일관 — None → NullAlertHandler.
         self._alert: BatchAlertHandler = (
             alert_handler if alert_handler is not None else NullAlertHandler()
+        )
+        # M1 T48a — batch_runs 영속화. KrxDailyBatch 와 동일 패턴.
+        self._batch_run_repo: BatchRunRepository | None = (
+            batch_run_repo
+            if batch_run_repo is not None
+            else (SqlBatchRunRepository(session) if session is not None else None)
         )
 
     def run(
@@ -172,6 +197,13 @@ class DartDailyBatch:
         """
         batch_id = uuid4()
         started_at = datetime.now(UTC)
+
+        # M1 T48a — batch_runs row 를 배치 시작 시 INSERT (status='running').
+        # citation 보다 먼저 존재해야 회사별 SAVEPOINT RELEASE 시점의 FK 검사
+        # 통과 (orm/batch_runs.py docstring). dry_run / Fake 모드는 no-op.
+        self._start_batch_run(
+            batch_id=batch_id, started_at=started_at, dry_run=dry_run,
+        )
 
         successes = 0
         failures: list[tuple[str, str]] = []
@@ -237,8 +269,53 @@ class DartDailyBatch:
             started_at=started_at,
             ended_at=datetime.now(UTC),
         )
+        self._finalize_batch_run(summary)
         self._alert.on_complete(summary)
         return summary
+
+    # =========================================================================
+    # 내부 — batch_runs 영속화 (M1 T48a)
+    # =========================================================================
+
+    def _start_batch_run(
+        self,
+        *,
+        batch_id: UUID,
+        started_at: datetime,
+        dry_run: bool,
+    ) -> None:
+        """배치 시작 시 batch_runs row INSERT (status='running').
+
+        조건: `batch_run_repo` 존재 AND not dry_run. citation 보다 먼저 존재해야
+        회사별 SAVEPOINT RELEASE 시점의 FK 검사 통과. market=None (DART 는 회사
+        단위, 시장 구분 없음). source="DART".
+        """
+        if self._batch_run_repo is None or dry_run:
+            return
+        self._batch_run_repo.start(
+            run_id=batch_id,
+            market=None,
+            source="DART",
+            started_at=started_at,
+        )
+
+    def _finalize_batch_run(self, summary: DartBatchSummary) -> None:
+        """배치 종료 시 batch_runs row finalize (UPDATE).
+
+        조건: `batch_run_repo` 존재 AND not dry_run.
+
+        DART 배치는 항상 실행 완료 (전체 batch skip 경로 없음 — 회사 단위
+        skip 만) → status 는 항상 "success". T48b 의 collect_batch_versions 가
+        freeze 후보로 사용.
+        """
+        if self._batch_run_repo is None or summary.dry_run:
+            return
+        self._batch_run_repo.finalize(
+            run_id=summary.batch_id,
+            ended_at=summary.ended_at,
+            success_count=summary.success_count,
+            status=BATCH_STATUS_SUCCESS,
+        )
 
     # =========================================================================
     # 내부 — 회사별 처리 (T18 fetch-then-save 패턴 재사용)
@@ -284,6 +361,22 @@ class DartDailyBatch:
             )
             fetched.append(result)
 
+        # 1b. 자사주 fetch (treasury_repo 주입 시) — in-memory only.
+        #     fetch-then-save (T18 C1 패턴) — 재무 fetch 와 함께 모두 성공한 후에만
+        #     DB write 시작. 자사주 fetch 실패 (AdapterError) 는 회사 단위 isolation
+        #     (재무는 영구화 안 됨 — partial commit 차단, SAVEPOINT ROLLBACK).
+        treasury_fetched: (
+            FetchResult[TreasurySharesResult] | None
+        ) = None
+        if self._treasury_repo is not None:
+            treasury_fetched = self._adapter.fetch_treasury_shares(
+                code=stock_code,
+                corp_code=corp_code,
+                fiscal_year=fiscal_year,
+                fiscal_quarter=fiscal_quarter,
+                batch_id=batch_id,
+            )
+
         # 2. 모든 fetch 성공 → DB write 시작.
         # oracle 리뷰 M1 — `citations[0]` guard. DartAdapter 가 항상 1 citation
         # 반환하나 Protocol 계약상 빈 list 금지 runtime 검증 없음. 새 adapter
@@ -309,6 +402,37 @@ class DartDailyBatch:
                 if not dry_run:
                     self._financial_repo.save_financials(db_records)
                 rows_saved += len(db_records)
+
+        # 3. 자사주 영구화 (treasury_repo 주입 + fetch 성공 시).
+        #    citation → treasury 순서 (FK 만족, financials 패턴). 자사주 결측
+        #    (shares_treasury None) 이면 row 저장 skip — 정식 N/A (0 가정 금지).
+        if treasury_fetched is not None and self._treasury_repo is not None:
+            if not treasury_fetched.citations:
+                raise AdapterError(
+                    f"DART treasury fetch returned no citation for "
+                    f"code={stock_code} corp={corp_code} "
+                    f"{fiscal_year}Q{fiscal_quarter} — FetchResult invariant "
+                    f"violation"
+                )
+            treasury_value = treasury_fetched.data.shares_treasury
+            if treasury_value is not None:
+                citation = treasury_fetched.citations[0]
+                if not dry_run:
+                    self._citation_repo.save(citation)
+                treasury_record = _convert_to_treasury_record(
+                    code=stock_code,
+                    fiscal_year=fiscal_year,
+                    fiscal_quarter=fiscal_quarter,
+                    effective_date=citation.effective_date,
+                    effective_date_precise=(
+                        treasury_fetched.data.effective_date_precise
+                    ),
+                    shares_treasury=treasury_value,
+                    citation_id=citation.id,
+                )
+                if not dry_run:
+                    self._treasury_repo.save_treasury_shares((treasury_record,))
+                rows_saved += 1
 
         return rows_saved
 
@@ -347,9 +471,44 @@ def _convert_to_financial_records(
                 value=row.value,
                 unit=row.unit,
                 ifrs_type=row.ifrs_type.value,  # enum.value = "consolidated"/"separate".
+                effective_date_precise=row.effective_date_precise,
                 citation_id=citation_id,
                 superseded_by=None,
                 created_at=created_at,
             )
         )
     return tuple(db_records)
+
+
+def _convert_to_treasury_record(
+    *,
+    code: str,
+    fiscal_year: int,
+    fiscal_quarter: int,
+    effective_date: date,
+    effective_date_precise: bool,
+    shares_treasury: int,
+    citation_id: UUID,
+) -> TreasurySharesRecord:
+    """adapter TreasurySharesResult → DB TreasurySharesRecord 변환.
+
+    - fiscal_period: `f"{fiscal_year}Q{fiscal_quarter}"` (financials 동일).
+    - lineage_id: financials 와 동일 placeholder (uuid5 deterministic). T13
+      Phase B 의 stocks_master 합류 시 backfill migration 필요.
+    - effective_date: adapter 의 citation.effective_date — rcept_no 도출 정밀
+      공시일 (ADR-0012 D6) 또는 신고기한 보수값 fallback (ADR-0012 D1).
+    - effective_date_precise: adapter 의 도출 성공 여부 (영속화).
+    - superseded_by: 본 cycle 미설정 (정정공시 처리는 별도 cycle).
+    """
+    return TreasurySharesRecord(
+        id=uuid4(),
+        code=code,
+        code_lineage_id=uuid5(NAMESPACE_OID, f"lineage|{code}"),
+        effective_date=effective_date,
+        fiscal_period=f"{fiscal_year}Q{fiscal_quarter}",
+        shares_treasury=shares_treasury,
+        effective_date_precise=effective_date_precise,
+        citation_id=citation_id,
+        superseded_by=None,
+        created_at=datetime.now(UTC),
+    )

@@ -117,6 +117,26 @@ class SourceCitation:
 | batch_id | 같은 batch 의 다른 데이터들과 함께 freeze 가능 (재현성) |
 | url | 1 차 자료로 직접 이동. Fidelity 의 마지막 보루 |
 
+#### Amendment (ⓓ stock_snapshots precompute) — `SourceKind.PRECOMPUTE`
+
+`SourceKind` 에 `PRECOMPUTE` 추가. 기존 8 종(DART/KRX/FDR/PYKRX/ECOS/KOSIS/
+USER_INPUT/FSC)은 모두 **1 차 raw 자료**의 출처지만, `stock_snapshots`(D5)는
+factor 평가의 **derived(파생) 결과**라 외부 fetch 원문이 없다. 이를 1 차 출처로
+위장(예: KRX citation 재사용)하면 Fidelity(§2.1)가 왜곡되므로 별도 kind 로 구분한다.
+
+- precompute 일배치(`batch/snapshot_daily.py`)가 실행당 **단일 PRECOMPUTE
+  citation** 1 개를 생성(`identifier = "SNAPSHOT_PRECOMPUTE|{as_of}|{batch_id}"`,
+  url=None, batch_id = 그 배치 run). 모든 snapshot row 가 이를 공유.
+- **per-input 1:1 citation 이 아니다** — 한 factor 가 price(KRX)+financial(DART)
+  등 복수 입력을 쓸 수 있으나, snapshot 의 `citation_id` 는 "이 값이 어느 precompute
+  run 의 산물인가"만 가리키는 대표 citation 이다. 전체 input provenance 는
+  snapshot 의 `data_versions`(freeze fingerprint — batch_id·evaluator_version·
+  policy hash, screen_runs 와 대칭) + `inputs`(산정 입력값)에 보존된다. per-input
+  citation fan-out(join 테이블)은 M2+.
+- DB `source_citations.source` 는 String(32)(enum/CHECK 없음)이라 value 추가가
+  migration 을 요구하지 않으며 SourceCitation 의 identifier 검증도 source-무관
+  (non-empty·printable·max-length)이라 PRECOMPUTE citation 이 그대로 통과한다.
+
 ### D4. Pack 버저닝 — Semver + immutable SHA-256 hash
 
 Norma 패턴 동일.

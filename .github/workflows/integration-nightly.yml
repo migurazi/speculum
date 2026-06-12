@@ -4,13 +4,14 @@
 # 비결정성 + 외부 rate limit + DART API 비용. cron 야간 (KST 02:00 = UTC
 # 17:00) + 수동 trigger 만.
 #
-# DART 테스트는 `secrets.DART_API_KEY` 가 설정된 경우만 실행. fork PR /
-# secret 미주입 환경에서는 conftest 가 자동 skip.
+# DART / ECOS / KOSIS 테스트는 각 `secrets.*_API_KEY` 가 설정된 경우만 실행.
+# fork PR / secret 미주입 환경에서는 conftest 가 해당 key fixture 를 None 으로
+# 반환 → 해당 test 가 자동 skip.
 #
 # 의존성:
 #   - pykrx (KRX 정보데이터시스템 + Naver finance crawl)
 #   - FinanceDataReader (Yahoo / Naver crawl)
-#   - httpx (DART OpenAPI)
+#   - httpx (DART OpenAPI / 한국은행 ECOS / 통계청 KOSIS)
 #
 # 관련 ADR / 문서:
 # - ADR-0003 D8 — Adapter 의 외부 호출은 integration marker
@@ -48,9 +49,11 @@ jobs:
 
       - name: Integration tests
         env:
-          # DART_API_KEY 가 secret 으로 주입된 경우만 dart test 활성. 없으면
-          # conftest 의 `dart_api_key` fixture 가 None → 해당 test 가 skip.
+          # 각 *_API_KEY 가 secret 으로 주입된 경우만 해당 test 활성. 없으면
+          # conftest 의 key fixture 가 None → 해당 test skip (fork PR 안전).
           DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          ECOS_API_KEY: ${{ secrets.ECOS_API_KEY }}
+          KOSIS_API_KEY: ${{ secrets.KOSIS_API_KEY }}
         # `-m integration` — 본 marker 가진 test 만 실행 (default `not
-        # integration` 은 server-ci.yml).
-        run: pytest tests/integration -m integration -v
+        # integration` 은 server-ci.yml). --tb=short 로 실패 traceback 간결화.
+        run: pytest tests/integration -m integration -v --tb=short

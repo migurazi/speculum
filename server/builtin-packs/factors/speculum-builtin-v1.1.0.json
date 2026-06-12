@@ -1,0 +1,358 @@
+{
+  "$schema": "https://speculum.dev/schemas/factor-pack-v1.json",
+  "type": "factor-pack",
+  "pack_slug": "speculum-builtin",
+  "version": "1.1.0",
+  "publisher": "speculum",
+  "license": "MIT",
+  "created_at": "2026-06-05",
+  "description": "Speculum 빌트인 핵심 factor. ADR-0004 D6 의 valuation/profitability/market 카테고리 subset. v1.1.0 = 1 년 총수익률(price-return:total-annual, 배당 재투자 포함, ADR-0035) 추가.",
+  "citation": {
+    "title": "Speculum Built-in Factor Pack",
+    "version": "1.1.0",
+    "publisher": "speculum",
+    "url": "https://speculum.dev/factor-packs/builtin"
+  },
+  "factors": [
+    {
+      "canonical_id": "market-cap:ex-treasury",
+      "uuid": "018f9b00-0001-7000-8000-000000000001",
+      "name": "시가총액 (자사주 제외)",
+      "description": "(발행주식수 - 자사주) × 보정 종가. 자사주는 의결권·배당권이 없어 실효 시가총액에서 차감. ADR-0004 D1 default.",
+      "alt_names": [
+        "시가총액"
+      ],
+      "formula": {
+        "ast": {
+          "op": "mul",
+          "left": {
+            "op": "sub",
+            "left": {
+              "field": "shares_issued"
+            },
+            "right": {
+              "field": "shares_treasury"
+            }
+          },
+          "right": {
+            "field": "close_price_adjusted"
+          }
+        },
+        "inputs": [
+          "shares_issued",
+          "shares_treasury",
+          "close_price_adjusted"
+        ]
+      },
+      "unit": "krw",
+      "tags": [
+        "market",
+        "valuation-base"
+      ],
+      "ifrs_type": "n/a"
+    },
+    {
+      "canonical_id": "market-cap:krx-official",
+      "uuid": "018f9b00-0001-7000-8000-000000000002",
+      "name": "시가총액 (KRX 공식)",
+      "description": "발행주식수 × 보정 종가. KRX 가 발표하는 공식 정의. 자사주 미차감.",
+      "alt_names": [
+        "시가총액 (KRX)"
+      ],
+      "formula": {
+        "ast": {
+          "op": "mul",
+          "left": {
+            "field": "shares_issued"
+          },
+          "right": {
+            "field": "close_price_adjusted"
+          }
+        },
+        "inputs": [
+          "shares_issued",
+          "close_price_adjusted"
+        ]
+      },
+      "unit": "krw",
+      "tags": [
+        "market",
+        "valuation-base"
+      ],
+      "ifrs_type": "n/a"
+    },
+    {
+      "canonical_id": "per:ttm-consolidated-ifrs",
+      "uuid": "018f9b00-0001-7000-8000-000000000003",
+      "name": "PER (TTM, 연결, K-IFRS)",
+      "description": "주가수익비율. 시가총액(자사주 제외) / 최근 4분기 연결 당기순이익 합. ADR-0004 D3 default. 결손 시 N/A.",
+      "alt_names": [
+        "PER",
+        "P/E (TTM, 연결)"
+      ],
+      "formula": {
+        "ast": {
+          "op": "div",
+          "left": {
+            "field": "market_cap_ex_treasury"
+          },
+          "right": {
+            "op": "sum_last_n_quarters",
+            "n": 4,
+            "field": "net_income_attributable_consolidated_ifrs"
+          }
+        },
+        "inputs": [
+          "market_cap_ex_treasury",
+          "net_income_attributable_consolidated_ifrs"
+        ]
+      },
+      "unit": "ratio",
+      "tags": [
+        "valuation",
+        "earnings"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "per:annual-consolidated-ifrs",
+      "uuid": "018f9b00-0001-7000-8000-000000000004",
+      "name": "PER (연간, 연결, K-IFRS)",
+      "description": "주가수익비율. 시가총액(자사주 제외) / 최근 사업연도 연결 당기순이익.",
+      "alt_names": [
+        "PER (Annual)"
+      ],
+      "formula": {
+        "ast": {
+          "op": "div",
+          "left": {
+            "field": "market_cap_ex_treasury"
+          },
+          "right": {
+            "field": "net_income_attributable_consolidated_ifrs_annual"
+          }
+        },
+        "inputs": [
+          "market_cap_ex_treasury",
+          "net_income_attributable_consolidated_ifrs_annual"
+        ]
+      },
+      "unit": "ratio",
+      "tags": [
+        "valuation",
+        "earnings"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "per:krx-official",
+      "uuid": "018f9b00-0001-7000-8000-000000000005",
+      "name": "PER (KRX 공식)",
+      "description": "KRX 정보데이터시스템 발표 PER. 시가총액(자사주 포함) / 최근 연결 당기순이익 — KRX 의 공식 정의.",
+      "alt_names": [
+        "PER (KRX)"
+      ],
+      "formula": {
+        "ast": {
+          "op": "div",
+          "left": {
+            "field": "market_cap_krx_official"
+          },
+          "right": {
+            "field": "net_income_attributable_consolidated_ifrs_annual"
+          }
+        },
+        "inputs": [
+          "market_cap_krx_official",
+          "net_income_attributable_consolidated_ifrs_annual"
+        ]
+      },
+      "unit": "ratio",
+      "tags": [
+        "valuation",
+        "earnings"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "pbr:consolidated-ifrs",
+      "uuid": "018f9b00-0001-7000-8000-000000000006",
+      "name": "PBR (연결, K-IFRS)",
+      "description": "주가순자산비율. 시가총액(자사주 제외) / 지배기업소유주지분 자본 (분기말, 자사주 차감 후). ADR-0004 D4.",
+      "alt_names": [
+        "PBR",
+        "P/B"
+      ],
+      "formula": {
+        "ast": {
+          "op": "div",
+          "left": {
+            "field": "market_cap_ex_treasury"
+          },
+          "right": {
+            "field": "equity_attributable_to_common_consolidated_ifrs"
+          }
+        },
+        "inputs": [
+          "market_cap_ex_treasury",
+          "equity_attributable_to_common_consolidated_ifrs"
+        ]
+      },
+      "unit": "ratio",
+      "tags": [
+        "valuation",
+        "book"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "roe:ttm-avg-equity-consolidated-ifrs",
+      "uuid": "018f9b00-0001-7000-8000-000000000007",
+      "name": "ROE (TTM, 평균자본, 연결, K-IFRS)",
+      "description": "자기자본이익률. 최근 4분기 연결 당기순이익 / (분기초 자본 + 분기말 자본) / 2. 신주발행·자사주매입 영향 반영. ADR-0004 D5 default.",
+      "alt_names": [
+        "ROE"
+      ],
+      "formula": {
+        "ast": {
+          "op": "div",
+          "left": {
+            "op": "sum_last_n_quarters",
+            "n": 4,
+            "field": "net_income_attributable_consolidated_ifrs"
+          },
+          "right": {
+            "op": "avg",
+            "args": [
+              {
+                "field": "equity_attributable_to_common_consolidated_ifrs_period_begin"
+              },
+              {
+                "field": "equity_attributable_to_common_consolidated_ifrs"
+              }
+            ]
+          }
+        },
+        "inputs": [
+          "net_income_attributable_consolidated_ifrs",
+          "equity_attributable_to_common_consolidated_ifrs",
+          "equity_attributable_to_common_consolidated_ifrs_period_begin"
+        ]
+      },
+      "unit": "ratio",
+      "tags": [
+        "profitability"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "eps:basic-ttm-consolidated-ifrs",
+      "uuid": "018f9b00-0001-7000-8000-000000000008",
+      "name": "EPS (기본, TTM, 연결, K-IFRS)",
+      "description": "주당순이익. 최근 4분기 기본 EPS 합. ADR-0004 D2 default — 한국 회사 다수가 희석 EPS 와 미미한 차이.",
+      "alt_names": [
+        "EPS",
+        "Basic EPS"
+      ],
+      "formula": {
+        "ast": {
+          "op": "sum_last_n_quarters",
+          "n": 4,
+          "field": "basic_eps_consolidated_ifrs"
+        },
+        "inputs": [
+          "basic_eps_consolidated_ifrs"
+        ]
+      },
+      "unit": "krw",
+      "tags": [
+        "earnings"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "dividend-yield:trailing-annual",
+      "uuid": "018f9b00-0001-7000-8000-000000000009",
+      "name": "배당수익률 (전년 기준)",
+      "description": "최근 사업연도 주당 현금배당 / 현재 종가. ADR-0009 의 cash_dividend 별도 처리 — 수정주가 보정 안 됨 (ADR-0001 D1).",
+      "alt_names": [
+        "Dividend Yield"
+      ],
+      "formula": {
+        "ast": {
+          "op": "ratio_pct",
+          "left": {
+            "field": "dividend_per_share_trailing_annual"
+          },
+          "right": {
+            "field": "close_price_adjusted"
+          }
+        },
+        "inputs": [
+          "dividend_per_share_trailing_annual",
+          "close_price_adjusted"
+        ]
+      },
+      "unit": "percent",
+      "tags": [
+        "dividend",
+        "yield"
+      ],
+      "ifrs_type": "n/a"
+    },
+    {
+      "canonical_id": "volume-turnover:avg-20d",
+      "uuid": "018f9b00-0001-7000-8000-00000000000a",
+      "name": "거래대금 회전율 (20일 평균)",
+      "description": "최근 20 영업일 거래대금 평균 / 시가총액(자사주 제외) × 100. 유동성 측정. 영업일 = KRX 캘린더 기준 (ADR-0008 D2 + T17).",
+      "alt_names": [
+        "Turnover Ratio (20D Avg)"
+      ],
+      "formula": {
+        "ast": {
+          "op": "ratio_pct",
+          "left": {
+            "field": "trading_value_20d_avg"
+          },
+          "right": {
+            "field": "market_cap_ex_treasury"
+          }
+        },
+        "inputs": [
+          "trading_value_20d_avg",
+          "market_cap_ex_treasury"
+        ]
+      },
+      "unit": "percent",
+      "tags": [
+        "market",
+        "liquidity"
+      ],
+      "ifrs_type": "n/a"
+    },
+    {
+      "canonical_id": "price-return:total-annual",
+      "uuid": "018f9b00-0001-7000-8000-00000000000b",
+      "name": "총수익률 (1년, 배당 재투자)",
+      "description": "직전 1년 세전 총수익률. 보정 종가 변동 + 배당락일 현금배당 재투자(첫 거래일 기준 total return index, ADR-0035 D6/D7). 결과는 ratio(소수) — 표시 시 ×100 (percent). 결손 시 N/A.",
+      "alt_names": [
+        "Total Return (1Y)"
+      ],
+      "formula": {
+        "ast": {
+          "field": "total_return_trailing_1y"
+        },
+        "inputs": [
+          "total_return_trailing_1y"
+        ]
+      },
+      "unit": "percent",
+      "tags": [
+        "market",
+        "performance"
+      ],
+      "ifrs_type": "n/a"
+    }
+  ],
+  "content_hash": "sha256:fd1e05d2a182efefb575f43d594a7af88fd05806fb2a75583ade58ba4672fa85"
+}

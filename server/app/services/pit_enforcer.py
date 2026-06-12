@@ -36,7 +36,11 @@ from datetime import date
 from typing import Final, TypeVar
 from uuid import UUID
 
-from app.repositories.pit_protocols import PITRecord, SupersedableRecord
+from app.repositories.pit_protocols import (
+    PITRecord,
+    SupersedableRecord,
+    VintageRecord,
+)
 from app.services.as_of_policy import PIT_POLICY_VERSION
 
 __all__ = [
@@ -112,6 +116,8 @@ class PITDataCorruptionError(PITError):
 # Generic Record TypeVar — PIT 알고리즘이 임의의 PITRecord 호환 객체에 작동.
 _R = TypeVar("_R", bound=PITRecord)
 _S = TypeVar("_S", bound=SupersedableRecord)
+# vintage 이중 시간축 record (MacroIndicatorRecord) — assert_no_vintage_lookahead 전용.
+_V = TypeVar("_V", bound=VintageRecord)
 # latest_active_by_key 의 key 가 반환하는 group identity — hashable + stable.
 _K = TypeVar("_K", bound=Hashable)
 
@@ -153,22 +159,74 @@ class PITEnforcer:
         return [r for r in records if r.effective_date <= as_of]
 
     # ---------------------------------------------------------------------
-    # Assert layer — 묵시적 필터 검증의 마지막 보루
+    # Assert layer — 묵시적 필터 / SQL WHERE 검증의 마지막 보루
+    #
+    # M5_PLAN #1 — SQL repository fetch 가 반환 직전 본 layer 를 호출하여
+    # defense-in-depth (SQL WHERE 를 대체하지 않고 그 위에 한 겹). 코드 변경으로
+    # WHERE 회귀가 생기면 LookAheadError 로 fail-loud. 정상 데이터에선 항상 통과.
     # ---------------------------------------------------------------------
 
     def assert_no_lookahead(
         self,
         records: Sequence[_R],
         as_of: date,
+        *,
+        date_of: Callable[[_R], date] | None = None,
     ) -> None:
-        """`records` 의 모든 record 가 `effective_date <= as_of` 인지 검사.
+        """`records` 의 모든 record 의 PIT 기준 date 가 `<= as_of` 인지 검사.
+
+        `date_of` 가 None (default) 이면 `r.effective_date` 를 검사 — 기존 동작과
+        완전 동일 (기존 무인자 호출 무영향). `date_of` 가 주어지면 그 추출자가
+        반환한 date 를 검사 — corporate action 의 `announced_date` 처럼 도메인별
+        다른 PIT 축 (effective_date 외) 의 사후 regression assert 에 사용
+        (M5_PLAN #1 — 이중 PIT 의 announced_date 검사).
+
+        Args:
+            records: 검사 대상 record list.
+            as_of: PIT 기준 일자.
+            date_of: PIT 기준 컬럼 추출자. None 이면 `r.effective_date` (default).
 
         Raises:
             LookAheadError: 위반하는 첫 record (등장 순서) 에서 즉시 raise.
+                예외의 `effective_date` 필드에는 실제 위반한 date (date_of 가
+                주어졌으면 그 값) 가 담긴다.
+        """
+        date_extractor: Callable[[_R], date] = (
+            date_of if date_of is not None else (lambda r: r.effective_date)
+        )
+        for r in records:
+            violating_date = date_extractor(r)
+            if violating_date > as_of:
+                raise LookAheadError(r.id, violating_date, as_of)
+
+    def assert_no_vintage_lookahead(
+        self,
+        records: Sequence[_V],
+        as_of: date,
+    ) -> None:
+        """vintage 이중 시간축 record (macro) 의 두 축이 모두 `<= as_of` 인지 검사.
+
+        ECOS 거시지표는 단일 `effective_date` 가 아니라 `reference_date` (지표 기준
+        기간) / `vintage_date` (한국은행 공표·개정 시점) 두 축을 가지며, look-ahead
+        0 을 위해 *두 축 모두* `<= as_of` 여야 한다 (MacroIndicatorRecord docstring
+        의 PIT 조회 규약). `assert_no_lookahead` 는 단일 `effective_date` 전용이라
+        macro 에는 적용 불가 — 본 메서드가 이중 축 전용 사후 regression assert
+        (M5_PLAN #1).
+
+        Args:
+            records: vintage 이중 시간축 record list (MacroIndicatorRecord).
+            as_of: PIT 기준 일자.
+
+        Raises:
+            LookAheadError: `reference_date > as_of` 또는 `vintage_date > as_of`
+                인 첫 record 에서 즉시 raise. 위반한 축의 date 가 예외에 담긴다
+                (reference_date 를 vintage_date 보다 먼저 검사).
         """
         for r in records:
-            if r.effective_date > as_of:
-                raise LookAheadError(r.id, r.effective_date, as_of)
+            if r.reference_date > as_of:
+                raise LookAheadError(r.id, r.reference_date, as_of)
+            if r.vintage_date > as_of:
+                raise LookAheadError(r.id, r.vintage_date, as_of)
 
     # ---------------------------------------------------------------------
     # 정정공시 chain 해소 — 핵심 알고리즘

@@ -1,0 +1,45 @@
+{
+  "title": "Screener",
+  "description": "조건을 추가하고 실행하면 기준 일자 ({asOf}) 의 데이터로 필터한 종목코드 list 가 표시됩니다.",
+  "securityTypeSelector": {
+    "sectionLabel": "자산군",
+    "legend": "자산군 선택",
+    "selectedCount": "{count}개 자산군 선택됨",
+    "types": {
+      "common": "보통주",
+      "preferred": "우선주",
+      "etf": "ETF",
+      "reit": "리츠"
+    }
+  },
+  "factorSectionLabel": "결과 표시 factor",
+  "factorsLoadError": "factor 목록을 불러오지 못했습니다. 페이지를 새로고침해 주세요.",
+  "factorsLoading": "factor 목록 로딩 중...",
+  "factorLegend": "결과 표시 factor 선택",
+  "factorSelectNone": "최소 1개 선택해야 실행할 수 있습니다.",
+  "factorSelectedCount": "{count}개 선택됨",
+  "factorNoneAvailable": "선택 가능한 factor 가 없습니다.",
+  "runPending": "실행 중...",
+  "runButton": "Screener 실행",
+  "resultsHeading": "결과",
+  "runError": "실행 실패: {message}",
+  "resultsSummary": "총 {total} 종목 매칭 · 기준 {asOf}",
+  "resultsEmpty": "아직 실행 결과가 없습니다.",
+  "conditionBuilder": {
+    "sectionLabel": "조건",
+    "loadError": "factor 목록을 불러오지 못했습니다. factor canonical_id 를 직접 입력하세요.",
+    "noConditions": "조건을 한 개 이상 추가해야 실행할 수 있습니다.",
+    "factorLoading": "factor 목록 로딩 중...",
+    "factorPlaceholder": "factor 선택",
+    "factorAriaLabel": "조건 {index} factor",
+    "opAriaLabel": "조건 {index} 연산자",
+    "valueAriaLabel": "조건 {index} 값",
+    "valuePlaceholder": "값",
+    "removeAriaLabel": "조건 {index} 삭제",
+    "addButton": "조건 추가"
+  },
+  "resultsTable": {
+    "codeHeader": "종목코드",
+    "noResults": "조건을 만족하는 종목이 없습니다."
+  }
+}

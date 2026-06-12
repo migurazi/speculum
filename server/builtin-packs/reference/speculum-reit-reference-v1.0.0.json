@@ -1,0 +1,125 @@
+{
+  "$schema": "https://speculum.dev/schemas/factor-pack-v1.json",
+  "type": "factor-pack",
+  "pack_slug": "community/speculum-reit-reference",
+  "version": "1.0.0",
+  "publisher": "speculum",
+  "license": "MIT",
+  "created_at": "2026-06-02",
+  "description": "리츠(REIT) 전용 참조 factor pack — ffo-multiple:reit / dividend-yield:reit. ADR-0023 D8(재현성 경로) 결정에 따라 빌트인 pack 무변경을 위해 reference tier(community) 로 분리. FFO 구성 계정(감가상각)·배당 계정은 dart_account_mapper canonical key(depreciation_expense / dividends_paid_annual) 로 정규화됨. 감가상각 미보고 리츠·보통주는 계정 자연 결손 → 리츠 factor N/A (§2.1 Fidelity — security_type 분기 없이 데이터 결손이 N/A 를 생성).",
+  "citation": {
+    "title": "Speculum REIT Reference Factor Pack",
+    "version": "1.0.0",
+    "publisher": "speculum",
+    "url": "https://speculum.dev/factor-packs/reference/reit",
+    "note": "FFO(Funds From Operations) = 지배주주 당기순이익(TTM) + 감가상각비(TTM). NAREIT 의 FFO 정의를 K-IFRS 연결 기준 핵심 항목으로 근사. 배당수익률 = 재무활동 배당금 지급(연) / 시가총액(자사주 제외)."
+  },
+  "factors": [
+    {
+      "canonical_id": "market-cap:ex-treasury",
+      "uuid": "018fa100-0002-7000-8000-000000000000",
+      "name": "시가총액 (자사주 제외)",
+      "description": "(발행주식수 - 자사주) × 보정 종가. 리츠 factor 의 분모(시가총액) derived 입력으로 본 reference pack 에 self-contained 포함 — db_field_provider 의 market_cap_ex_treasury 파생 field 가 이 factor 를 evaluator 로 평가해 해소(target_factor 동일 canonical_id). 빌트인 동일 정의(content_hash 무관 — 별도 pack).",
+      "alt_names": [
+        "시가총액"
+      ],
+      "formula": {
+        "ast": {
+          "op": "mul",
+          "left": {
+            "op": "sub",
+            "left": {
+              "field": "shares_issued"
+            },
+            "right": {
+              "field": "shares_treasury"
+            }
+          },
+          "right": {
+            "field": "close_price_adjusted"
+          }
+        },
+        "inputs": [
+          "shares_issued",
+          "shares_treasury",
+          "close_price_adjusted"
+        ]
+      },
+      "unit": "krw",
+      "tags": [
+        "market",
+        "valuation-base"
+      ],
+      "ifrs_type": "n/a"
+    },
+    {
+      "canonical_id": "ffo-multiple:reit",
+      "uuid": "018fa100-0002-7000-8000-000000000001",
+      "name": "FFO 배수 (리츠)",
+      "description": "시가총액(자사주 제외) / FFO. FFO = 최근 4분기 지배주주 연결 당기순이익 합 + 최근 4분기 감가상각비 합. 리츠 가치 평가의 핵심 배수 (감가상각 비현금 비용을 순이익에 환원). 감가상각 미보고 종목은 FFO 구성 결손으로 N/A.",
+      "alt_names": [
+        "P/FFO",
+        "FFO Multiple"
+      ],
+      "formula": {
+        "ast": {
+          "op": "div",
+          "left": {
+            "field": "market_cap_ex_treasury"
+          },
+          "right": {
+            "op": "add",
+            "left": {
+              "field": "net_income_attributable_consolidated_ifrs_annual"
+            },
+            "right": {
+              "field": "depreciation_expense_annual"
+            }
+          }
+        },
+        "inputs": [
+          "market_cap_ex_treasury",
+          "net_income_attributable_consolidated_ifrs_annual",
+          "depreciation_expense_annual"
+        ]
+      },
+      "unit": "ratio",
+      "tags": [
+        "valuation",
+        "reit"
+      ],
+      "ifrs_type": "consolidated"
+    },
+    {
+      "canonical_id": "dividend-yield:reit",
+      "uuid": "018fa100-0002-7000-8000-000000000002",
+      "name": "배당수익률 (리츠)",
+      "description": "재무활동 배당금 지급(연 누적) / 시가총액(자사주 제외) × 100. 리츠의 의무 배당(이익 90% 이상) 특성을 시가총액 대비로 측정. DART 현금흐름표의 재무활동 배당금 지급을 분자로 사용. 배당 계정 결손 종목은 N/A.",
+      "alt_names": [
+        "REIT Dividend Yield"
+      ],
+      "formula": {
+        "ast": {
+          "op": "ratio_pct",
+          "left": {
+            "field": "dividends_paid_annual"
+          },
+          "right": {
+            "field": "market_cap_ex_treasury"
+          }
+        },
+        "inputs": [
+          "dividends_paid_annual",
+          "market_cap_ex_treasury"
+        ]
+      },
+      "unit": "percent",
+      "tags": [
+        "dividend",
+        "reit"
+      ],
+      "ifrs_type": "consolidated"
+    }
+  ],
+  "content_hash": "sha256:41afd9bcede9f238d3d3cde18b28f34c5175428bb6c06ea3a0354599d5165d51"
+}

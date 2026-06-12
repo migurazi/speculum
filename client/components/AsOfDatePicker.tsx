@@ -21,6 +21,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 
 import { useAsOfStore, useIsToday } from "@/state/as-of-store";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,7 @@ interface AsOfDatePickerProps {
 export function AsOfDatePicker({
   className,
 }: AsOfDatePickerProps): JSX.Element {
+  const t = useTranslations("common");
   const asOf = useAsOfStore((s) => s.asOf);
   const isToday = useIsToday();
   const setAsOf = useAsOfStore((s) => s.setAsOf);
@@ -79,7 +81,7 @@ export function AsOfDatePicker({
               setAsOf(next);
             }
           }}
-          aria-label="기준 일자 선택"
+          aria-label={t("asOfDatePicker.inputAriaLabel")}
           className={cn(
             "rounded border px-2 py-1 font-mono",
             // oracle ADR-0008 D4.1 — 오늘 vs 과거 시각 차이.
@@ -94,9 +96,9 @@ export function AsOfDatePicker({
           type="button"
           onClick={resetToToday}
           className="rounded border border-neutral-300 px-2 py-1 text-xs text-neutral-700 hover:bg-neutral-100 focus:outline-none focus:ring-2 focus:ring-neutral-500"
-          aria-label="오늘 날짜로 리셋"
+          aria-label={t("asOfDatePicker.resetAriaLabel")}
         >
-          오늘
+          {t("asOfDatePicker.resetButtonLabel")}
         </button>
       ) : null}
     </div>
@@ -118,6 +120,7 @@ export function AsOfBanner({
 }: {
   readonly className?: string;
 }): JSX.Element | null {
+  const t = useTranslations("common");
   const asOf = useAsOfStore((s) => s.asOf);
   const isToday = useIsToday();
 
@@ -139,8 +142,7 @@ export function AsOfBanner({
         className,
       )}
     >
-      과거 시점 분석 — <span className="font-mono">{asOf}</span> 기준 데이터를
-      표시합니다. 그 시점 이후의 데이터는 사용되지 않습니다.
+      {t("asOfBanner.pastAnalysis", { asOf })}
     </div>
   );
 }
