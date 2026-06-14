@@ -89,6 +89,80 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the data-flow diagram.
 
 ---
 
+## Running with Real Data — API Keys and How to Get Them
+
+The Korean [README](README.md) documents the dev demo seed (`scripts.seed_demo`,
+six KOSPI stocks at `as_of=2024-06-28`). To run against **real market data**, the
+daily batches (`server/batch/`) ingest from primary sources. Required keys differ
+by source and are **all free**, but you must sign up and request an auth key
+yourself. Price / market-cap / volume series work **without any key** (pykrx /
+FinanceDataReader); financial, macro, and dividend factors stay N/A until the keys
+below are present.
+
+| Source | Env var | Data it fills | Where to get it | Notes |
+|--------|---------|---------------|-----------------|-------|
+| **KRX** (pykrx / FDR) | _(none)_ | Price, market cap, volume, moving averages, RSI, 52-week high/low | — | Works with just the library installed |
+| **DART** (Financial Supervisory Service) | `DART_API_KEY` | Quarterly financial statements → PER, PBR, ROE, EPS, debt ratio, etc. + ticker↔corp_code mapping | <https://opendart.fss.or.kr> → request auth key | **Required for financial factors.** 10,000 calls/day limit |
+| **ECOS** (Bank of Korea) | `ECOS_API_KEY` | FX (USD/KRW), base rate, treasury yields, macro series | <https://ecos.bok.or.kr> → OpenAPI auth key | |
+| **KOSIS** (Statistics Korea) | `KOSIS_API_KEY` | Employment rate, unemployment, industrial production — Statistics-Korea-only macro | <https://kosis.kr/openapi> → apply for use | |
+| **FSC** (Financial Services Commission, data.go.kr) | `FSC_API_KEY` _(or `DATA_GO_KR_SERVICE_KEY`)_ | Dividends (Total Return adjustment) | <https://www.data.go.kr> → apply for use | Either env name is recognized |
+
+### 1) Configure keys
+
+Create `server/.env` or inject the variables into your shell:
+
+```bash
+# server/.env (example — replace with your issued keys)
+DART_API_KEY=your_DART_auth_key
+ECOS_API_KEY=your_ECOS_auth_key
+KOSIS_API_KEY=your_KOSIS_auth_key
+FSC_API_KEY=your_data.go.kr_service_key
+SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db
+```
+
+### 2) Run the batches — unified scheduler
+
+`batch.scheduler` is the unified entry point (meant for cron). Ingest order is
+corp-code → ecos → kosis → dart → snapshot (raw first, then derived precompute).
+
+```bash
+cd server
+
+# Full universe (all listed companies via corp_code — needs every key, tens of minutes to hours due to rate limits)
+python -m batch.scheduler --job all
+
+# A single source — e.g. macro only
+python -m batch.scheduler --job ecos --observed-date 2026-06-12
+python -m batch.scheduler --job kosis --observed-date 2026-06-12
+
+# DART financials — specific tickers / quarter (fast partial ingest)
+python -m batch.scheduler --job dart --codes 005930 000660 035420 --fiscal-year 2024 --fiscal-quarter 1
+
+# Force-refresh the corpCode.xml cache
+python -m batch.scheduler --job corp-code --force-refresh-corp-code
+```
+
+`--observed-date` defaults to today; `--fiscal-year`/`--fiscal-quarter` default to
+the most recent quarter past its filing deadline; `--codes` defaults to all
+companies in corp_code.
+
+### 3) Start backend / frontend
+
+Same as the demo, but set `as_of` to an ingested trading day.
+
+```bash
+SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db uvicorn app.main:app --reload --port 8000
+# In another terminal, from client/
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000 pnpm dev
+```
+
+> **Point-in-Time note**: `as_of` must be a trading day for which data exists.
+> Financials are keyed by disclosure effective date (`effective_date`), so right
+> after ingest the latest quarter may legitimately be N/A if it has not been
+> filed yet.
+
+---
+
 ## Legal Position (short version)
 
 Speculum, operated free of charge with Google OAuth sign-in, is **not subject to registration as a "similar investment advisory business" (유사투자자문업) under Article 101 of the Korean Capital Markets Act** — the "consideration" element is not met. Should the operating model change (paid subscription, advertising revenue, push alerts on prices), [ADR-0006](docs/adr/adr-0006-legal-review.md) must be re-issued and qualified legal counsel consulted before launch.
