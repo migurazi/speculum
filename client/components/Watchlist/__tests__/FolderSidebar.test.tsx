@@ -82,12 +82,14 @@ describe("FolderSidebar", () => {
 
   it("shows rename/delete for user folder", () => {
     renderSidebar();
-    expect(
-      screen.getByLabelText("코스피 대형주 이름 변경"),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByLabelText("코스피 대형주 삭제"),
-    ).toBeInTheDocument();
+    const renameBtn = screen.getByLabelText("코스피 대형주 이름 변경");
+    const deleteBtn = screen.getByLabelText("코스피 대형주 삭제");
+    expect(renameBtn).toBeInTheDocument();
+    expect(deleteBtn).toBeInTheDocument();
+    // 가시 텍스트가 하드코딩이 아닌 i18n 키(renameButton/deleteButton)에서 렌더 —
+    // check:i18n 게이트가 키 존재를, 본 단언이 올바른 버튼 매핑을 보증.
+    expect(renameBtn).toHaveTextContent("이름");
+    expect(deleteBtn).toHaveTextContent("삭제");
   });
 
   it("invokes onSelect when clicking folder name", async () => {

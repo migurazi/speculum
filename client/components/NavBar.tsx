@@ -22,6 +22,7 @@
 
 import { useTranslations } from "next-intl";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 import { AsOfDatePicker } from "@/components/AsOfDatePicker";
 import { AuthButton } from "@/components/AuthButton";
@@ -44,11 +45,25 @@ interface NavBarProps {
   readonly className?: string;
 }
 
+/**
+ * 현재 경로가 해당 nav link 의 active 대상인지 판정.
+ *
+ * 정확 일치(`/screener`) 또는 하위 세그먼트(`/stock/005930` → `/stock`)를 active
+ * 로 본다. 단순 startsWith 는 `/tax` 가 `/taxfoo` 를 오탐하므로 `${href}/` 접두로
+ * 세그먼트 경계를 강제한다. (예외: href `/` 는 NAV_LINKS 에 없어 본 함수 무관.)
+ */
+export function isNavLinkActive(pathname: string, href: string): boolean {
+  return pathname === href || pathname.startsWith(`${href}/`);
+}
+
 export function NavBar({ className }: NavBarProps): JSX.Element {
   // 클라이언트 컴포넌트의 i18n 패턴 (Phase B 골든 샘플 ②):
   // useTranslations(네임스페이스) 로 t 를 얻어 t(key) 로 조회.
   // getTranslations(서버) 와 대비.
   const t = useTranslations("common");
+  // 현재 경로 — active nav link 판정용. usePathname 은 client 전용 hook
+  // (NavBar 는 "use client"). 라우트 전환 시 re-render 되어 active 갱신.
+  const pathname = usePathname();
 
   return (
     <header
@@ -84,15 +99,27 @@ export function NavBar({ className }: NavBarProps): JSX.Element {
         className="mx-auto flex max-w-7xl gap-6 border-t border-neutral-100 px-6 py-2 text-sm"
         aria-label={t("primaryNavAriaLabel")}
       >
-        {NAV_LINKS.map(({ href, labelKey }) => (
-          <Link
-            key={href}
-            href={href}
-            className="text-neutral-700 hover:text-neutral-900"
-          >
-            {t(labelKey)}
-          </Link>
-        ))}
+        {NAV_LINKS.map(({ href, labelKey }) => {
+          const active = isNavLinkActive(pathname, href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              // 스크린리더에 현재 위치 노출 — 코드베이스 첫 aria-current 도입.
+              aria-current={active ? "page" : undefined}
+              // 시각 active 표시도 부재였음 — neutral grayscale 만 사용
+              // (판단색 금지 컨벤션, ADR-0007/§2.2 일관).
+              className={cn(
+                "hover:text-neutral-900",
+                active
+                  ? "font-semibold text-neutral-900 underline underline-offset-4"
+                  : "text-neutral-700",
+              )}
+            >
+              {t(labelKey)}
+            </Link>
+          );
+        })}
       </nav>
     </header>
   );

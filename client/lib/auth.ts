@@ -111,14 +111,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
      * session callback — client 에서 useSession() 으로 accessToken 참조 가능.
      */
     session({ session, token }) {
-      const s = session as unknown as Record<string, unknown>;
-      if (token["accessToken"]) {
-        s["accessToken"] = token["accessToken"];
+      // Session.accessToken / JWT.accessToken 은 lib/next-auth.d.ts 로 augment —
+      // 과거의 `as unknown as Record<string, unknown>` 우회 캐스트 불필요.
+      if (token.accessToken !== undefined) {
+        session.accessToken = token.accessToken;
       }
-      if (token["email"]) {
+      // JWT.email 은 NextAuth 기본 필드(string | null). string 일 때만 반영.
+      if (typeof token.email === "string") {
         session.user = {
           ...session.user,
-          email: token["email"] as string,
+          email: token.email,
         };
       }
       return session;

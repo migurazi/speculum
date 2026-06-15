@@ -10,6 +10,8 @@
   "renameFolderAriaLabel": "{name} 이름 변경",
   "deleteFolderAriaLabel": "{name} 삭제",
   "defaultBadge": "(기본)",
+  "renameButton": "이름",
+  "deleteButton": "삭제",
   "saveButton": "저장",
   "newFolderPlaceholder": "새 폴더 이름",
   "addFolderButton": "폴더 추가",

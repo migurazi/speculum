@@ -151,7 +151,7 @@ export function FolderSidebar({
                           aria-label={t("renameFolderAriaLabel", { name: folder.name })}
                           className="text-[11px] hover:underline"
                         >
-                          이름
+                          {t("renameButton")}
                         </button>
                         <button
                           type="button"
@@ -159,7 +159,7 @@ export function FolderSidebar({
                           aria-label={t("deleteFolderAriaLabel", { name: folder.name })}
                           className="text-[11px] hover:underline"
                         >
-                          삭제
+                          {t("deleteButton")}
                         </button>
                       </div>
                     ) : null}

@@ -33,7 +33,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { signIn } from "next-auth/react";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 
 import { ApiError } from "@/lib/api/client";
 import {
@@ -116,6 +116,14 @@ const EMPTY_FORM: TxFormState = {
 // =============================================================================
 
 type ActiveTab = "transactions" | "positions";
+
+// WAI-ARIA tabs — 탭 순서(화살표/Home/End 네비)와 라벨 i18n 키 매핑. tablist /
+// tab / tabpanel 의 id 도 본 키로 파생(portfolio-tab-*, portfolio-panel-*).
+const TAB_ORDER: readonly ActiveTab[] = ["transactions", "positions"];
+const TAB_LABEL_KEY: Readonly<Record<ActiveTab, string>> = {
+  transactions: "tabTransactions",
+  positions: "tabPositions",
+};
 
 // =============================================================================
 // 거래 입력 폼
@@ -612,6 +620,35 @@ export function PortfolioPanel(): JSX.Element {
   const [addError, setAddError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // WAI-ARIA tabs 키보드 네비 — tab 버튼 ref(포커스 이동용) + 화살표/Home/End
+  // 핸들러. 자동 활성화 패턴(selection follows focus): 화살표로 이동 시 즉시
+  // 해당 탭을 활성화하고 포커스를 옮긴다. roving tabindex 와 짝(선택 탭만 0).
+  const tabRefs = useRef<Record<ActiveTab, HTMLButtonElement | null>>({
+    transactions: null,
+    positions: null,
+  });
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const current = TAB_ORDER.indexOf(activeTab);
+    // noUncheckedIndexedAccess — TAB_ORDER[i] 는 ActiveTab | undefined. modulo
+    // 산술이 항상 in-bounds 지만 TS 는 모르므로 undefined 허용 타입 + 가드.
+    let next: ActiveTab | undefined;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      next = TAB_ORDER[(current + 1) % TAB_ORDER.length];
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      next = TAB_ORDER[(current - 1 + TAB_ORDER.length) % TAB_ORDER.length];
+    } else if (event.key === "Home") {
+      next = TAB_ORDER[0];
+    } else if (event.key === "End") {
+      next = TAB_ORDER[TAB_ORDER.length - 1];
+    }
+    if (next !== undefined) {
+      event.preventDefault();
+      setActiveTab(next);
+      tabRefs.current[next]?.focus();
+    }
+  }
+
   // ── 거래내역 query ──────────────────────────────────────────────────────────
 
   const txQuery = useQuery<ReadonlyArray<PortfolioTransaction>, Error>({
@@ -678,40 +715,52 @@ export function PortfolioPanel(): JSX.Element {
       data-testid="portfolio-panel"
       className="space-y-4"
     >
-      {/* 탭 네비게이션 */}
-      <nav
+      {/* 탭 네비게이션 — WAI-ARIA tabs (role=tablist/tab + roving tabindex +
+          화살표 키 네비). 기존 <nav>+<button> 은 시맨틱·키보드 미준수였음. */}
+      <div
+        role="tablist"
+        aria-label={t("tabsAriaLabel")}
         className="flex border-b border-neutral-200"
-        aria-label="portfolio-tabs"
+        onKeyDown={handleTabKeyDown}
       >
-        <button
-          type="button"
-          onClick={() => setActiveTab("transactions")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium",
-            activeTab === "transactions"
-              ? "border-b-2 border-neutral-900 text-neutral-900"
-              : "text-neutral-500 hover:text-neutral-700",
-          )}
-        >
-          {t("tabTransactions")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("positions")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium",
-            activeTab === "positions"
-              ? "border-b-2 border-neutral-900 text-neutral-900"
-              : "text-neutral-500 hover:text-neutral-700",
-          )}
-        >
-          {t("tabPositions")}
-        </button>
-      </nav>
+        {TAB_ORDER.map((tab) => {
+          const selected = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              ref={(el) => {
+                tabRefs.current[tab] = el;
+              }}
+              type="button"
+              role="tab"
+              id={`portfolio-tab-${tab}`}
+              aria-selected={selected}
+              aria-controls={`portfolio-panel-${tab}`}
+              // roving tabindex — 선택 탭만 Tab 키 진입점(0), 나머지는 -1.
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "px-4 py-2 text-sm font-medium",
+                selected
+                  ? "border-b-2 border-neutral-900 text-neutral-900"
+                  : "text-neutral-500 hover:text-neutral-700",
+              )}
+            >
+              {t(TAB_LABEL_KEY[tab])}
+            </button>
+          );
+        })}
+      </div>
 
       {/* ── 거래내역 탭 ─────────────────────────────────────────────────────── */}
       {activeTab === "transactions" ? (
-        <div className="space-y-4">
+        <div
+          role="tabpanel"
+          id="portfolio-panel-transactions"
+          aria-labelledby="portfolio-tab-transactions"
+          tabIndex={0}
+          className="space-y-4"
+        >
           {/* 401 미인증 — 로그인 유도 */}
           {txIs401 || addIs401 ? (
             <div className="rounded-md border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-700">
@@ -776,7 +825,13 @@ export function PortfolioPanel(): JSX.Element {
 
       {/* ── 포지션 탭 ────────────────────────────────────────────────────────── */}
       {activeTab === "positions" ? (
-        <div className="space-y-4">
+        <div
+          role="tabpanel"
+          id="portfolio-panel-positions"
+          aria-labelledby="portfolio-tab-positions"
+          tabIndex={0}
+          className="space-y-4"
+        >
           {/* 401 미인증 */}
           {posIs401 ? (
             <div className="rounded-md border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-700">

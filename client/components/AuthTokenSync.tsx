@@ -25,12 +25,9 @@ export function AuthTokenSync(): null {
   const { data: session } = useSession();
 
   useEffect(() => {
-    // session 은 NextAuth Session 타입이지만 callbacks.session 에서 accessToken 을
-    // 동적으로 확장했으므로 unknown 경유로 안전하게 추출.
-    const raw = (session as unknown as Record<string, unknown> | null);
-    const token =
-      typeof raw?.["accessToken"] === "string" ? raw["accessToken"] : "";
-    setAuthToken(token);
+    // Session.accessToken 은 lib/next-auth.d.ts 로 augment — 우회 캐스트 없이
+    // 타입 안전하게 추출. 미로그인/만료 시 undefined → "" 로 헤더 미전송.
+    setAuthToken(session?.accessToken ?? "");
   }, [session]);
 
   return null;

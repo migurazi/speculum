@@ -2,6 +2,7 @@
   "loading": "불러오는 중...",
   "authError": "거래내역은 로그인이 필요합니다.",
   "signInButton": "Google 로그인",
+  "tabsAriaLabel": "포트폴리오 탭",
   "tabTransactions": "거래내역",
   "tabPositions": "포지션",
   "addTransaction": {

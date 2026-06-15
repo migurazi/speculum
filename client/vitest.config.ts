@@ -24,6 +24,9 @@ export default defineConfig({
       "components/**/__tests__/**/*.{test,spec}.{ts,tsx}",
       "state/**/__tests__/**/*.{test,spec}.{ts,tsx}",
       "eslint-rules/**/__tests__/**/*.{test,spec}.{ts,js}",
+      // app/ 의 page 단위 테스트 — __tests__ 안의 *.test.tsx 만. page.tsx 등
+      // 라우트 파일과 충돌 없음 (next build 는 __tests__/ 를 라우트로 인식 안 함).
+      "app/**/__tests__/**/*.{test,spec}.{ts,tsx}",
     ],
   },
   resolve: {
