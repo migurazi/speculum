@@ -35,7 +35,7 @@ import os
 import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from sqlalchemy import Engine, delete, event
 from sqlalchemy.orm import Session
@@ -75,6 +75,7 @@ from app.repositories.pit_protocols import (  # noqa: E402
     TreasurySharesRecord,
 )
 from app.services.krx_calendar import DEFAULT_CALENDAR  # noqa: E402
+from app.services.lineage import lineage_id_for_code  # noqa: E402
 
 __all__ = [
     "DEFAULT_DEV_DATABASE_URL",
@@ -102,10 +103,12 @@ _KRX_ADAPTER_VERSION = "0.1.0"
 _DART_ADAPTER_VERSION = "0.1.0"
 _ECOS_ADAPTER_VERSION = "0.1.0"
 
-# seed 데이터의 결정성을 위한 namespace UUID — 재실행 시 같은 종목이 같은 lineage
-# id 를 갖도록 (멱등성 강화). batch_id / citation_id 는 매 실행 새 uuid4 (멱등성은
-# 종목코드 기준 삭제로 보장하므로 id 안정성 불요).
-_LINEAGE_NS = UUID("5e9ed000-0000-4000-8000-000000000001")
+# lineage id 는 배치와 **동일 공식**(`app.services.lineage.lineage_id_for_code`)을
+# 써야 한다 — seed 가 별도 namespace 를 쓰면 같은 종목의 stocks_master.id(seed)와
+# fact.code_lineage_id(배치)가 달라져, 미래에 read-path 가 lineage 로 전환될 때
+# 데모 DB 에서 lineage JOIN 이 silent 분열한다(oracle 설계검토 M1). 공유 helper 로
+# 통일해 seed 와 4 배치 write 경로가 단일 공식을 공유한다. 재실행 멱등성은 종목코드
+# 기준 삭제로 보장하므로 별도 namespace 불요.
 
 
 # =============================================================================
@@ -403,8 +406,9 @@ def build_seed_dataset(as_of: date = SEED_AS_OF) -> SeedDataset:
 
     for stock in _DEMO_STOCKS:
         codes.append(stock.code)
-        # lineage id 는 종목코드 기준 결정적 (재실행 시 안정).
-        lineage_id = uuid5(_LINEAGE_NS, stock.code)
+        # lineage id 는 종목코드 기준 결정적 (재실행 시 안정) — 배치와 동일 공식
+        # (lineage_id_for_code) 사용으로 seed/배치 lineage 일치(분열 방지).
+        lineage_id = lineage_id_for_code(stock.code)
 
         # --- stocks_master — lineage entity + 단일 code_history entry ---
         stocks.append(StockMasterRecord(

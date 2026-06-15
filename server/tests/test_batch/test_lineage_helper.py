@@ -50,3 +50,37 @@ def test_lineage_all_paths_agree() -> None:
     assert KrxDailyBatch._lineage_id_for_code(code) == helper
     assert SurvivorshipBackfillBatch._lineage_id_for_code(code) == helper
     assert helper == uuid5(NAMESPACE_OID, f"lineage|{code}")
+
+
+def test_seed_demo_lineage_matches_helper() -> None:
+    """seed_demo 의 stocks_master.id 와 모든 fact code_lineage_id 가 배치 helper 와
+    동일 공식임을 잠근다 (oracle 설계검토 M1 — namespace 분열 방지).
+
+    seed 가 과거 별도 namespace(`uuid5("5e9ed000-...", code)`)를 써서 같은 종목의
+    stocks_master.id(seed)와 fact.code_lineage_id(배치)가 달랐다. 미래에 read-path
+    가 lineage 로 전환되면 데모 DB 에서 lineage JOIN 이 silent 분열한다. 본 테스트는
+    seed 가 공유 helper 로 통일됐음을 잠가, 재분열(별도 namespace 회귀)을 막는다.
+    build_seed_dataset 은 순수 데이터 빌더라 DB 불필요.
+    """
+    from scripts.seed_demo import build_seed_dataset
+
+    dataset = build_seed_dataset()
+    # stocks_master.id == helper(current_code).
+    for sm in dataset.stocks:
+        assert sm.current_code is not None
+        assert sm.id == lineage_id_for_code(sm.current_code), (
+            f"stocks_master {sm.current_code} lineage 가 helper 와 불일치 "
+            f"(namespace 분열 회귀)"
+        )
+    # 모든 fact row 의 code_lineage_id == helper(code) — seed/배치 공식 동일.
+    fact_rows = [
+        *dataset.prices,
+        *dataset.market_caps,
+        *dataset.financials,
+        *dataset.treasury,
+    ]
+    assert fact_rows  # 빈 dataset 가드.
+    for row in fact_rows:
+        assert row.code_lineage_id == lineage_id_for_code(row.code), (
+            f"fact row {row.code} code_lineage_id 가 helper 와 불일치"
+        )
