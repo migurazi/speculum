@@ -20,8 +20,10 @@ APScheduler / cron 데몬 자체는 본 모듈 범위 밖 (OS cron 또는 k8s Cr
    시 commit, 예외 시 rollback (get_session 패턴). 배치 내부는 SAVEPOINT 로
    지표/회사 단위 격리 (각 orchestrator 책임).
 3. **corp_code 선행** — dart job 은 corp_code 매핑 의존 → CorpCodeBootstrap
-   (캐시) 으로 먼저 로드. all job 은 corp_code → ecos → kosis → dart → snapshot 순
-   (snapshot 은 raw 데이터 적재 후 derived precompute — data_versions freeze, ⓓ).
+   (캐시) 으로 먼저 로드. all job 은 corp_code → krx → ecos → kosis → dart →
+   snapshot 순. krx (가격/시총, pykrx/FDR — API 키 불필요) 가 raw 배치 중 가장
+   먼저, snapshot 은 raw 데이터 적재 후 derived precompute — data_versions
+   freeze, ⓓ).
 4. **부분 실패 비치명** — 한 job 실패가 다른 job 을 막지 않음 (job 별 try).
    exit code 는 실패 job 있으면 1 (cron 알림 신호).
 
@@ -45,19 +47,27 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.adapters.dart_adapter import DartAdapter
 from app.adapters.ecos_adapter import EcosAdapter
+from app.adapters.fdr_adapter import FdrAdapter
 from app.adapters.kosis_adapter import KosisAdapter
+from app.adapters.pykrx_adapter import PykrxAdapter
 from app.core.config import get_database_url
 from app.db.session import create_engine_from_url, create_sessionmaker
 from app.repositories.citation_repository import SqlCitationRepository
 from app.repositories.sql_repositories import (
     SqlFinancialRepository,
+    SqlMarketCapRepository,
+    SqlPriceRepository,
     SqlTreasurySharesRepository,
 )
 from app.services.corp_code_mapping import CorpCodeMapping
+from app.services.krx_calendar import DEFAULT_CALENDAR, TradingCalendar
+from batch.alerts import BatchAlertHandler, LoggingAlertHandler
 from batch.corp_code_bootstrap import CorpCodeBootstrap
 from batch.dart_daily import DartBatchSummary, DartDailyBatch
 from batch.ecos_daily import EcosBatchSummary, EcosDailyBatch
 from batch.kosis_daily import KosisBatchSummary, KosisDailyBatch
+from batch.krx_daily import BatchSummary as KrxBatchSummary
+from batch.krx_daily import KrxDailyBatch
 from batch.snapshot_daily import run_snapshot_job
 
 __all__ = [
@@ -69,16 +79,19 @@ __all__ = [
     "run_dart_job",
     "run_ecos_job",
     "run_kosis_job",
+    "run_krx_job",
     "run_snapshot_job",
 ]
 
 logger = logging.getLogger(__name__)
 
-# CLI --job 선택지. "all" 은 corp_code → ecos → kosis → dart → snapshot 순차
-# (snapshot 은 모든 raw 데이터 적재 **후** 실행돼야 data_versions 의 batch_id 가
-# 당일 최신으로 freeze + factor 평가가 갓 적재된 데이터를 반영, ⓓ).
+# CLI --job 선택지. "all" 은 corp_code → krx → ecos → kosis → dart → snapshot 순차.
+# krx 는 raw 배치 중 가장 먼저 — 가격/시총은 KRX (pykrx/FDR) 출처라 API 키 불필요
+# (재무·거시는 키 필요)이며 factor 평가의 기반 데이터다. snapshot 은 모든 raw
+# 데이터 (krx/ecos/kosis/dart) 적재 **후** 실행돼야 data_versions 의 batch_id 가
+# 당일 최신으로 freeze + factor 평가가 갓 적재된 데이터를 반영한다 (ⓓ).
 VALID_JOBS: Final[tuple[str, ...]] = (
-    "all", "corp-code", "ecos", "kosis", "dart", "snapshot",
+    "all", "corp-code", "krx", "ecos", "kosis", "dart", "snapshot",
 )
 
 # 공시 신고기한 기준 분기말 + lag (일). dart_adapter._disclosure_deadline 매트릭스
@@ -157,6 +170,85 @@ def run_corp_code_job(
     mapping = bootstrap.load(force_refresh=force_refresh)
     logger.info("corp_code 매핑 로드 완료 — %d 종목", mapping.size)
     return mapping
+
+
+# KRX 일배치가 처리하는 시장 — "전체 universe" = KOSPI + KOSDAQ. KrxDailyBatch.run
+# 은 시장 1 개씩 처리 (universe fetch 가 시장 인자를 받음) 이므로 job 함수가 반복.
+KRX_MARKETS: Final[tuple[str, ...]] = ("KOSPI", "KOSDAQ")
+
+
+def run_krx_job(
+    *,
+    session: Session,
+    primary_adapter: PykrxAdapter,
+    verify_adapter: FdrAdapter | None,
+    calendar: TradingCalendar,
+    as_of: date,
+    markets: Sequence[str] = KRX_MARKETS,
+    codes: Sequence[str] | None = None,
+    throttle_seconds: float = 1.5,
+    alert_handler: BatchAlertHandler | None = None,
+) -> list[KrxBatchSummary]:
+    """KRX 가격·시총 일배치 실행 — 시장별 (KOSPI/KOSDAQ) 순차, session 단위 트랜잭션.
+
+    KRX OHLCV·시가총액은 pykrx (primary) / FDR (cross-check) 출처라 **API 키가
+    필요 없다** (DART 재무·ECOS/KOSIS 거시와 달리). 따라서 키 미발급 상태에서도
+    가격·시총 정식 적재가 가능한 유일한 경로 — scheduler 통합의 핵심 동기.
+
+    KrxDailyBatch 는 시장 1 개를 1 회 run 으로 처리 (universe fetch 가 market 인자
+    의존) 하므로 본 함수가 markets 를 순회한다. 각 run 은 자체 batch_id 를 발급
+    (batch_runs row 분리). 두 시장의 write 는 동일 session (호출자가 commit) 안의
+    종목별 SAVEPOINT 로 격리된다.
+
+    Args:
+        session: SQLAlchemy session (호출자가 commit/rollback).
+        primary_adapter: pykrx 1차 출처.
+        verify_adapter: FDR cross-check. None 이면 cross-check skip (conflict
+            detection 없음). 주입 시 KrxDailyBatch 가 default ConflictDetector 구성.
+        calendar: KRX 영업일 캘린더 (휴장일 skip 판정). 운영은 DEFAULT_CALENDAR.
+        as_of: 처리 대상 거래일 (KST). 휴장일이면 시장별 skip (summary 에 사유).
+        markets: 처리할 시장 list. 기본 KOSPI + KOSDAQ (전체 universe).
+        codes: 종목코드 subset. None (기본) 이면 시장 전체 universe. 지정 시 각
+            시장 universe 와 교집합만 적재 — 빠른 스모크/검증용 (수 시간 걸리는
+            전체 적재 없이 소수 종목만). 시장별로 교집합이라 KOSPI 코드는 KOSPI
+            run 에서, KOSDAQ 코드는 KOSDAQ run 에서 자연히 매칭.
+        throttle_seconds: 종목 fetch 간 sleep (ADR-0003 D6 rate limit, 기본 1.5).
+        alert_handler: 충돌/실패 alert handler. None 이면 batch 가 NullAlertHandler.
+
+    Returns:
+        시장별 KrxBatchSummary list (markets 순서).
+
+    Note:
+        KrxDailyBatch.run 은 raise 하지 않음 (종목별 실패는 summary.failures 로
+        반환, universe fetch 실패는 skipped_reason). 따라서 본 함수도 정상 종료 —
+        부분 실패는 로깅으로 노출하고 호출자 (_run_guarded) 의 exit code 판정은
+        예외 발생 시에만 동작. 운영 모니터링은 summary 의 failure_count 를 확인.
+    """
+    batch = KrxDailyBatch(
+        primary_adapter=primary_adapter,
+        verify_adapter=verify_adapter,
+        # verify_adapter 주입 시 KrxDailyBatch 가 default ConflictDetector 생성.
+        conflict_detector=None,
+        calendar=calendar,
+        citation_repo=SqlCitationRepository(session),
+        price_repo=SqlPriceRepository(session),
+        market_cap_repo=SqlMarketCapRepository(session),
+        throttle_seconds=throttle_seconds,
+        session=session,
+        alert_handler=alert_handler,
+    )
+    summaries: list[KrxBatchSummary] = []
+    for market in markets:
+        summary = batch.run(as_of=as_of, market=market, codes=codes)
+        logger.info(
+            "KRX 배치 완료 — market=%s universe=%d success=%d failure=%d "
+            "conflicts=%d skipped=%s",
+            market, summary.universe_size, summary.success_count,
+            summary.failure_count, len(summary.conflicts),
+            summary.skipped_reason,
+        )
+        summaries.append(summary)
+    return summaries
 
 
 def run_ecos_job(
@@ -331,7 +423,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--job",
         choices=VALID_JOBS,
         default="all",
-        help="실행할 배치 (default: all = corp-code→ecos→kosis→dart→snapshot).",
+        help=(
+            "실행할 배치 (default: all = "
+            "corp-code→krx→ecos→kosis→dart→snapshot). "
+            "krx (가격/시총) 는 API 키 불필요 — 키 미발급 시 단독 실행 가능."
+        ),
     )
     parser.add_argument(
         "--observed-date",
@@ -349,7 +445,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--codes", nargs="*", default=None,
-        help="DART 대상 종목코드 (공백 구분). 미지정 시 corp_code 전체 상장사.",
+        help=(
+            "대상 종목코드 (공백 구분) — DART + KRX 공통. 미지정 시 DART 는 "
+            "corp_code 전체, KRX 는 시장 전체 universe. 지정 시 양쪽 모두 해당 "
+            "종목만 적재 (빠른 스모크/검증)."
+        ),
+    )
+    parser.add_argument(
+        "--market", choices=list(KRX_MARKETS), default=None,
+        help=(
+            "KRX 대상 시장 (KOSPI | KOSDAQ). 미지정 시 양 시장 모두. 단일 시장 "
+            "지정 시 타 시장 universe fetch 를 생략 — --codes 와 함께 쓰면 빠른 "
+            "타겟 스모크 (예: --market KOSPI --codes 005930)."
+        ),
     )
     parser.add_argument(
         "--force-refresh-corp-code", action="store_true",
@@ -403,7 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     # DB write job (ecos/kosis/dart) 이 하나라도 있으면 engine·sessionmaker 를
     # 1 회만 구성해 전 job 이 공유 (oracle C-3 — job 마다 engine 생성 시 pool 누수).
     # corp-code only job 은 DB 불필요 → engine 미생성.
-    needs_db = job in ("all", "ecos", "kosis", "dart", "snapshot")
+    needs_db = job in ("all", "krx", "ecos", "kosis", "dart", "snapshot")
     engine: Engine | None = None
     maker: sessionmaker[Session] | None = None
     if needs_db:
@@ -426,6 +534,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # dart 는 매핑 없으면 진행 불가 — corp-code 실패 시 dart skip.
             finally:
                 bootstrap.close()
+
+        # krx 는 raw 배치 중 가장 먼저 — 가격/시총 (pykrx/FDR, API 키 불필요) 이
+        # factor 평가의 기반. corp_code 매핑과 독립 (가격은 종목코드만 사용).
+        if job in ("all", "krx"):
+            assert maker is not None  # needs_db 보장.
+            db_maker = maker
+            # --codes 는 DART 와 공유 — 지정 시 krx 도 해당 종목만 (빠른 스모크).
+            # None (미지정) 이면 전체 universe. 빈 list 도 None 으로 정규화.
+            krx_codes = args.codes or None
+            # --market 미지정 → 양 시장 (KRX_MARKETS). 지정 → 단일 시장만
+            # (타 시장 universe fetch 생략).
+            krx_markets = (args.market,) if args.market else KRX_MARKETS
+            _run_guarded(
+                "krx", failures,
+                lambda: _do_krx(
+                    db_maker, observed_date, krx_codes, krx_markets,
+                ),
+            )
 
         if job in ("all", "ecos"):
             assert maker is not None  # needs_db 보장.
@@ -495,6 +621,41 @@ def _run_guarded(
     except Exception as exc:  # noqa: BLE001
         logger.error("%s job 실패: %s", name, exc)
         failures.append(name)
+
+
+def _do_krx(
+    maker: sessionmaker[Session],
+    observed_date: date,
+    codes: Sequence[str] | None = None,
+    markets: Sequence[str] = KRX_MARKETS,
+) -> None:
+    """KRX job — session scope 안에서 실행 (pykrx primary + FDR cross-check).
+
+    observed_date 를 거래일 (as_of) 로 사용 — ECOS/KOSIS 의 수집 기준일과 동일
+    CLI 플래그 (--observed-date) 공유. 휴장일이면 KrxDailyBatch 가 시장별 skip.
+
+    codes 가 주어지면 (--codes) 해당 종목만 적재 — 전체 universe (~수 시간) 없이
+    소수 종목 빠른 검증. DART 와 동일 --codes 플래그 공유 (all job 시 양쪽 동시
+    제한 → 일관된 스모크). None 이면 전체 universe.
+
+    markets (--market) 로 단일 시장만 적재 가능 — 기본 KOSPI+KOSDAQ. 단일 지정
+    시 타 시장 universe fetch (네트워크) 를 생략 → --codes 와 결합한 빠른 스모크.
+
+    pykrx/FDR adapter 는 라이브러리 wrapper 라 보유 HTTP client 가 없어 close()
+    가 불필요하다 (ecos/kosis/dart adapter 와 달리 — 그쪽은 httpx client 정리
+    위해 finally close). LoggingAlertHandler 로 충돌/실패를 로깅 채널에 노출.
+    """
+    with _session_scope(maker) as session:
+        run_krx_job(
+            session=session,
+            primary_adapter=PykrxAdapter(),
+            verify_adapter=FdrAdapter(),
+            calendar=DEFAULT_CALENDAR,
+            as_of=observed_date,
+            markets=markets,
+            codes=codes,
+            alert_handler=LoggingAlertHandler(),
+        )
 
 
 def _do_ecos(maker: sessionmaker[Session], observed_date: date) -> None:

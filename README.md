@@ -92,13 +92,20 @@ SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db
 ### 2) 일배치 실행 — 통합 scheduler
 
 `batch.scheduler` 가 cron 호출용 통합 진입점입니다. 적재 순서는
-corp-code → ecos → kosis → dart → snapshot (raw 적재 후 derived precompute).
+corp-code → krx → ecos → kosis → dart → snapshot (raw 적재 후 derived precompute).
 
 ```bash
 cd server
 
-# 전체 universe 일배치 (corp_code 전체 상장사 — 키 전부 필요, rate limit 으로 수십 분~시간)
+# 전체 universe 일배치 (corp_code 전체 상장사 — krx 는 키 불필요, 재무·거시는 키 필요;
+# rate limit 으로 수십 분~시간)
 python -m batch.scheduler --job all
+
+# 가격·시가총액만 — 키 없이 바로 적재 (KRX = pykrx/FDR). 전체 universe 는 수 시간.
+python -m batch.scheduler --job krx --observed-date 2026-06-12
+
+# 빠른 스모크 — 단일 시장 + 소수 종목만 (수 초). 키·전체 universe 없이 end-to-end 검증.
+python -m batch.scheduler --job krx --market KOSPI --codes 005930 000660 --observed-date 2026-06-12
 
 # 개별 출처만 — 예: 거시지표만
 python -m batch.scheduler --job ecos --observed-date 2026-06-12
@@ -112,7 +119,9 @@ python -m batch.scheduler --job corp-code --force-refresh-corp-code
 ```
 
 `--observed-date` 미지정 시 오늘, `--fiscal-year`/`--fiscal-quarter` 미지정 시 신고기한
-지난 최근 분기를 자동 추정합니다. `--codes` 미지정 시 corp_code 전체 상장사가 대상입니다.
+지난 최근 분기를 자동 추정합니다. `--codes` 는 KRX·DART 공통 — 미지정 시 KRX 는 시장 전체
+universe, DART 는 corp_code 전체 상장사가 대상입니다. `--market` (KOSPI|KOSDAQ) 은 KRX
+전용으로, 미지정 시 양 시장 모두 적재합니다.
 
 ### 3) 백엔드/프론트 기동
 

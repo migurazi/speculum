@@ -85,6 +85,16 @@ _PYKRX_OHLCV_COLUMNS: Final[dict[str, str]] = {
     "volume": "거래량",
     "value": "거래대금",
 }
+# 거래대금 추정 warning — pykrx 의 OHLCV **시계열** (get_market_ohlcv /
+# get_market_ohlcv_by_date) 은 시가/고가/저가/종가/거래량/등락률만 반환하고
+# 거래대금 컬럼을 제공하지 않는다 (거래대금은 cross-section get_market_ohlcv_
+# by_ticker / get_market_cap_by_date 엔드포인트에만 존재 — 라이브 확인). 컬럼이
+# 없을 때 FdrAdapter 와 동일하게 close × volume 으로 추정하고 본 warning +
+# estimated_fields={"value"} 로 신호한다 (ConflictDetector 가 value 비교 제외).
+_VALUE_ESTIMATION_WARNING: Final[str] = (
+    "pykrx OHLCV value (거래대금) estimated as close*volume — "
+    "시계열 엔드포인트가 거래대금 미제공 (KRX official 평균체결가 × 거래량과 다름)"
+)
 _PYKRX_MARKET_CAP_COLUMNS: Final[dict[str, str]] = {
     "market_cap": "시가총액",
     "shares_outstanding": "상장주식수",
@@ -198,6 +208,13 @@ class PykrxAdapter(DataSourceAdapter):
                 f"in {fromdate.isoformat()}~{todate.isoformat()}"
             )
 
+        # 거래대금 컬럼 존재 여부 — pykrx OHLCV 시계열은 거래대금을 미제공할 수
+        # 있다 (_VALUE_ESTIMATION_WARNING 주석 참조). 있으면 정밀값, 없으면 FDR
+        # 과 동일하게 close × volume 으로 추정. 추정 여부는 batch 전체 동일 (단일
+        # df 의 컬럼 set) 이므로 루프 밖에서 1 회 판정.
+        value_col = _PYKRX_OHLCV_COLUMNS["value"]
+        value_estimated = value_col not in df.columns
+
         # DataFrame → tuple[OHLCVRow, ...] — 한글 컬럼명 + index Timestamp 변환.
         rows = tuple(
             OHLCVRow(
@@ -208,7 +225,14 @@ class PykrxAdapter(DataSourceAdapter):
                 low=_decimal_from_value(row[_PYKRX_OHLCV_COLUMNS["low"]]),
                 close=_decimal_from_value(row[_PYKRX_OHLCV_COLUMNS["close"]]),
                 volume=int(row[_PYKRX_OHLCV_COLUMNS["volume"]]),
-                value=_decimal_from_value(row[_PYKRX_OHLCV_COLUMNS["value"]]),
+                # 거래대금 — 컬럼 있으면 정밀값, 없으면 close × volume 추정
+                # (FdrAdapter 와 동일 공식·신호).
+                value=(
+                    _decimal_from_value(row[_PYKRX_OHLCV_COLUMNS["close"]])
+                    * Decimal(int(row[_PYKRX_OHLCV_COLUMNS["volume"]]))
+                    if value_estimated
+                    else _decimal_from_value(row[value_col])
+                ),
             )
             # df.iterrows() 의 (index, row) 튜플.
             for ts, row in df.iterrows()
@@ -229,6 +253,15 @@ class PykrxAdapter(DataSourceAdapter):
             batch_id=batch_id,
             url=None,  # W1: KRX 종목 deep link 부재 — 추후 KRX OPEN API 합류 시.
         )
+        # 거래대금 추정 시에만 warning + estimated_fields — ConflictDetector 가
+        # value 비교를 제외하도록 (FDR 과 동일 신호). 정밀값일 땐 신호 없음.
+        if value_estimated:
+            return FetchResult(
+                data=rows,
+                citations=(citation,),
+                warnings=(_VALUE_ESTIMATION_WARNING,),
+                estimated_fields=frozenset({"value"}),
+            )
         return FetchResult(data=rows, citations=(citation,))
 
     # -------------------------------------------------------------------------
@@ -524,6 +557,17 @@ class PykrxAdapter(DataSourceAdapter):
             )
 
         sorted_codes = tuple(sorted(str(t) for t in tickers))
+        # 빈 ticker list 방어 — 영업일에 활성 종목 0 은 정상 불가 (KOSPI 800+,
+        # KOSDAQ 1600+ 상시). pykrx 의 universe 엔드포인트 (get_market_ticker_list
+        # = KRX get_market_ticker_and_name) 는 개별 OHLCV 엔드포인트와 별개 API 라
+        # 단독 장애 시 JSON 디코드 실패를 빈 list 로 흡수해 반환한다 (라이브 확인).
+        # None 만 검사하면 이 장애가 빈 universe → 적재 0 건 "성공" 으로 silent
+        # 통과한다 → AdapterError 로 변환해 호출자 (배치) 가 skip/alert 하도록 한다.
+        if not sorted_codes:
+            raise AdapterError(
+                f"pykrx returned empty ticker_list({as_of_str}, {market}) — "
+                f"영업일 활성 종목 0 은 KRX universe 엔드포인트 장애 신호"
+            )
         citation = self._make_citation(
             identifier=f"universe|{market}|{as_of_str}",
             effective_date=as_of,

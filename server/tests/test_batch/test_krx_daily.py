@@ -320,6 +320,170 @@ def test_run_without_market_cap_repo_skips_save(business_day: date) -> None:
 
 
 # =============================================================================
+# 3c. codes subset — 지정 종목만 적재 (빠른 스모크)
+# =============================================================================
+
+def test_run_codes_filters_universe_to_subset(business_day: date) -> None:
+    """codes 지정 → 요청 코드만 직접 처리 (universe-bypass), 나머지는 fetch 안 됨.
+
+    codes 로 2 종목만 지정 → 그 2 종목만 price 영구화, 지정 안 한 종목은 OHLCV
+    fetch 조차 호출되지 않음. universe fetch 는 생략되므로 (bypass) 지정 코드는
+    universe 멤버십과 무관하게 처리된다 (본 입력은 모두 실재 코드라 결과 동일).
+    """
+    universe = ["005930", "000660", "035420"]
+    pykrx_mock = _make_pykrx_mock(
+        universe=universe,
+        ohlcv_close_by_code={
+            "005930": 70000.0, "000660": 130000.0, "035420": 200000.0,
+        },
+    )
+    price_repo = FakePriceRepository(records=())
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=FakeCitationRepository(),
+        price_repo=price_repo,
+        throttle_seconds=0,
+    )
+    summary = batch.run(
+        as_of=business_day, market="KOSPI", codes=["005930", "035420"],
+    )
+
+    # 교집합 2 종목만 처리 — universe_size 도 subset 반영.
+    assert summary.universe_size == 2
+    assert summary.success_count == 2
+    # 지정된 2 종목은 price 영구화.
+    assert price_repo.fetch_prices("005930", as_of=business_day, start=business_day)
+    assert price_repo.fetch_prices("035420", as_of=business_day, start=business_day)
+    # 미지정 종목은 저장 안 됨.
+    assert not price_repo.fetch_prices(
+        "000660", as_of=business_day, start=business_day,
+    )
+    # 미지정 종목은 OHLCV fetch 도 호출되지 않음 (루프 진입 전 제외).
+    # PykrxAdapter 는 get_market_ohlcv(fromdate, todate, code) 로 code 를
+    # 3 번째 positional 인자로 전달 (pykrx_adapter.py:188).
+    fetched_codes = {
+        call.args[2] for call in pykrx_mock.get_market_ohlcv.call_args_list
+    }
+    assert fetched_codes == {"005930", "035420"}
+    assert "000660" not in fetched_codes
+
+
+def test_run_codes_invalid_code_surfaces_as_failure(
+    business_day: date,
+) -> None:
+    """codes-bypass: 존재하지 않는 코드는 per-code fetch 실패로 LOUD 노출.
+
+    직전 cycle 의 "universe 부재 코드 silent exclude" 를 대체 — universe fetch
+    의존을 제거하고 (universe 엔드포인트 단독 장애 대응) 요청 코드를 직접 처리하되,
+    무효 코드는 OHLCV fetch 실패 → failure isolation 으로 summary.failures 에
+    드러난다 (silent 제외보다 관측성↑). 유효 코드는 정상 적재.
+    """
+    pykrx_mock = _make_pykrx_mock(
+        # universe 는 bypass 라 무관 (참고용). 999999 는 fetch 실패하도록 설정.
+        universe=["005930", "000660"],
+        ohlcv_close_by_code={"005930": 70000.0},
+        fail_codes={"999999"},
+    )
+    price_repo = FakePriceRepository(records=())
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=FakeCitationRepository(),
+        price_repo=price_repo,
+        throttle_seconds=0,
+    )
+    summary = batch.run(
+        as_of=business_day, market="KOSPI", codes=["005930", "999999"],
+    )
+    # 두 코드 모두 처리 시도 (dedup) → 유효 005930 성공 + 무효 999999 실패.
+    assert summary.universe_size == 2
+    assert summary.success_count == 1
+    assert summary.failure_count == 1
+    assert summary.failures[0][0] == "999999"
+    assert price_repo.fetch_prices("005930", as_of=business_day, start=business_day)
+    assert not price_repo.fetch_prices(
+        "999999", as_of=business_day, start=business_day,
+    )
+
+
+def test_run_codes_bypasses_universe_fetch(business_day: date) -> None:
+    """codes 지정 → universe 엔드포인트 (get_market_ticker_list) 미호출.
+
+    KRX universe 엔드포인트는 개별 OHLCV 와 별개 API 라 단독 장애 가능 (라이브
+    스모크 확인). codes 명시 시 universe fetch 를 생략해 타겟 적재가 그 장애와
+    무관하게 동작함을 보장.
+    """
+    pykrx_mock = _make_pykrx_mock(
+        universe=["005930"],
+        ohlcv_close_by_code={"005930": 70000.0},
+    )
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=FakeCitationRepository(),
+        price_repo=FakePriceRepository(records=()),
+        throttle_seconds=0,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI", codes=["005930"])
+    assert summary.success_count == 1
+    # universe 엔드포인트는 호출되지 않음 (bypass).
+    pykrx_mock.get_market_ticker_list.assert_not_called()
+
+
+def test_run_empty_universe_skips_with_reason(business_day: date) -> None:
+    """codes=None 인데 universe 가 비면 → skipped_reason (silent 0-success 방지).
+
+    adapter 가 빈 ticker list 를 AdapterError 로 변환 → run 의 universe fetch
+    실패 경로가 처리. 영업일 universe 0 은 엔드포인트 장애 신호.
+    """
+    pykrx_mock = MagicMock()
+    pykrx_mock.get_market_ticker_list = MagicMock(return_value=[])  # 빈 universe.
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=FakeCitationRepository(),
+        price_repo=FakePriceRepository(records=()),
+        throttle_seconds=0,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI")
+    assert summary.skipped_reason is not None
+    assert "universe_fetch_failed" in summary.skipped_reason
+    assert summary.success_count == 0
+
+
+def test_run_codes_none_processes_full_universe(business_day: date) -> None:
+    """codes=None (기본) → 전체 universe 처리 (현행 동작 불변 회귀 가드)."""
+    universe = ["005930", "000660", "035420"]
+    pykrx_mock = _make_pykrx_mock(
+        universe=universe,
+        ohlcv_close_by_code={
+            "005930": 70000.0, "000660": 130000.0, "035420": 200000.0,
+        },
+    )
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=FakeCitationRepository(),
+        price_repo=FakePriceRepository(records=()),
+        throttle_seconds=0,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI", codes=None)
+    assert summary.universe_size == 3
+    assert summary.success_count == 3
+
+
+# =============================================================================
 # 4. failure isolation
 # =============================================================================
 

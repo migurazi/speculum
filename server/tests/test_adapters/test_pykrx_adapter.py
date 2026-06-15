@@ -130,6 +130,53 @@ def test_fetch_ohlcv_returns_canonical_rows() -> None:
     assert result.data[0].volume == 1_000_000
 
 
+def test_fetch_ohlcv_uses_real_trading_value_when_present() -> None:
+    """거래대금 컬럼 존재 → 정밀값 사용 (추정 아님), warning/estimated_fields 없음."""
+    # 거래대금 = 88_888_888_888 — close × volume (70000 × 1_000_000 = 70_000_000_000)
+    # 과 다른 값으로 두어 "정밀 컬럼 사용" 을 추정과 구분 검증.
+    df = pd.DataFrame(
+        {
+            "시가": [70000.0], "고가": [70000.0], "저가": [70000.0],
+            "종가": [70000.0], "거래량": [1_000_000],
+            "거래대금": [88_888_888_888],
+        },
+        index=pd.to_datetime([date(2024, 1, 2)]),
+    )
+    adapter = PykrxAdapter(pykrx_module=_make_pykrx_mock(ohlcv_df=df))
+    result = adapter.fetch_ohlcv_by_date_range(
+        "005930",
+        fromdate=date(2024, 1, 2), todate=date(2024, 1, 2), batch_id=uuid4(),
+    )
+    # 정밀 거래대금 컬럼 값 사용 (close × volume 추정 70_000_000_000 이 아님).
+    assert result.data[0].value == Decimal("88888888888")
+    assert result.warnings == ()
+    assert result.estimated_fields == frozenset()
+
+
+def test_fetch_ohlcv_estimates_trading_value_when_column_absent() -> None:
+    """거래대금 컬럼 부재 → close × volume 추정 + warning + estimated_fields.
+
+    실 pykrx get_market_ohlcv **시계열** 은 거래대금을 제공하지 않는다 (시가/고가/
+    저가/종가/거래량/등락률만 — 라이브 확인). 이때 FdrAdapter 와 동일하게 close ×
+    volume 으로 추정하고, ConflictDetector 가 value 비교를 제외하도록
+    estimated_fields={"value"} 로 신호한다. 이 가드가 없으면 KeyError('거래대금')
+    로 전 종목 적재가 실패한다 (라이브 스모크에서 확인된 실 버그).
+    """
+    df = _ohlcv_df(days=[date(2024, 1, 2)], closes=[70000.0]).drop(
+        columns=["거래대금"],
+    )
+    adapter = PykrxAdapter(pykrx_module=_make_pykrx_mock(ohlcv_df=df))
+    result = adapter.fetch_ohlcv_by_date_range(
+        "005930",
+        fromdate=date(2024, 1, 2), todate=date(2024, 1, 2), batch_id=uuid4(),
+    )
+    # close(70000) × volume(1_000_000) = 70_000_000_000.
+    assert result.data[0].value == Decimal("70000000000")
+    assert result.estimated_fields == frozenset({"value"})
+    assert result.warnings
+    assert "estimated" in result.warnings[0]
+
+
 def test_fetch_ohlcv_citation_seven_tuple(monkeypatch: pytest.MonkeyPatch) -> None:
     """Citation 의 7 필드가 모두 채워짐 + source=PYKRX + batch_id 전달."""
     df = _ohlcv_df(days=[date(2024, 1, 2)], closes=[70000.0])
@@ -257,6 +304,19 @@ def test_fetch_universe_unsupported_market() -> None:
     with pytest.raises(AdapterError, match="unsupported market"):
         adapter.fetch_universe(
             as_of=date(2024, 5, 7), market="KONEX", batch_id=uuid4(),
+        )
+
+
+def test_fetch_universe_empty_list_raises_adapter_error() -> None:
+    """빈 ticker list → AdapterError. pykrx 의 universe 엔드포인트가 JSON 디코드
+    실패를 빈 list 로 흡수해 반환하는 단독 장애를 None 검사만으로는 놓쳐 적재
+    0 건 "성공" 으로 silent 통과하던 것을 차단 (라이브 스모크에서 확인)."""
+    adapter = PykrxAdapter(
+        pykrx_module=_make_pykrx_mock(kospi_tickers=[]),  # 빈 universe.
+    )
+    with pytest.raises(AdapterError, match="empty ticker_list"):
+        adapter.fetch_universe(
+            as_of=date(2024, 5, 7), market="KOSPI", batch_id=uuid4(),
         )
 
 

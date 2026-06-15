@@ -7,11 +7,15 @@
 3. ORM (`Base.metadata.create_all`) 와 migration 이 동일 컬럼 set 산출 (drift 차단).
 
 migration 0008 만 격리 실행:
-    전체 alembic 체인 (0001~0007) 은 SQLite 에서 직접 실행 불가 — 0004 가
-    PG-only `ALTER COLUMN ... DROP DEFAULT` 를 포함 (운영 PG 대상, SQLite 미지원).
-    따라서 본 테스트는 source_citations (FK 대상) 만 ORM create_all 로 미리 만든
-    SQLite 위에서 0008 의 upgrade/downgrade 를 alembic MigrationContext + op 로
-    직접 구동하여 0008 자체의 정확성을 검증.
+    본 테스트는 source_citations (FK 대상) 만 ORM create_all 로 미리 만든 SQLite
+    위에서 0008 의 upgrade/downgrade 를 alembic MigrationContext + op 로 직접
+    구동하여 0008 자체의 정확성만 빠르게 검증한다 (FK 대상 외 0001~0007 의 다른
+    테이블은 0008 검증에 불필요).
+
+    참고: 과거 0004 가 PG-only `ALTER COLUMN ... DROP DEFAULT` 를 직접 발행해
+    전체 alembic 체인이 SQLite 에서 실행 불가했으나, 0004 에 batch_alter_table 을
+    적용해 해소됨. 전체 체인의 SQLite upgrade/downgrade 는 이제
+    test_alembic_chain_sqlite 가 별도로 보증한다.
 """
 
 from __future__ import annotations

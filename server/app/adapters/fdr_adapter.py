@@ -71,12 +71,19 @@ _FDR_OHLCV_COLUMNS: Final[dict[str, str]] = {
 }
 
 # FDR StockListing 의 컬럼명. KOSPI/KOSDAQ 양쪽 호환. version 변경 시 bump.
+#
+# 라이브 확인 (FDR 0.9.202): StockListing 은 Code/Name/Market 을 제공하나
+# **ListingDate/Sector 컬럼은 더 이상 제공하지 않는다** (구 FDR 0.7.x 스키마).
+# fetch_stock_master 가 이 둘을 `row.get(...)` + `_optional_*` 로 읽으므로 컬럼
+# 부재 시 KeyError 없이 None 으로 graceful degrade — 즉 현 FDR 에서 FDR-출처
+# listing_date/sector 는 항상 None 이다. (Code/Name/Market 은 필수 계약 —
+# test_fdr_real.test_stock_listing_column_contract 가 drift 를 nightly 로 포착.)
 _FDR_LISTING_COLUMNS: Final[dict[str, str]] = {
     "code": "Code",
     "name": "Name",
     "market": "Market",  # "KOSPI" | "KOSDAQ" 등.
-    "listing_date": "ListingDate",  # nullable.
-    "sector": "Sector",  # nullable.
+    "listing_date": "ListingDate",  # 현 FDR 미제공 → 항상 None (graceful).
+    "sector": "Sector",  # 현 FDR 미제공 → 항상 None (graceful).
 }
 
 # Warning 메시지 — FetchResult.warnings 에 명시.

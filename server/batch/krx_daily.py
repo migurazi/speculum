@@ -18,7 +18,9 @@ cycle). 책임:
 설계 결정:
 
 1. **sync orchestration** — codebase 정책 일관. async 전환은 M1+ backlog.
-2. **scheduler 미통합** — M0 cycle scope. CLI / 운영 script 가 manual 호출.
+2. **scheduler 통합 완료** — `batch.scheduler` 의 `run_krx_job` / `_do_krx` 가
+   본 orchestrator 를 KOSPI+KOSDAQ 시장별로 실행 (`--job krx` 또는 `all`).
+   pykrx/FDR 출처라 API 키 불필요 → 키 미발급 상태에서도 가격/시총 적재 가능.
 3. **MarketCap 저장 (Phase B 합류)** — `market_cap_repo` 주입 시 fetch 한
    market_cap row 를 MarketCapRecord 로 변환하여 영구화. citation 은 prices 와
    동일하게 종목별 SAVEPOINT 안에서 먼저 save → market_cap row 의 citation_id
@@ -191,6 +193,7 @@ class KrxDailyBatch:
         as_of: date,
         market: str = "KOSPI",
         dry_run: bool = False,
+        codes: Sequence[str] | None = None,
     ) -> BatchSummary:
         """1 영업일 = 1 시장의 batch 실행.
 
@@ -201,9 +204,21 @@ class KrxDailyBatch:
                 skip. 운영 verification (release 전 sanity check) / staging
                 rehearsal 패턴. summary 의 success_count / conflicts /
                 market_cap_rows 는 실 commit 과 동일 — DB 만 unchanged.
+            codes: 처리 대상 종목코드 subset. None (기본) 이면 fetch_universe 가
+                반환한 시장 전체. 지정 시 universe fetch 를 **생략**하고 요청 코드
+                를 직접 처리 — 빠른 스모크/검증 적재용 (DART 배치의 stock_codes 와
+                동일 ergonomics). KRX universe 엔드포인트가 개별 OHLCV 와 별개 API
+                라 단독 장애 가능하므로 (universe-bypass), 타겟 스모크가 그에 묶이지
+                않게 한다. 각 코드 유효성은 per-code fetch 가 검증 (존재하지 않는
+                코드 → AdapterError → summary.failures 에 LOUD 노출). dedup +
+                입력 순서 보존. universe citation 은 없음 (fetch 안 함; per-code
+                citation 이 provenance 기록). **주의**: codes 만 주고 양 시장을
+                돌면 같은 코드가 두 run 에서 처리돼 2 번째 run 에서 PK 중복 실패가
+                날 수 있으니 --market 동반 권장.
 
         Returns:
             BatchSummary — 모든 결과 집계 (성공/실패/충돌 + dry_run flag).
+            codes 지정 시 universe_size 는 요청 코드 (dedup) 수.
 
         Note:
             본 메서드는 raise 하지 않음 — universe fetch 실패도 summary 의
@@ -242,36 +257,59 @@ class KrxDailyBatch:
             self._alert.on_complete(summary)
             return summary
 
-        # 2. Universe fetch — primary (pykrx). 실패 시 on_failure + 즉시 종료.
-        try:
-            universe_result = self._primary.fetch_universe(
-                as_of=as_of, market=market, batch_id=batch_id,
-            )
-        except AdapterError as exc:
-            # universe fetch 실패 = batch 단위 실패. code 가 단일 종목이 아니나
-            # alert 채널 통일 위해 sentinel "universe" 사용 — 호출자가 분기.
-            self._alert.on_failure("universe", str(exc))
-            summary = self._make_summary(
-                batch_id=batch_id,
-                as_of=as_of,
-                market=market,
-                skipped_reason=f"universe_fetch_failed: {exc}",
-                universe=(),
-                successes=0,
-                failures=(),
-                conflicts=(),
-                market_cap_rows=(),
-                dry_run=dry_run,
-                started_at=started_at,
-            )
-            self._finalize_batch_run(summary)
-            self._alert.on_complete(summary)
-            return summary
+        # 2. Universe 결정.
+        #
+        #    codes 미지정 → fetch_universe (pykrx) 로 시장 전체 universe (운영
+        #      일배치 경로). 실패 (빈 universe 포함 — adapter 가 빈 ticker list 를
+        #      AdapterError 로 변환) 시 on_failure + 즉시 종료.
+        #
+        #    codes 지정 → universe fetch 를 **생략**하고 요청 코드를 직접 처리.
+        #      KRX universe 엔드포인트 (get_market_ticker_list) 는 개별 OHLCV
+        #      (get_market_ohlcv) 와 별개 KRX API 라 단독 장애가 가능하다 (라이브
+        #      스모크에서 OHLCV 정상·universe 만 빈 반환 확인). 타겟 스모크가
+        #      universe 엔드포인트에 묶이지 않도록 명시 코드는 직접 처리하고, 각
+        #      코드 유효성은 per-code OHLCV/market_cap fetch 가 검증한다 (존재하지
+        #      않는 코드 → AdapterError → failure isolation 으로 summary.failures
+        #      에 LOUD 노출; 직전 cycle 의 silent exclude 보다 관측성↑). universe
+        #      citation 은 없음 (fetch 안 함) — per-code citation 이 실제 fetch
+        #      provenance 를 기록한다.
+        #
+        #      주의: codes 만 주고 markets 가 양 시장 (KOSPI+KOSDAQ) 이면 같은 코드
+        #      가 두 시장 run 에서 모두 처리되어 2 번째 run 에서 PK 중복 실패가 날
+        #      수 있다 → 스모크 시 --market 동반 권장 (run_krx_job / CLI 문서).
+        if codes is not None:
+            # dedup + 입력 순서 보존 (결정적 처리 순서).
+            universe: Sequence[str] = list(dict.fromkeys(codes))
+        else:
+            try:
+                universe_result = self._primary.fetch_universe(
+                    as_of=as_of, market=market, batch_id=batch_id,
+                )
+            except AdapterError as exc:
+                # universe fetch 실패 = batch 단위 실패. code 가 단일 종목이
+                # 아니나 alert 채널 통일 위해 sentinel "universe" 사용.
+                self._alert.on_failure("universe", str(exc))
+                summary = self._make_summary(
+                    batch_id=batch_id,
+                    as_of=as_of,
+                    market=market,
+                    skipped_reason=f"universe_fetch_failed: {exc}",
+                    universe=(),
+                    successes=0,
+                    failures=(),
+                    conflicts=(),
+                    market_cap_rows=(),
+                    dry_run=dry_run,
+                    started_at=started_at,
+                )
+                self._finalize_batch_run(summary)
+                self._alert.on_complete(summary)
+                return summary
 
-        # universe citation 영구화 — dry_run 이면 skip.
-        if not dry_run:
-            self._save_citations(universe_result.citations)
-        universe = universe_result.data
+            # universe citation 영구화 — dry_run 이면 skip.
+            if not dry_run:
+                self._save_citations(universe_result.citations)
+            universe = universe_result.data
 
         # 3. 종목별 처리 — failure isolation.
         successes = 0

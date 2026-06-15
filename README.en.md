@@ -123,13 +123,20 @@ SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db
 ### 2) Run the batches — unified scheduler
 
 `batch.scheduler` is the unified entry point (meant for cron). Ingest order is
-corp-code → ecos → kosis → dart → snapshot (raw first, then derived precompute).
+corp-code → krx → ecos → kosis → dart → snapshot (raw first, then derived precompute).
 
 ```bash
 cd server
 
-# Full universe (all listed companies via corp_code — needs every key, tens of minutes to hours due to rate limits)
+# Full universe (all listed companies via corp_code — krx needs no key, financials/macro do;
+# tens of minutes to hours due to rate limits)
 python -m batch.scheduler --job all
+
+# Price / market cap only — ingest with no key at all (KRX = pykrx/FDR). Full universe takes hours.
+python -m batch.scheduler --job krx --observed-date 2026-06-12
+
+# Fast smoke — single market + a few tickers (seconds). End-to-end check without keys or full universe.
+python -m batch.scheduler --job krx --market KOSPI --codes 005930 000660 --observed-date 2026-06-12
 
 # A single source — e.g. macro only
 python -m batch.scheduler --job ecos --observed-date 2026-06-12
@@ -143,8 +150,10 @@ python -m batch.scheduler --job corp-code --force-refresh-corp-code
 ```
 
 `--observed-date` defaults to today; `--fiscal-year`/`--fiscal-quarter` default to
-the most recent quarter past its filing deadline; `--codes` defaults to all
-companies in corp_code.
+the most recent quarter past its filing deadline. `--codes` is shared by KRX and
+DART — when omitted, KRX ingests the full market universe and DART covers all
+companies in corp_code. `--market` (KOSPI|KOSDAQ) is KRX-only and ingests both
+markets when omitted.
 
 ### 3) Start backend / frontend
 

@@ -21,6 +21,7 @@ scheduler 고유 로직만 검증:
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,7 @@ from batch.scheduler import (
     build_arg_parser,
     recent_completed_quarter,
     run_corp_code_job,
+    run_krx_job,
 )
 
 # =============================================================================
@@ -110,6 +112,14 @@ def test_arg_parser_observed_date_invalid() -> None:
         build_arg_parser().parse_args(["--observed-date", "2024/06/15"])
 
 
+def test_arg_parser_market_choice() -> None:
+    """--market 는 KOSPI/KOSDAQ 만 허용, 미지정 시 None (양 시장)."""
+    assert build_arg_parser().parse_args(["--market", "KOSDAQ"]).market == "KOSDAQ"
+    assert build_arg_parser().parse_args([]).market is None
+    with pytest.raises(SystemExit):
+        build_arg_parser().parse_args(["--market", "NASDAQ"])
+
+
 def test_arg_parser_codes_and_fiscal() -> None:
     """--codes 다중 + fiscal 옵션."""
     args = build_arg_parser().parse_args([
@@ -156,7 +166,7 @@ class _StubEngine:
 def _patched_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     """_do_* / _build_engine_and_maker / CorpCodeBootstrap stub — 호출 기록 반환."""
     calls: dict[str, list] = {
-        "ecos": [], "kosis": [], "dart": [], "snapshot": [],
+        "krx": [], "ecos": [], "kosis": [], "dart": [], "snapshot": [],
     }
 
     _StubEngine.disposed = 0
@@ -167,6 +177,13 @@ def _patched_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     monkeypatch.setattr(scheduler, "CorpCodeBootstrap", _StubBootstrap)
     _StubBootstrap.raise_on_load = False
 
+    monkeypatch.setattr(
+        scheduler, "_do_krx",
+        # _do_krx(maker, observed_date, codes, markets) — codes/markets 전달
+        # 검증 위해 함께 기록.
+        lambda maker, observed_date, codes=None, markets=scheduler.KRX_MARKETS:
+            calls["krx"].append((observed_date, codes, markets)),
+    )
     monkeypatch.setattr(
         scheduler, "_do_ecos",
         lambda maker, observed_date: calls["ecos"].append(observed_date),
@@ -193,17 +210,66 @@ def test_main_job_ecos_only(_patched_jobs: dict[str, list]) -> None:
     ])
     assert code == 0
     assert _patched_jobs["ecos"] == [date(2024, 6, 15)]
+    assert _patched_jobs["krx"] == []
     assert _patched_jobs["kosis"] == []
     assert _patched_jobs["dart"] == []
     assert _patched_jobs["snapshot"] == []
 
 
+def test_main_job_krx_only(_patched_jobs: dict[str, list]) -> None:
+    """job=krx → krx 만 실행, 나머지 0 (API 키 불필요 가격/시총 단독 적재)."""
+    code = scheduler.main([
+        "--job", "krx", "--observed-date", "2024-06-28",
+    ])
+    assert code == 0
+    # codes 미지정 → None (전체 universe), market 미지정 → 양 시장.
+    assert _patched_jobs["krx"] == [
+        (date(2024, 6, 28), None, scheduler.KRX_MARKETS),
+    ]
+    assert _patched_jobs["ecos"] == []
+    assert _patched_jobs["kosis"] == []
+    assert _patched_jobs["dart"] == []
+    assert _patched_jobs["snapshot"] == []
+
+
+def test_main_krx_codes_passthrough(_patched_jobs: dict[str, list]) -> None:
+    """--codes 지정 → krx job 에 종목 subset 전달 (DART 와 공유, 빠른 스모크)."""
+    code = scheduler.main([
+        "--job", "krx", "--observed-date", "2024-06-28",
+        "--codes", "005930", "000660",
+    ])
+    assert code == 0
+    # market 미지정 → 양 시장 기본.
+    assert _patched_jobs["krx"] == [
+        (date(2024, 6, 28), ["005930", "000660"], scheduler.KRX_MARKETS),
+    ]
+
+
+def test_main_krx_market_limits_to_single(
+    _patched_jobs: dict[str, list],
+) -> None:
+    """--market 지정 → 해당 단일 시장만 (타 시장 universe fetch 생략)."""
+    code = scheduler.main([
+        "--job", "krx", "--observed-date", "2024-06-28",
+        "--market", "KOSPI", "--codes", "005930",
+    ])
+    assert code == 0
+    assert _patched_jobs["krx"] == [
+        (date(2024, 6, 28), ["005930"], ("KOSPI",)),
+    ]
+
+
 def test_main_all_runs_every_job(_patched_jobs: dict[str, list]) -> None:
-    """job=all → ecos + kosis + dart + snapshot 모두 실행."""
+    """job=all → krx + ecos + kosis + dart + snapshot 모두 실행."""
     code = scheduler.main([
         "--job", "all", "--observed-date", "2024-06-15",
     ])
     assert code == 0
+    # krx 는 raw 배치 중 가장 먼저 (가격/시총 = factor 기반). codes 미지정 → None,
+    # market 미지정 → 양 시장.
+    assert _patched_jobs["krx"] == [
+        (date(2024, 6, 15), None, scheduler.KRX_MARKETS),
+    ]
     assert _patched_jobs["ecos"] == [date(2024, 6, 15)]
     assert _patched_jobs["kosis"] == [date(2024, 6, 15)]
     # fiscal 자동 추정 — 2024-06-15 기준 (2024, 1).
@@ -291,3 +357,112 @@ def test_run_corp_code_job_delegates_to_bootstrap() -> None:
     _StubBootstrap.raise_on_load = False
     mapping = run_corp_code_job(bootstrap=bootstrap)  # type: ignore[arg-type]
     assert mapping.to_corp_code("005930") == "00126380"
+
+
+# =============================================================================
+# 13~14. run_krx_job (KrxDailyBatch 를 시장별로 반복)
+# =============================================================================
+
+class _StubKrxBatch:
+    """KrxDailyBatch stub — run(as_of, market) 호출 기록 + 가짜 summary 반환.
+
+    run_krx_job 의 시장 반복 로직만 검증 (실 pykrx/FDR fetch·DB write 없이).
+    KrxDailyBatch 생성자 kwargs 는 검사용으로 보관.
+    """
+
+    instances: list[_StubKrxBatch] = []
+
+    def __init__(self, **kwargs: object) -> None:
+        self.kwargs = kwargs
+        self.runs: list[tuple[date, str, object]] = []
+        _StubKrxBatch.instances.append(self)
+
+    def run(
+        self,
+        *,
+        as_of: date,
+        market: str,
+        dry_run: bool = False,
+        codes: object = None,
+    ) -> SimpleNamespace:
+        self.runs.append((as_of, market, codes))
+        # run_krx_job 의 logging 이 접근하는 속성만 채운 가짜 summary.
+        return SimpleNamespace(
+            universe_size=2,
+            success_count=2,
+            failure_count=0,
+            conflicts=(),
+            skipped_reason=None,
+        )
+
+
+def test_run_krx_job_iterates_both_markets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """run_krx_job → 기본 markets (KOSPI + KOSDAQ) 를 동일 batch 인스턴스로 순차 run.
+
+    전체 universe 적재 = 두 시장 모두. KrxDailyBatch.run 이 시장 1 개를 처리하므로
+    job 함수가 markets 를 순회해야 한다 (단일 batch 인스턴스 재사용).
+    """
+    _StubKrxBatch.instances = []
+    monkeypatch.setattr(scheduler, "KrxDailyBatch", _StubKrxBatch)
+
+    summaries = run_krx_job(
+        session=object(),  # type: ignore[arg-type]  # repo 생성자는 session 보관만.
+        primary_adapter=object(),  # type: ignore[arg-type]
+        verify_adapter=object(),  # type: ignore[arg-type]
+        calendar=object(),  # type: ignore[arg-type]
+        as_of=date(2024, 6, 28),
+    )
+
+    assert len(summaries) == 2
+    # batch 인스턴스는 1 개 (시장마다 새로 만들지 않음). codes 미지정 → None.
+    assert len(_StubKrxBatch.instances) == 1
+    assert _StubKrxBatch.instances[0].runs == [
+        (date(2024, 6, 28), "KOSPI", None),
+        (date(2024, 6, 28), "KOSDAQ", None),
+    ]
+
+
+def test_run_krx_job_respects_custom_markets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """markets 인자 명시 → 해당 시장만 run (단일 시장 적재 지원)."""
+    _StubKrxBatch.instances = []
+    monkeypatch.setattr(scheduler, "KrxDailyBatch", _StubKrxBatch)
+
+    summaries = run_krx_job(
+        session=object(),  # type: ignore[arg-type]
+        primary_adapter=object(),  # type: ignore[arg-type]
+        verify_adapter=None,
+        calendar=object(),  # type: ignore[arg-type]
+        as_of=date(2024, 6, 28),
+        markets=("KOSPI",),
+    )
+
+    assert len(summaries) == 1
+    assert _StubKrxBatch.instances[0].runs == [
+        (date(2024, 6, 28), "KOSPI", None),
+    ]
+
+
+def test_run_krx_job_forwards_codes_to_each_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """codes 지정 → 각 시장 run 에 동일 codes subset 전달 (빠른 스모크 적재)."""
+    _StubKrxBatch.instances = []
+    monkeypatch.setattr(scheduler, "KrxDailyBatch", _StubKrxBatch)
+
+    run_krx_job(
+        session=object(),  # type: ignore[arg-type]
+        primary_adapter=object(),  # type: ignore[arg-type]
+        verify_adapter=None,
+        calendar=object(),  # type: ignore[arg-type]
+        as_of=date(2024, 6, 28),
+        codes=["005930", "000660"],
+    )
+
+    assert _StubKrxBatch.instances[0].runs == [
+        (date(2024, 6, 28), "KOSPI", ["005930", "000660"]),
+        (date(2024, 6, 28), "KOSDAQ", ["005930", "000660"]),
+    ]
