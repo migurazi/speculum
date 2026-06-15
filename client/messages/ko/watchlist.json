@@ -27,5 +27,6 @@
   "editNoteAriaLabel": "메모 변경",
   "noNote": "메모 없음",
   "editNoteButton": "메모 수정",
-  "removeItemButton": "삭제"
+  "removeItemButton": "삭제",
+  "lineageLabel": "lineage"
 }

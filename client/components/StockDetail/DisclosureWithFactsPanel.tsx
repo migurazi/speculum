@@ -26,10 +26,10 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { Fragment, useState } from "react";
 
 import { fetchDisclosures } from "@/lib/api/disclosures";
-import type { Disclosure } from "@/lib/api/disclosures";
+import type { Disclosure, DisclosureList } from "@/lib/api/disclosures";
 import { DisclosureFactsPanel } from "@/components/StockDetail/DisclosureFactsPanel";
 import {
   DISCLOSURE_PANEL_BG,
@@ -96,7 +96,7 @@ export function DisclosureWithFactsPanel({
   // 확장된(AI 추출 열린) 공시 행 — key: "rceptDate-dartUrl" (Disclosure 식별자).
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error } = useQuery<DisclosureList, Error>({
     // DisclosurePanel 과 동일 queryKey — 캐시 공유, 재요청 없음.
     queryKey: ["disclosures", code, asOf ?? null] as const,
     queryFn: ({ signal }) =>
@@ -132,7 +132,7 @@ export function DisclosureWithFactsPanel({
     return (
       <div className={cn(DISCLOSURE_PANEL_BG, "p-4", className)}>
         <div className="rounded-md border border-neutral-300 bg-neutral-50 px-4 py-3 text-sm text-neutral-800">
-          {t("disclosures.loadError", { message: (error as Error).message })}
+          {t("disclosures.loadError", { message: error.message })}
         </div>
       </div>
     );
@@ -206,9 +206,8 @@ export function DisclosureWithFactsPanel({
               const rceptNo = extractRceptNo(item.dartUrl);
 
               return (
-                <>
+                <Fragment key={rowKey}>
                   <tr
-                    key={rowKey}
                     className={cn(
                       "border-b border-neutral-100 last:border-0",
                       idx % 2 !== 0 && !isExpanded && DISCLOSURE_PANEL_ROW_STRIPE,
@@ -273,10 +272,7 @@ export function DisclosureWithFactsPanel({
                    * DisclosureFactsPanel 이 내부에서 게이트(D3/D2/D6) 적용.
                    */}
                   {isExpanded && rceptNo ? (
-                    <tr
-                      key={`${rowKey}-facts`}
-                      className="border-b border-neutral-100"
-                    >
+                    <tr className="border-b border-neutral-100">
                       <td
                         colSpan={4}
                         className="px-4 pb-3 pt-1"
@@ -289,7 +285,7 @@ export function DisclosureWithFactsPanel({
                       </td>
                     </tr>
                   ) : null}
-                </>
+                </Fragment>
               );
             })}
           </tbody>

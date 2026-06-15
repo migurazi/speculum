@@ -246,6 +246,28 @@ describe("CompareGrid", () => {
     expect(screen.getAllByText(/KRX·FSC · 2024-09-30/).length).toBeGreaterThanOrEqual(1);
   });
 
+  // T-3 회귀 가드 — factor.value 가 계약 위반으로 null 이어도 crash 없음.
+  it("renders empty string (not crash) when value is null but is_na=false (contract violation)", () => {
+    const brokenFactor: FactorValue = {
+      canonical_id: "per:ttm-consolidated-ifrs",
+      name: "PER",
+      unit: "ratio",
+      value: null, // is_na=false 인데 value=null — 계약 위반 데이터
+      is_na: false,
+      na_reason: null,
+      evaluator_version: "1.0.0",
+    };
+    const stocks = [
+      makeStock({ id: "s1", code: "005930", factors: [brokenFactor] }),
+    ];
+    // crash 없이 렌더 — N/A 가드가 value===null 도 처리.
+    expect(() => {
+      renderWithIntl(<CompareGrid stocks={stocks} asOf="2024-09-30" />);
+    }).not.toThrow();
+    // is_na=false, value=null → 상위 가드(value===null) 에 걸려 N/A 표시.
+    expect(screen.getByText("N/A")).toBeInTheDocument();
+  });
+
   // oracle T38 L3 — column header 가 a11y scope="col" 보유.
   it("sets scope='col' on all column headers", () => {
     const stocks = [

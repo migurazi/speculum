@@ -81,12 +81,37 @@ interface FetchJsonOptions {
 /**
  * Backend API 호출 + JSON parse.
  *
+ * 계약 (빈 body):
+ *   - 204 No Content / Content-Length 0 등 빈 body 응답은 `void` 로만 안전.
+ *     이런 endpoint 호출은 반드시 `fetchJson<void>(...)` 또는 타입인자 생략
+ *     (`fetchJson(...)`, 기본 오버로드가 `Promise<void>`)으로 호출하고, 반환값에
+ *     `.field` 접근을 하지 않아야 한다.
+ *   - 비어있지 않은 body 는 `JSON.parse` 후 `T` 로 반환. caller 가 `T` 를 지정.
+ *
+ * 타입 안전성:
+ *   - 두 개의 오버로드로 의도를 명문화한다 — 타입인자 생략 시 `Promise<void>`,
+ *     명시 시 `Promise<T>`. 빈 body 를 임의의 `T` 로 둔갑시키던 `undefined as
+ *     unknown as T` 이중 cast 를 제거했다.
+ *   - 런타임에는 타입인자(`T`)를 관측할 수 없으므로, 빈 body 를 구체 `T` 로
+ *     기대한 caller 를 런타임에 막을 수는 없다. 이 보호는 **타입 레벨**이며,
+ *     empty-body endpoint 는 호출부에서 `<void>`(또는 생략)로 호출해야 한다.
+ *     (구체 `T` 를 기대했는데 서버가 빈 body 를 주면 `undefined.field` crash 가
+ *     날 수 있으나, 그런 endpoint 는 애초에 `<void>` 로 선언되어야 하는 계약.)
+ *
  * @param path API path (leading `/` 포함, `/api/screen` 등)
  * @param options method / body / searchParams / signal / accessToken
- * @returns parsed JSON
+ * @returns parsed JSON, 또는 빈 body 시 `undefined`(`void`)
  * @throws ApiError on non-2xx response or JSON parse failure.
  */
-export async function fetchJson<T>(
+export function fetchJson(
+  path: string,
+  options?: FetchJsonOptions,
+): Promise<void>;
+export function fetchJson<T>(
+  path: string,
+  options?: FetchJsonOptions,
+): Promise<T>;
+export async function fetchJson<T = void>(
   path: string,
   options: FetchJsonOptions = {},
 ): Promise<T> {
@@ -133,8 +158,12 @@ export async function fetchJson<T>(
   }
 
   if (!rawText) {
-    // 빈 body — JSON parse 가 throw. `T` 가 void 인 경우만 caller 가 cast.
-    return undefined as unknown as T;
+    // 빈 body (204 / Content-Length 0). 오버로드 계약상 이 경로는 `void` 반환이
+    // 정상이며, `T = void` 기본 호출과 `fetchJson<void>(...)` 만 안전하다.
+    // 구체 `T` 를 기대한 caller 는 계약 위반이지만, 런타임에 타입인자를 볼 수
+    // 없으므로 여기서 분기 불가 — 호출부가 `<void>` 를 명시함으로써 타입레벨에서
+    // 보장한다. (단일 `as` cast: `void`/`undefined` 는 호환, 이중 cast 우회 제거.)
+    return undefined as T;
   }
 
   try {

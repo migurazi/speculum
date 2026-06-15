@@ -50,6 +50,31 @@ describe("isNavLinkActive", () => {
   });
 });
 
+describe("NavBar 검색 input a11y (A-3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(usePathname).mockReturnValue("/screener");
+  });
+
+  it("검색 input 이 readOnly + aria-disabled=true 로 렌더 (disabled 아님)", () => {
+    const { container } = renderWithIntl(<NavBar />);
+    const input = container.querySelector("input[type='search']");
+    expect(input).not.toBeNull();
+    // disabled 이면 스크린리더가 건너뜀 — readOnly 여야 함.
+    expect(input).not.toHaveAttribute("disabled");
+    expect(input).toHaveAttribute("aria-disabled", "true");
+    expect(input).toHaveAttribute("readonly");
+  });
+
+  it("검색 input 이 포커스 가능 (tabIndex 제거 없음)", () => {
+    const { container } = renderWithIntl(<NavBar />);
+    const input = container.querySelector("input[type='search']");
+    // tabIndex 가 음수가 아니어야 키보드 접근 가능.
+    const tabIndex = (input as HTMLInputElement | null)?.tabIndex ?? 0;
+    expect(tabIndex).toBeGreaterThanOrEqual(0);
+  });
+});
+
 describe("NavBar active link 표시", () => {
   beforeEach(() => {
     vi.clearAllMocks();

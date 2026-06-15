@@ -86,8 +86,9 @@ export function NavBar({ className }: NavBarProps): JSX.Element {
             type="search"
             placeholder={t("searchPlaceholder")}
             aria-label={t("searchAriaLabel")}
-            disabled
-            className="w-full max-w-md rounded-md border border-neutral-300 px-3 py-1.5 text-sm placeholder:text-neutral-400 disabled:cursor-not-allowed disabled:bg-neutral-50"
+            readOnly
+            aria-disabled="true"
+            className="w-full max-w-md rounded-md border border-neutral-300 px-3 py-1.5 text-sm placeholder:text-neutral-400 cursor-not-allowed bg-neutral-50"
           />
         </div>
         <AsOfDatePicker />

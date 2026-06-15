@@ -25,7 +25,10 @@ import {
 } from "vitest";
 
 import { ConditionBuilder } from "../ConditionBuilder";
-import type { ScreenCondition } from "@/lib/api/screen";
+import {
+  newEditableCondition,
+  type EditableCondition,
+} from "@/lib/ui/editable-condition";
 import { renderWithIntl } from "@/test-utils/intl";
 
 // /api/factors 응답 fixture
@@ -81,7 +84,7 @@ describe("ConditionBuilder", () => {
     renderWithIntl(
       wrap(
         <ConditionBuilder
-          conditions={[{ factor: "", op: "<", value: "" }]}
+          conditions={[newEditableCondition()]}
           onChange={onChange}
         />,
       ),
@@ -105,7 +108,7 @@ describe("ConditionBuilder", () => {
     renderWithIntl(
       wrap(
         <ConditionBuilder
-          conditions={[{ factor: "", op: "<", value: "" }]}
+          conditions={[newEditableCondition()]}
           onChange={onChange}
         />,
       ),
@@ -137,8 +140,8 @@ describe("ConditionBuilder", () => {
       }),
     );
 
-    const conditions: ScreenCondition[] = [{ factor: "", op: "<", value: "" }];
-    const onChange = vi.fn((next: ReadonlyArray<ScreenCondition>) => {
+    const conditions: EditableCondition[] = [newEditableCondition()];
+    const onChange = vi.fn((next: ReadonlyArray<EditableCondition>) => {
       conditions.splice(0, conditions.length, ...next);
     });
 
@@ -159,7 +162,7 @@ describe("ConditionBuilder", () => {
     await user.selectOptions(select, "per:ttm-consolidated-ifrs");
 
     expect(onChange).toHaveBeenCalledTimes(1);
-    const callArg = onChange.mock.calls[0]?.[0] as ReadonlyArray<ScreenCondition>;
+    const callArg = onChange.mock.calls[0]?.[0] as ReadonlyArray<EditableCondition>;
     expect(callArg[0]?.factor).toBe("per:ttm-consolidated-ifrs");
   });
 
@@ -182,9 +185,12 @@ describe("ConditionBuilder", () => {
     await user.click(screen.getByRole("button", { name: /조건 추가/ }));
 
     expect(onChange).toHaveBeenCalledTimes(1);
-    const next = onChange.mock.calls[0]?.[0] as ReadonlyArray<ScreenCondition>;
+    const next = onChange.mock.calls[0]?.[0] as ReadonlyArray<EditableCondition>;
     expect(next).toHaveLength(1);
     expect(next[0]?.factor).toBe("");
+    // 새 row 는 안정적 id 를 가진다(R-3 key 안정성).
+    expect(typeof next[0]?.id).toBe("string");
+    expect(next[0]?.id.length).toBeGreaterThan(0);
   });
 
   it("삭제 버튼 클릭 시 해당 row 제거", async () => {
@@ -195,8 +201,8 @@ describe("ConditionBuilder", () => {
       }),
     );
 
-    const initialConditions: ReadonlyArray<ScreenCondition> = [
-      { factor: "per:ttm-consolidated-ifrs", op: "<", value: "10" },
+    const initialConditions: ReadonlyArray<EditableCondition> = [
+      newEditableCondition({ factor: "per:ttm-consolidated-ifrs", op: "<", value: "10" }),
     ];
     const onChange = vi.fn();
     renderWithIntl(
@@ -209,7 +215,7 @@ describe("ConditionBuilder", () => {
     await user.click(screen.getByRole("button", { name: "조건 1 삭제" }));
 
     expect(onChange).toHaveBeenCalledTimes(1);
-    const next = onChange.mock.calls[0]?.[0] as ReadonlyArray<ScreenCondition>;
+    const next = onChange.mock.calls[0]?.[0] as ReadonlyArray<EditableCondition>;
     expect(next).toHaveLength(0);
   });
 
@@ -223,7 +229,7 @@ describe("ConditionBuilder", () => {
     renderWithIntl(
       wrap(
         <ConditionBuilder
-          conditions={[{ factor: "", op: "<", value: "" }]}
+          conditions={[newEditableCondition()]}
           onChange={onChange}
         />,
       ),

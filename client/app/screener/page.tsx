@@ -32,9 +32,13 @@ import {
   type ScreenResult,
   type SecurityType,
 } from "@/lib/api/screen";
+import {
+  toScreenConditions,
+  type EditableCondition,
+} from "@/lib/ui/editable-condition";
 import { useAsOfStore } from "@/state/as-of-store";
 
-const INITIAL_CONDITIONS: ReadonlyArray<ScreenCondition> = [];
+const INITIAL_CONDITIONS: ReadonlyArray<EditableCondition> = [];
 
 /** factor pack 은 정적 — 30분 stale (ConditionBuilder 와 동일 설정). */
 const FACTORS_STALE_TIME = 30 * 60 * 1000;
@@ -42,7 +46,8 @@ const FACTORS_STALE_TIME = 30 * 60 * 1000;
 export default function ScreenerPage(): JSX.Element {
   const t = useTranslations("screener");
   const asOf = useAsOfStore((s) => s.asOf);
-  const [conditions, setConditions] = useState<ReadonlyArray<ScreenCondition>>(
+  // UI 전용 id 를 가진 row 목록(R-3). API 경계에서 toScreenConditions 로 strip.
+  const [conditions, setConditions] = useState<ReadonlyArray<EditableCondition>>(
     INITIAL_CONDITIONS,
   );
   // selected_factors — 체크박스 다중 선택 상태. canonical_id string[]
@@ -97,7 +102,8 @@ export default function ScreenerPage(): JSX.Element {
     mutationFn: () =>
       executeScreen(
         {
-          conditions,
+          // UI 전용 id strip — wire body 에 id 미포함.
+          conditions: toScreenConditions(conditions),
           selected_factors: selectedFactors,
           security_types: securityTypes,
         },
@@ -105,9 +111,10 @@ export default function ScreenerPage(): JSX.Element {
       ),
     onSuccess: (result) => {
       // 실행 성공 시점에 입력을 freeze — SaveRunButton 이 캡처본만 사용.
+      // snapshot 도 strip 된 wire conditions 로 저장(save 경계 id 격리).
       setExecutedSnapshot({
         result,
-        conditions,
+        conditions: toScreenConditions(conditions),
         selectedFactors,
         securityTypes,
         asOf,

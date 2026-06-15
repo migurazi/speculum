@@ -25,10 +25,7 @@
  * - M0_PLAN T37 / AC-F-04.
  */
 
-import {
-  SourceAttribution,
-  type SourceAttributionProps,
-} from "@/components/SourceAttribution";
+import { SourceAttribution } from "@/components/SourceAttribution";
 import type { FactorValue } from "@/lib/api/stocks";
 import { formatPercentValue } from "@/lib/factor/format";
 import { inferFactorSource } from "@/lib/factor/source";
@@ -61,6 +58,9 @@ export function MetricCard({
   const source = inferFactorSource(factor.canonical_id);
   const formula = describeFormula(factor);
 
+  // 계약: is_na=false 이면 value!==null (backend FactorValueOut 보장). 그러나
+  // 계약 위반 데이터(is_na=false && value===null)에도 crash 하지 않도록 이
+  // 가드가 두 경우(is_na || value===null)를 동일하게 N/A 로 흡수한다.
   if (factor.is_na || factor.value === null) {
     return (
       <div
@@ -85,6 +85,11 @@ export function MetricCard({
     );
   }
 
+  // 위 가드를 통과한 시점에 factor.value 는 string(계약상 non-null). 그러나
+  // non-null assertion(!) 대신 명시 fallback 으로 방어 — 계약 위반 데이터가
+  // 가드를 우회해 도달하더라도 crash 없이 빈 문자열로 표시.
+  const value = factor.value ?? "";
+
   return (
     <div
       className={cn(
@@ -98,8 +103,8 @@ export function MetricCard({
           value={
             <span className="text-base">
               {factor.unit === "percent"
-                ? formatPercentValue(factor.value!)
-                : factor.value}
+                ? formatPercentValue(value)
+                : value}
               {factor.unit !== "ratio" &&
               factor.unit !== "percent" &&
               factor.unit !== "" ? (
@@ -120,6 +125,3 @@ export function MetricCard({
     </div>
   );
 }
-
-/** Exported for tests / future override of SourceAttribution props subset. */
-export type { SourceAttributionProps };

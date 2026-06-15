@@ -40,7 +40,7 @@ import {
 import { useTranslations } from "next-intl";
 import { useEffect, useRef, useState } from "react";
 
-import type { CorporateAction } from "@/lib/api/prices";
+import type { CorporateAction, StockPricesResponse } from "@/lib/api/prices";
 import { fetchStockPrices } from "@/lib/api/prices";
 import { cn } from "@/lib/utils";
 
@@ -131,7 +131,10 @@ export function PriceChart({
   const t = useTranslations("stock");
   const [mode, setMode] = useState<PriceMode>("raw");
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error } = useQuery<
+    StockPricesResponse,
+    Error
+  >({
     queryKey: ["prices", code, asOf] as const,
     queryFn: ({ signal }) => fetchStockPrices(code, asOf, signal),
     staleTime: 5 * 60 * 1000, // 5분
@@ -311,7 +314,7 @@ export function PriceChart({
         )}
         {isError && (
           <div className="absolute inset-0 flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 text-center text-sm text-red-800">
-            {t("chart.loadError", { message: (error as Error).message })}
+            {t("chart.loadError", { message: error.message })}
           </div>
         )}
         {isEmpty && (

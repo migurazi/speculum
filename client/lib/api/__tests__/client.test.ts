@@ -96,6 +96,30 @@ describe("fetchJson", () => {
     }
   });
 
+  it("returns undefined (void) for empty 2xx body without throwing", async () => {
+    // 빈 body — DELETE 류 endpoint(서버가 200 + 빈 본문). JSON.parse 호출 안 하고
+    // void(undefined) 반환(T-2 계약). caller 는 fetchJson<void>(...) 로 호출.
+    // (jsdom Response 는 204 의 본문을 금지하므로 200+빈본문으로 빈 body 경로 검증.)
+    globalThis.fetch = vi.fn(async () =>
+      new Response("", { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchJson<void>("/api/watchlists/x", {
+      method: "DELETE",
+    });
+    expect(result).toBeUndefined();
+  });
+
+  it("returns undefined for empty body when called without type argument", async () => {
+    // 타입인자 생략 시 오버로드가 Promise<void> 로 해소 — 빈 body 정상 통과.
+    globalThis.fetch = vi.fn(async () =>
+      new Response("", { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    const result = await fetchJson("/api/noop", { method: "POST" });
+    expect(result).toBeUndefined();
+  });
+
   it("throws ApiError on JSON parse failure", async () => {
     globalThis.fetch = vi.fn(async () =>
       new Response("not json {{{", { status: 200 }),

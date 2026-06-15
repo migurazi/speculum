@@ -29,7 +29,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 
 import { fetchFinancialHistory } from "@/lib/api/financial-history";
-import type { FinancialVintage } from "@/lib/api/financial-history";
+import type {
+  FinancialHistory,
+  FinancialVintage,
+} from "@/lib/api/financial-history";
 import { cn } from "@/lib/utils";
 
 interface RestatementHistoryProps {
@@ -114,7 +117,7 @@ export function RestatementHistory({
 }: RestatementHistoryProps): JSX.Element {
   const t = useTranslations("stock");
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error } = useQuery<FinancialHistory, Error>({
     queryKey: ["financialHistory", code, asOf ?? null] as const,
     queryFn: ({ signal }) =>
       fetchFinancialHistory(code, asOf ? { asOf } : {}, signal),
@@ -148,7 +151,7 @@ export function RestatementHistory({
       >
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {t("restatementHistory.loadError", {
-            message: (error as Error).message,
+            message: error.message,
           })}
         </div>
       </div>

@@ -232,10 +232,13 @@ function CompareCell({
     );
   }
 
+  // 상위 (is_na || value === null) 가드 이후에도 계약 위반 데이터에서
+  // value 가 null 로 올 수 있으므로 null 가드 후 빈 문자열 fallback 제공.
+  const rawValue = factor.value ?? "";
   const displayValue =
     factor.unit === "percent"
-      ? formatPercentValue(factor.value!)
-      : factor.value!;
+      ? formatPercentValue(rawValue)
+      : rawValue;
 
   return (
     <SourceAttribution

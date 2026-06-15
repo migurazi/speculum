@@ -34,6 +34,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 
 import { fetchDisclosures } from "@/lib/api/disclosures";
+import type { DisclosureList } from "@/lib/api/disclosures";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -104,7 +105,7 @@ export function DisclosurePanel({
 }: DisclosurePanelProps): JSX.Element {
   const t = useTranslations("stock");
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error } = useQuery<DisclosureList, Error>({
     queryKey: ["disclosures", code, asOf ?? null] as const,
     queryFn: ({ signal }) =>
       fetchDisclosures(code, asOf ? { asOf } : {}, signal),
@@ -133,7 +134,7 @@ export function DisclosurePanel({
       <div className={cn(DISCLOSURE_PANEL_BG, "p-4", className)}>
         {/* 에러 알림 — neutral 테두리/배경. 판단색(red) 0. */}
         <div className="rounded-md border border-neutral-300 bg-neutral-50 px-4 py-3 text-sm text-neutral-800">
-          {t("disclosures.loadError", { message: (error as Error).message })}
+          {t("disclosures.loadError", { message: error.message })}
         </div>
       </div>
     );

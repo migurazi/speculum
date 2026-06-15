@@ -55,6 +55,11 @@ import {
   type ScreenCondition,
   type ScreenOp,
 } from "@/lib/api/screen";
+import {
+  newEditableCondition,
+  toScreenConditions,
+  type EditableCondition,
+} from "@/lib/ui/editable-condition";
 import { cn } from "@/lib/utils";
 
 // ── No Advice 시각 상수 (backtest-visual-gate 패턴 — 이 상수를 테스트가 검증) ──
@@ -135,7 +140,8 @@ export const BACKTEST_PANEL_FRESHNESS_OK = "bg-neutral-100 border-neutral-200 te
 
 // ── 상수 ──────────────────────────────────────────────────────────────────────
 
-const EMPTY_CONDITION: ScreenCondition = { factor: "", op: "<", value: "" };
+// 주: 각 row 는 고유 id 가 필요하므로 공유 상수 대신 factory(newEditableCondition)
+// 로 생성한다(R-3). 동일 객체 재사용 금지 — id 충돌·key 불안정 방지.
 
 /** equity curve 차트 높이(px) — 고정. */
 const CURVE_CHART_HEIGHT = 240;
@@ -665,9 +671,10 @@ export function BacktestPanel({
   const [rebalance, setRebalance] = useState<"quarterly" | "monthly">("quarterly");
   const [commissionBpsStr, setCommissionBpsStr] = useState("1.5");
   const [taxBpsStr, setTaxBpsStr] = useState("15");
-  const [conditions, setConditions] = useState<ReadonlyArray<ScreenCondition>>([
-    EMPTY_CONDITION,
-  ]);
+  // UI 전용 id 를 가진 row 목록(R-3). 실행 시 toScreenConditions 로 strip.
+  const [conditions, setConditions] = useState<ReadonlyArray<EditableCondition>>(
+    () => [newEditableCondition()],
+  );
 
   /** 실행 결과 freeze — 실행 시점 결과 고정(자동 정렬 금지). */
   const [executedResult, setExecutedResult] = useState<BacktestResult | null>(null);
@@ -690,7 +697,7 @@ export function BacktestPanel({
   };
 
   const addCondition = (): void => {
-    setConditions((prev) => [...prev, EMPTY_CONDITION]);
+    setConditions((prev) => [...prev, newEditableCondition()]);
   };
 
   const removeCondition = (index: number): void => {
@@ -716,7 +723,8 @@ export function BacktestPanel({
     mutation.mutate({
       packSlug,
       packVersion,
-      conditions,
+      // UI 전용 id strip — wire body 에 id 미포함.
+      conditions: toScreenConditions(conditions),
       start,
       end,
       rebalance,
@@ -848,7 +856,7 @@ export function BacktestPanel({
             <ul className="space-y-2">
               {conditions.map((condition, index) => (
                 <li
-                  key={index}
+                  key={condition.id}
                   className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-white p-2"
                 >
                   {/* factor canonical_id 직접 입력 */}

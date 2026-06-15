@@ -26,19 +26,18 @@ import {
   type ScreenCondition,
   type ScreenOp,
 } from "@/lib/api/screen";
+import {
+  newEditableCondition,
+  type EditableCondition,
+} from "@/lib/ui/editable-condition";
 import { cn } from "@/lib/utils";
 
 interface ConditionBuilderProps {
-  readonly conditions: ReadonlyArray<ScreenCondition>;
-  readonly onChange: (next: ReadonlyArray<ScreenCondition>) => void;
+  /** UI 전용 id 를 가진 row 목록 — key 안정성(R-3). */
+  readonly conditions: ReadonlyArray<EditableCondition>;
+  readonly onChange: (next: ReadonlyArray<EditableCondition>) => void;
   readonly className?: string;
 }
-
-const EMPTY_CONDITION: ScreenCondition = {
-  factor: "",
-  op: "<",
-  value: "",
-};
 
 /** factor 목록 쿼리 키 — 앱 전체 공유 (동일 cache). */
 export const FACTORS_QUERY_KEY = ["factors"] as const;
@@ -76,7 +75,7 @@ export function ConditionBuilder({
   };
 
   const addRow = (): void => {
-    onChange([...conditions, EMPTY_CONDITION]);
+    onChange([...conditions, newEditableCondition()]);
   };
 
   const removeRow = (index: number): void => {
@@ -84,7 +83,7 @@ export function ConditionBuilder({
   };
 
   /** factor 선택 영역 렌더 — 로딩/에러/정상 상태 분기. */
-  const renderFactorInput = (condition: ScreenCondition, index: number): JSX.Element => {
+  const renderFactorInput = (condition: EditableCondition, index: number): JSX.Element => {
     // fetch 실패 시 기존 text input fallback
     if (factorsError) {
       return (
@@ -147,7 +146,7 @@ export function ConditionBuilder({
         <ul className="space-y-2">
           {conditions.map((condition, index) => (
             <li
-              key={index}
+              key={condition.id}
               className="flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 bg-white p-2"
             >
               {renderFactorInput(condition, index)}

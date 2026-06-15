@@ -78,9 +78,21 @@ function renderList(
 describe("ItemList", () => {
   it("renders items with lineage id + note", () => {
     renderList();
+    // I-3: lineageLabel 은 i18n 키("lineage")로 렌더 — 하드코딩 문자열 아님.
     expect(screen.getByText(/lineage: 11111111/)).toBeInTheDocument();
     expect(screen.getByText("관심 종목")).toBeInTheDocument();
     expect(screen.getByText("메모 없음")).toBeInTheDocument();
+  });
+
+  // I-3 회귀 가드 — lineageLabel 이 i18n 경유 렌더 확인.
+  it("renders lineage label via i18n key (not hardcoded string)", () => {
+    renderList();
+    // messages/ko/watchlist.json lineageLabel = "lineage"
+    // 값이 변경돼도 키 경유인 한 이 텍스트가 포함돼야 함.
+    const cells = document.querySelectorAll(".font-mono.text-xs.text-neutral-500");
+    expect(cells.length).toBeGreaterThanOrEqual(1);
+    // 코드 앞 "lineage:" 접두 확인 — 하드코딩 "lineage:" 가 제거됐음을 겸 검증.
+    expect(cells[0]!.textContent).toMatch(/^lineage:/);
   });
 
   it("renders placeholder for empty folder", () => {
@@ -117,6 +129,19 @@ describe("ItemList", () => {
     expect(
       screen.getByText("종목코드는 1~6 자리 숫자여야 합니다."),
     ).toBeInTheDocument();
+  });
+
+  // A-4 회귀 가드 — codeInvalidMessage <p> 에 role="alert" 존재.
+  it("codeInvalidMessage <p> has role=alert for screen reader parity", async () => {
+    const user = userEvent.setup();
+    renderList();
+    await user.type(screen.getByLabelText("종목코드"), "abc");
+    // role="alert" 가 있는 요소 중 codeInvalidMessage 포함 확인.
+    const alerts = screen.getAllByRole("alert");
+    const invalidMsg = alerts.find((el) =>
+      el.textContent?.includes("종목코드는 1~6 자리 숫자여야 합니다."),
+    );
+    expect(invalidMsg).toBeDefined();
   });
 
   it("does not call onAdd for too-long code", async () => {

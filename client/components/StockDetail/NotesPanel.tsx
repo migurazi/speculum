@@ -27,7 +27,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 
 import { renderMarkdown } from "@/lib/markdown";
 import {
@@ -36,7 +36,7 @@ import {
   listNotes,
   updateNote,
 } from "@/lib/api/notes";
-import type { Note } from "@/lib/api/notes";
+import type { Note, NoteList } from "@/lib/api/notes";
 import { cn } from "@/lib/utils";
 
 // =============================================================================
@@ -56,6 +56,15 @@ interface NotesPanelProps {
 }
 
 type WriteTab = "write" | "preview";
+
+// WAI-ARIA tabs — 탭 순서(화살표/Home/End 네비)와 라벨 i18n 키 매핑.
+// PortfolioPanel 의 tablist/tab/tabpanel 패턴과 동형. id 는 본 키로 파생
+// (notes-editor-tab-*, notes-editor-panel-*).
+const WRITE_TAB_ORDER: readonly WriteTab[] = ["write", "preview"];
+const WRITE_TAB_LABEL_KEY: Readonly<Record<WriteTab, string>> = {
+  write: "notes.writeTab",
+  preview: "notes.previewTab",
+};
 
 // =============================================================================
 // Sub-components
@@ -135,69 +144,121 @@ function MarkdownEditor({
   t: ReturnType<typeof useTranslations<"stock">>;
 }): JSX.Element {
   const [activeTab, setActiveTab] = useState<WriteTab>("write");
-  const previewHtml = renderMarkdown(value);
+  const hasPreview = value.trim().length > 0;
+  // 빈 상태일 때는 renderMarkdown 을 호출조차 하지 않음(불필요한 sanitize 회피).
+  const previewHtml = hasPreview ? renderMarkdown(value) : "";
+
+  // WAI-ARIA tabs 키보드 네비 — tab 버튼 ref(포커스 이동) + 화살표/Home/End.
+  // 자동 활성화 패턴(selection follows focus): 이동 즉시 활성화 + 포커스 이동.
+  // roving tabindex 와 짝(선택 탭만 0). PortfolioPanel 패턴 동형.
+  const tabRefs = useRef<Record<WriteTab, HTMLButtonElement | null>>({
+    write: null,
+    preview: null,
+  });
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    const current = WRITE_TAB_ORDER.indexOf(activeTab);
+    let next: WriteTab | undefined;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+      next = WRITE_TAB_ORDER[(current + 1) % WRITE_TAB_ORDER.length];
+    } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+      next =
+        WRITE_TAB_ORDER[
+          (current - 1 + WRITE_TAB_ORDER.length) % WRITE_TAB_ORDER.length
+        ];
+    } else if (event.key === "Home") {
+      next = WRITE_TAB_ORDER[0];
+    } else if (event.key === "End") {
+      next = WRITE_TAB_ORDER[WRITE_TAB_ORDER.length - 1];
+    }
+    if (next !== undefined) {
+      event.preventDefault();
+      setActiveTab(next);
+      tabRefs.current[next]?.focus();
+    }
+  }
 
   return (
     <div className="rounded-lg border border-neutral-200 bg-neutral-50">
-      {/* 탭 헤더 */}
-      <div className="flex border-b border-neutral-200">
-        <button
-          type="button"
-          onClick={() => setActiveTab("write")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium",
-            activeTab === "write"
-              ? "border-b-2 border-neutral-900 text-neutral-900"
-              : "text-neutral-500 hover:text-neutral-700",
-          )}
-        >
-          {t("notes.writeTab")}
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("preview")}
-          className={cn(
-            "px-4 py-2 text-sm font-medium",
-            activeTab === "preview"
-              ? "border-b-2 border-neutral-900 text-neutral-900"
-              : "text-neutral-500 hover:text-neutral-700",
-          )}
-        >
-          {t("notes.previewTab")}
-        </button>
+      {/* 탭 헤더 — WAI-ARIA tabs (role=tablist/tab + roving tabindex + 화살표 네비). */}
+      <div
+        role="tablist"
+        aria-label={t("notes.editorTabsAriaLabel")}
+        className="flex border-b border-neutral-200"
+        onKeyDown={handleTabKeyDown}
+      >
+        {WRITE_TAB_ORDER.map((tab) => {
+          const selected = activeTab === tab;
+          return (
+            <button
+              key={tab}
+              ref={(el) => {
+                tabRefs.current[tab] = el;
+              }}
+              type="button"
+              role="tab"
+              id={`notes-editor-tab-${tab}`}
+              aria-selected={selected}
+              aria-controls={`notes-editor-panel-${tab}`}
+              // roving tabindex — 선택 탭만 Tab 키 진입점(0), 나머지는 -1.
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                "px-4 py-2 text-sm font-medium",
+                selected
+                  ? "border-b-2 border-neutral-900 text-neutral-900"
+                  : "text-neutral-500 hover:text-neutral-700",
+              )}
+            >
+              {t(WRITE_TAB_LABEL_KEY[tab])}
+            </button>
+          );
+        })}
       </div>
 
       {/* 탭 본문 */}
       <div className="p-3">
         {activeTab === "write" ? (
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            maxLength={MAX_BODY_LEN}
-            disabled={disabled}
-            rows={6}
-            className="w-full resize-none rounded border border-neutral-300 bg-white px-3 py-2 font-mono text-sm text-neutral-800 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none disabled:cursor-not-allowed disabled:bg-neutral-100"
-            aria-label={placeholder}
-          />
-        ) : (
-          <>
-            {/* 미리보기 — renderMarkdown 경유. dangerouslySetInnerHTML 은 이곳에서도 허용. */}
-            {/* eslint-disable react/no-danger -- renderMarkdown(DOMPurify) chokepoint 경유, ADR-0007 D4.5 */}
-            <div
-              className={cn(
-                "prose prose-sm min-h-[9rem] max-w-none rounded border border-neutral-200 bg-white p-3 text-neutral-800",
-                value.trim().length === 0 && "text-neutral-400",
-              )}
-              dangerouslySetInnerHTML={{
-                __html:
-                  value.trim().length > 0
-                    ? previewHtml
-                    : "<p>미리보기할 내용이 없습니다.</p>",
-              }}
+          <div
+            role="tabpanel"
+            id="notes-editor-panel-write"
+            aria-labelledby="notes-editor-tab-write"
+          >
+            <textarea
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={placeholder}
+              maxLength={MAX_BODY_LEN}
+              disabled={disabled}
+              rows={6}
+              className="w-full resize-none rounded border border-neutral-300 bg-white px-3 py-2 font-mono text-sm text-neutral-800 placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none disabled:cursor-not-allowed disabled:bg-neutral-100"
+              aria-label={placeholder}
             />
-            {/* eslint-enable react/no-danger */}
-          </>
+          </div>
+        ) : (
+          <div
+            role="tabpanel"
+            id="notes-editor-panel-preview"
+            aria-labelledby="notes-editor-tab-preview"
+          >
+            {hasPreview ? (
+              // 미리보기 — renderMarkdown 경유. dangerouslySetInnerHTML 은
+              // **내용이 있을 때만** previewHtml 사용(XSS chokepoint 보존).
+              <>
+                {/* eslint-disable react/no-danger -- renderMarkdown(DOMPurify) chokepoint 경유, ADR-0007 D4.5 */}
+                <div
+                  className="prose prose-sm min-h-[9rem] max-w-none rounded border border-neutral-200 bg-white p-3 text-neutral-800"
+                  dangerouslySetInnerHTML={{ __html: previewHtml }}
+                />
+                {/* eslint-enable react/no-danger */}
+              </>
+            ) : (
+              // 빈 상태 — dangerouslySetInnerHTML 미사용. 일반 JSX + i18n.
+              <div className="prose prose-sm min-h-[9rem] max-w-none rounded border border-neutral-200 bg-white p-3 text-neutral-400">
+                <p>{t("notes.previewEmpty")}</p>
+              </div>
+            )}
+          </div>
         )}
         {/* 글자 수 */}
         <p
@@ -241,7 +302,7 @@ export function NotesPanel({
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // ─── Query ─────────────────────────────────────────────────────────────────
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error } = useQuery<NoteList, Error>({
     queryKey: ["notes", codeLineageId] as const,
     queryFn: ({ signal }) => listNotes(codeLineageId, signal),
     staleTime: 60 * 1000, // 1분
@@ -408,7 +469,7 @@ export function NotesPanel({
         {/* 에러 */}
         {isError ? (
           <div className="rounded-md border border-neutral-300 bg-neutral-50 px-4 py-3 text-sm text-neutral-800">
-            {t("notes.loadError", { message: (error as Error).message })}
+            {t("notes.loadError", { message: error.message })}
           </div>
         ) : null}
 

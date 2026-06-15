@@ -26,12 +26,15 @@ import { PreTaxDisclosure } from "@/components/StockDetail/PreTaxDisclosure";
 import { PriceChart } from "@/components/StockDetail/PriceChart";
 import { RestatementHistory } from "@/components/StockDetail/RestatementHistory";
 import { fetchStockDetail } from "@/lib/api/stocks";
+import type { StockDetail } from "@/lib/api/stocks";
 import { useAsOfStore } from "@/state/as-of-store";
 
-const STATUS_LABEL_KO: Readonly<Record<string, string>> = {
-  active: "거래 중",
-  not_yet_listed: "미상장",
-  delisted: "상장폐지",
+// status → i18n 키 매핑. 미등록 status 는 키 없음 → fallback 으로 raw status
+// 문자열을 그대로 표시(아래 렌더부에서 처리). 하드코딩 레이블 제거(i18n 우회 차단).
+const STATUS_LABEL_KEY: Readonly<Record<string, string>> = {
+  active: "statusActive",
+  not_yet_listed: "statusNotYetListed",
+  delisted: "statusDelisted",
 };
 
 const STATUS_BADGE_CLASS: Readonly<Record<string, string>> = {
@@ -46,7 +49,7 @@ export default function StockDetailPage(): JSX.Element {
   const code = params?.code ?? "";
   const asOf = useAsOfStore((s) => s.asOf);
 
-  const query = useQuery({
+  const query = useQuery<StockDetail, Error>({
     queryKey: ["stock", code, asOf],
     queryFn: ({ signal }) => fetchStockDetail(code, asOf, signal),
     enabled: code.length > 0 && code.length <= 6 && /^\d+$/.test(code),
@@ -72,7 +75,7 @@ export default function StockDetailPage(): JSX.Element {
     return (
       <main className="mx-auto max-w-5xl px-6 py-8">
         <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
-          {t("loadError", { message: (query.error as Error).message })}
+          {t("loadError", { message: query.error.message })}
         </div>
       </main>
     );
@@ -86,6 +89,9 @@ export default function StockDetailPage(): JSX.Element {
       </main>
     );
   }
+
+  // status → i18n 키. 미등록 status 는 undefined → 아래 렌더에서 raw status 표시.
+  const statusLabelKey = STATUS_LABEL_KEY[detail.status];
 
   return (
     <main className="mx-auto max-w-5xl px-6 py-8">
@@ -102,7 +108,7 @@ export default function StockDetailPage(): JSX.Element {
               STATUS_BADGE_CLASS[detail.status] ?? "border-neutral-200 bg-neutral-50"
             }`}
           >
-            {STATUS_LABEL_KO[detail.status] ?? detail.status}
+            {statusLabelKey !== undefined ? t(statusLabelKey) : detail.status}
           </span>
           <span className="text-xs text-neutral-500">{detail.market}</span>
         </div>

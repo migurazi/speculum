@@ -22,6 +22,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 
 import { fetchStockFinancials } from "@/lib/api/financials";
+import type { FinancialSeries } from "@/lib/api/financials";
 import { cn } from "@/lib/utils";
 
 interface FinancialSeriesTableProps {
@@ -66,7 +67,7 @@ export function FinancialSeriesTable({
 }: FinancialSeriesTableProps): JSX.Element {
   const t = useTranslations("stock");
 
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error } = useQuery<FinancialSeries, Error>({
     queryKey: ["financials", code, asOf] as const,
     queryFn: ({ signal }) => fetchStockFinancials(code, asOf, signal),
     staleTime: 5 * 60 * 1000, // 5분
@@ -88,7 +89,7 @@ export function FinancialSeriesTable({
     return (
       <div className={cn("rounded-lg border border-neutral-200 bg-white p-4", className)}>
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
-          {t("financials.loadError", { message: (error as Error).message })}
+          {t("financials.loadError", { message: error.message })}
         </div>
       </div>
     );

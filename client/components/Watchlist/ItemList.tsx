@@ -131,7 +131,7 @@ export function ItemList({
           </button>
         </div>
         {codeInput.length > 0 && !codeIsValid ? (
-          <p className="text-xs text-amber-700">
+          <p role="alert" className="text-xs text-amber-700">
             {t("codeInvalidMessage")}
           </p>
         ) : null}
@@ -161,7 +161,7 @@ export function ItemList({
                   {/* code_lineage_id 자체는 종목코드가 아님. 종목코드 / 이름
                       해석은 별도 fetch 필요 — M0 = id 만 표시. M1+ batch fetch. */}
                   <div className="font-mono text-xs text-neutral-500">
-                    lineage: {item.code_lineage_id}
+                    {t("lineageLabel")}: {item.code_lineage_id}
                   </div>
                   {editingId === item.id ? (
                     <div className="flex items-center gap-2">
