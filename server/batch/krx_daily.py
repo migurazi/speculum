@@ -38,6 +38,7 @@ cycle). 책임:
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -55,7 +56,11 @@ from app.adapters.base import (
 )
 from app.adapters.fdr_adapter import FdrAdapter
 from app.adapters.pykrx_adapter import PykrxAdapter
-from app.db.orm.batch_runs import BATCH_STATUS_SKIPPED, BATCH_STATUS_SUCCESS
+from app.db.orm.batch_runs import (
+    BATCH_STATUS_PARTIAL,
+    BATCH_STATUS_SKIPPED,
+    BATCH_STATUS_SUCCESS,
+)
 from app.repositories.batch_run_repository import (
     BatchRunRepository,
     SqlBatchRunRepository,
@@ -72,7 +77,10 @@ from app.services.conflict_detector import (
     ConflictDetector,
 )
 from app.services.krx_calendar import TradingCalendar
+from app.services.lineage import lineage_id_for_code
 from batch.alerts import BatchAlertHandler, NullAlertHandler
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["BatchSummary", "KrxDailyBatch"]
 
@@ -431,17 +439,29 @@ class KrxDailyBatch:
 
         조건: `batch_run_repo` 존재 AND not dry_run.
 
-        status 매핑: `skipped_reason` 이 있으면 (휴장일 / universe fetch 실패 →
-        데이터 미생산) "skipped", 정상 실행은 "success". T48b 의
-        collect_batch_versions 는 "success" 만 freeze 후보로 사용.
+        status 매핑 (우선순위 skipped > partial > success):
+            - `skipped_reason` 이 있으면 (휴장일 / universe fetch 실패 → 데이터
+              미생산) "skipped" — 데이터 미생산이라 부분실패보다 우선.
+            - skip 아니고 failure_count>0 이면 "partial" (일부 종목 실패, 성공분
+              commit).
+            - 그 외 "success".
+        T48b 의 collect_batch_versions 는 "success"+"partial" 을 freeze 후보로
+        사용 (partial 도 성공분의 실 데이터를 commit 했으므로 자격 동일 — 라벨만
+        운영 가시성 위해 분리, byte-동일). skipped 는 데이터 미생산이라 제외.
         """
         if self._batch_run_repo is None or summary.dry_run:
             return
-        status = (
-            BATCH_STATUS_SKIPPED
-            if summary.skipped_reason is not None
-            else BATCH_STATUS_SUCCESS
-        )
+        if summary.skipped_reason is not None:
+            status = BATCH_STATUS_SKIPPED
+        elif summary.failure_count > 0:
+            status = BATCH_STATUS_PARTIAL
+            logger.warning(
+                "KRX 배치 부분 실패 — batch_id=%s market=%s failure_count=%d "
+                "(status=partial 로 저장)",
+                summary.batch_id, summary.market, summary.failure_count,
+            )
+        else:
+            status = BATCH_STATUS_SUCCESS
         self._batch_run_repo.finalize(
             run_id=summary.batch_id,
             ended_at=summary.ended_at,
@@ -564,10 +584,12 @@ class KrxDailyBatch:
         stocks_master 가 lineage 단위 entity 이므로 본 cycle 에서는 code 별
         deterministic placeholder UUID. T13 Phase B 에서 실제 lineage 매핑.
         prices / market_cap 이 동일 lineage 해소를 공유 (work order Phase B 요구).
-        """
-        from uuid import NAMESPACE_OID, uuid5
 
-        return uuid5(NAMESPACE_OID, f"lineage|{code}")
+        공식은 `app.services.lineage.lineage_id_for_code` 공유 helper 로 위임 — 4 경로
+        (krx/survivorship/dart/fsc-dividend)의 동일 공식을 단일 출처화. 기존
+        호출부/테스트(`KrxDailyBatch._lineage_id_for_code`)는 그대로 보존.
+        """
+        return lineage_id_for_code(code)
 
     def _build_price_records(
         self,

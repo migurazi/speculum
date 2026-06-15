@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS
+from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL, BATCH_STATUS_SUCCESS
 from app.repositories.batch_run_repository import FakeBatchRunRepository
 from app.services.data_freshness import assess_data_freshness
 from app.services.krx_calendar import DEFAULT_CALENDAR
@@ -29,6 +29,16 @@ def _seed_success(repo: FakeBatchRunRepository, *, source: str, ended_at: dateti
     repo.finalize(
         run_id=rid, ended_at=ended_at, success_count=1,
         status=BATCH_STATUS_SUCCESS,
+    )
+
+
+def _seed_partial(repo: FakeBatchRunRepository, *, source: str, ended_at: datetime) -> None:
+    """source 의 부분 실패(partial) batch 1건 seed — 성공분 commit + 일부 실패."""
+    rid = uuid4()
+    repo.start(run_id=rid, market=None, source=source, started_at=ended_at)
+    repo.finalize(
+        run_id=rid, ended_at=ended_at, success_count=1,
+        status=BATCH_STATUS_PARTIAL,
     )
 
 
@@ -141,6 +151,64 @@ def test_absent_batches_are_stale() -> None:
     assert f.kosis.is_stale is True
     assert f.kosis.latest_batch_at is None
     assert f.kosis.elapsed_days is None
+    # batch 부재 = partial 도 아님 (False, 세 source 모두).
+    assert f.krx.latest_batch_partial is False
+    assert f.dart.latest_batch_partial is False
+    assert f.kosis.latest_batch_partial is False
+
+
+# =============================================================================
+# latest_batch_partial — partial 사실 노출 (M-2, 부분실패 가시성)
+# =============================================================================
+
+def test_partial_batch_exposed_as_partial() -> None:
+    """최신 batch 가 partial → latest_batch_partial=True (freshness 산정엔 영향 없음)."""
+    repo = FakeBatchRunRepository()
+    ended = datetime(2024, 5, 7, 2, tzinfo=UTC)
+    _seed_partial(repo, source="KRX", ended_at=ended)
+    _seed_partial(repo, source="DART", ended_at=ended)
+    _seed_partial(repo, source="KOSIS", ended_at=ended)
+    f = assess_data_freshness(
+        now=datetime(2024, 5, 8, 3, tzinfo=UTC),
+        batch_run_repo=repo,
+        calendar=DEFAULT_CALENDAR,
+    )
+    # partial 사실 노출 — True.
+    assert f.krx.latest_batch_partial is True
+    assert f.dart.latest_batch_partial is True
+    assert f.kosis.latest_batch_partial is True
+    # partial 도 freeze/freshness 자격 동일 — latest_batch_at/elapsed_days 정상 산정.
+    assert f.krx.latest_batch_at == ended
+    assert f.krx.elapsed_days == 1
+
+
+def test_success_batch_not_partial() -> None:
+    """최신 batch 가 완전 성공 → latest_batch_partial=False."""
+    repo = FakeBatchRunRepository()
+    _seed_success(repo, source="KRX", ended_at=datetime(2024, 5, 7, 2, tzinfo=UTC))
+    f = assess_data_freshness(
+        now=datetime(2024, 5, 8, 3, tzinfo=UTC),
+        batch_run_repo=repo,
+        calendar=DEFAULT_CALENDAR,
+    )
+    assert f.krx.latest_batch_partial is False
+
+
+def test_partial_over_older_success_exposes_partial() -> None:
+    """옛 success + 신 partial 공존 → latest_successful 가 신 partial 선택 →
+    latest_batch_partial=True (partial 이 max(started_at) 경쟁에서 이김).
+    """
+    repo = FakeBatchRunRepository()
+    _seed_success(repo, source="DART", ended_at=datetime(2024, 3, 1, 2, tzinfo=UTC))
+    _seed_partial(repo, source="DART", ended_at=datetime(2024, 5, 1, 2, tzinfo=UTC))
+    f = assess_data_freshness(
+        now=datetime(2024, 5, 10, 3, tzinfo=UTC),
+        batch_run_repo=repo,
+        calendar=DEFAULT_CALENDAR,
+    )
+    # 신 partial(05-01)이 옛 success(03-01)보다 최신 → 선택됨 → partial 노출.
+    assert f.dart.latest_batch_at == datetime(2024, 5, 1, 2, tzinfo=UTC)
+    assert f.dart.latest_batch_partial is True
 
 
 # =============================================================================

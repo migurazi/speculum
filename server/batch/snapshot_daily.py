@@ -59,7 +59,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
-from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS
+from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL, BATCH_STATUS_SUCCESS
 from app.models.source_citation import SourceCitation, SourceKind
 from app.repositories.batch_run_repository import (
     BatchRunRepository,
@@ -227,13 +227,16 @@ class SnapshotDailyBatch:
             (ecos/kosis/dart 계약 동일). batch_run finalize 는 try/finally 보장.
 
         후속 read-bypass consumer 의 전제 (oracle M3 — 완전성 추론 금지):
-            배치는 부분 실패(일부 종목만 저장 + batch_run='success', BATCH_STATUS_
-            PARTIAL 미지원) 가 가능하다. 따라서 후속 screen/market read-bypass 는
-            **batch_run.status='success' 로 "이 as_of 의 snapshot 이 완전하다"고
-            추론하면 안 된다**. 반드시 per-(code, factor) snapshot 존재를 확인하고
-            miss 시 live 평가로 fallback 해야 한다(또한 data_versions 불일치·
-            reproduce frozen cutoff 시에도 bypass 금지). 본 producer 는 freeze
-            fingerprint 만 충실히 저장하고, serve-vs-recompute 판정 책임은 consumer 에 있다.
+            배치는 부분 실패(일부 종목만 저장)가 가능하다. 부분 실패 시 status 는
+            'partial' (failure_count>0), 전부 성공 시 'success' 로 저장된다 —
+            그러나 'success' 라벨도 per-record 완전성을 보장하지 않는다(백필
+            in-flight 가능). 따라서 후속 screen/market read-bypass 는 **status 로
+            "이 as_of 의 snapshot 이 완전하다"고 추론하면 안 된다** (partial 도입
+            으로 이 불변은 오히려 강화됨). 반드시 per-(code, factor) snapshot
+            존재를 확인하고 miss 시 live 평가로 fallback 해야 한다(또한
+            data_versions 불일치·reproduce frozen cutoff 시에도 bypass 금지). 본
+            producer 는 freeze fingerprint 만 충실히 저장하고, serve-vs-recompute
+            판정 책임은 consumer 에 있다.
         """
         batch_id = uuid4()
         started_at = datetime.now(UTC)
@@ -528,27 +531,37 @@ class SnapshotDailyBatch:
         )
 
     def _finalize_batch_run(self, summary: SnapshotBatchSummary) -> None:
-        """배치 종료 시 batch_runs row finalize (UPDATE → status='success').
+        """배치 종료 시 batch_runs row finalize (UPDATE).
 
-        Note:
-            BATCH_STATUS_PARTIAL 미지원이므로 failure_count>0 도 'success' 로
-            저장하되 경고 로그로 부분 실패 가시화 (ecos/kosis/dart 동일 패턴).
-            batch_run_repo None(Fake) 이면 no-op.
+        failure_count>0 이면 status='partial', 아니면 'success'. partial 도
+        성공분의 snapshot row 를 commit 했으므로 freeze 후보·freshness 자격은
+        success 와 동일 (collect_batch_versions / latest_successful 가 둘 다
+        수용) — 라벨만 운영 가시성 위해 분리 (ecos/kosis/dart 동일 패턴).
+        batch_run_repo None(Fake) 이면 no-op.
+
+        Note (consumer 불변 — partial 도입으로 오히려 강화):
+            consumer 는 batch_run.status 로 데이터 완전성을 추론하면 안 된다.
+            partial 은 물론 success 라벨도 per-record 완전성을 보장하지 않으므로
+            (백필 in-flight 가능), consumer 는 항상 per-record 존재 확인 +
+            live fallback 해야 한다.
         """
         if self._batch_run_repo is None:
             return
+        status = (
+            BATCH_STATUS_PARTIAL if summary.failure_count > 0
+            else BATCH_STATUS_SUCCESS
+        )
         if summary.failure_count > 0:
             logger.warning(
                 "snapshot precompute 배치 부분 실패 — batch_id=%s "
-                "failure_count=%d failures=%s (status=success 로 저장, "
-                "BATCH_STATUS_PARTIAL 미지원)",
+                "failure_count=%d failures=%s (status=partial 로 저장)",
                 summary.batch_id, summary.failure_count, summary.failures,
             )
         self._batch_run_repo.finalize(
             run_id=summary.batch_id,
             ended_at=summary.ended_at,
             success_count=summary.success_count,
-            status=BATCH_STATUS_SUCCESS,
+            status=status,
         )
 
 

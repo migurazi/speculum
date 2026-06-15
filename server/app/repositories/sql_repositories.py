@@ -36,7 +36,10 @@ from collections.abc import Iterator, Sequence
 from datetime import date
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import Insert, and_, func, or_, select
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import ColumnElement
 
@@ -92,7 +95,7 @@ from app.repositories.pit_resolution import (
     resolve_latest_treasury,
 )
 from app.repositories.stocks_master_repository import StocksMasterRepository
-from app.services.pit_enforcer import PITEnforcer
+from app.services.pit_enforcer import PITDataCorruptionError, PITEnforcer
 
 __all__ = [
     "AppendOnlyViolationError",
@@ -181,6 +184,49 @@ def _chunked(items: Sequence[str], size: int) -> Iterator[list[str]]:
     """`items` 를 `size` 개씩 끊어 yield (마지막 청크는 잔여). 빈 입력이면 0회."""
     for i in range(0, len(items), size):
         yield list(items[i : i + size])
+
+
+def _orm_insert_values(orm: object) -> dict[str, object]:
+    """ORM instance → Core insert 의 values dict (전 컬럼 빠짐없이).
+
+    M2 — Core insert 는 ORM 변환 단계(`*_record_to_orm`)가 채우던 컬럼 default/
+    매핑을 자동 적용하지 않으므로, converter 가 산출한 ORM instance 의 **모든
+    매핑 컬럼**을 읽어 그대로 values 에 옮긴다. mapper 의 column attr key 를
+    순회 → converter 가 채운 값과 1:1. 컬럼 추가/변경 시 자동 추종(drift 차단).
+    """
+    mapper = sa_inspect(type(orm))
+    return {
+        col.key: getattr(orm, col.key) for col in mapper.column_attrs  # type: ignore[union-attr]
+    }
+
+
+def _insert_on_conflict_do_nothing(
+    session: Session,
+    orm_cls: type,
+    *,
+    index_elements: tuple[str, ...],
+) -> Insert:
+    """dialect-aware INSERT ... ON CONFLICT DO NOTHING 빌더.
+
+    M1 — PG/SQLite 는 동일 의미(`on_conflict_do_nothing(index_elements=...)`)를
+    제공하나 dialect 별 `insert` import 경로가 달라 bind dialect 로 분기한다.
+    conflict target 은 호출부가 PK 컬럼(`index_elements`)을 명시 — surrogate id
+    UNIQUE 가 아니라 PK 가 idempotency 의 충돌 축이다(first-wins). 그 외 dialect
+    (운영 PG / 테스트 SQLite 외)는 명시적 raise (silent 잘못된 동작 차단).
+    """
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        return pg_insert(orm_cls).on_conflict_do_nothing(
+            index_elements=list(index_elements),
+        )
+    if dialect == "sqlite":
+        return sqlite_insert(orm_cls).on_conflict_do_nothing(
+            index_elements=list(index_elements),
+        )
+    raise NotImplementedError(
+        f"ON CONFLICT DO NOTHING 미지원 dialect: {dialect!r} "
+        "(PostgreSQL / SQLite 만 지원)"
+    )
 
 
 # =============================================================================
@@ -321,15 +367,31 @@ class SqlPriceRepository(PriceRepository):
         return found
 
     def save_prices(self, records: Sequence[PriceRecord]) -> None:
-        """T18 합류 — bulk insert. 같은 (code, date) PK 중복 시 IntegrityError.
+        """T18 합류 — bulk insert (ON CONFLICT DO NOTHING idempotent, first-wins).
 
-        호출자 (T18 KRX 일배치) 가 dedup 책임:
-            - 일배치 1 회 = 1 영업일 fetch → 중복 가능성 낮음.
-            - retry 시 같은 batch 의 부분 성공 후 다시 insert 면 IntegrityError.
-              상위 layer 가 처리 (현재 사이클 미구현 — backlog).
+        같은 (code, effective_date) PK 가 이미 있으면 **조용히 skip** (기존 row
+        보존). KRX 일배치 재실행/retry 가 같은 영업일을 다시 적재해도 PK 충돌
+        IntegrityError 가 나지 않아 재실행 안전. §2.10 byte-동일: KRX 가격은 정정이
+        없어 같은 (code, date) = 같은 값이므로 first-wins(첫 row 보존)와
+        last-wins(덮어쓰기)의 관측 결과가 동일 — DO NOTHING 으로 첫 row 를 보존해도
+        값이 변하지 않는다 (FakePriceRepository.save_prices 와 대칭).
+
+        conflict target 은 PK (code, effective_date) 로 명시 — surrogate `id`
+        UNIQUE 가 아니라 PK 가 충돌 축이다 (id 는 매번 새 uuid4 라 같은 (code,date)
+        재insert 도 id 는 다름; id UNIQUE 위반은 별개로 여전히 raise).
         """
-        for r in records:
-            self._session.add(price_record_to_orm(r))
+        if not records:
+            return  # 빈 values insert 회피 (no-op).
+        # M1 — dialect-aware ON CONFLICT DO NOTHING. PG/SQLite 모두
+        # on_conflict_do_nothing(index_elements=PK) 지원하나 import 경로가 다르다.
+        # converter 가 채우던 전 컬럼을 빠짐없이 매핑하기 위해 record_to_orm 의
+        # __dict__ 산출값을 재사용 (M2 — 컬럼 drift 차단).
+        values = [_orm_insert_values(price_record_to_orm(r)) for r in records]
+        stmt = _insert_on_conflict_do_nothing(
+            self._session, PriceDailyORM,
+            index_elements=("code", "effective_date"),
+        ).values(values)
+        self._session.execute(stmt)
         self._session.flush()
 
 
@@ -453,14 +515,31 @@ class SqlMarketCapRepository(MarketCapRepository):
         return best
 
     def save_market_caps(self, records: Sequence[MarketCapRecord]) -> None:
-        """Phase B 합류 — bulk insert. 같은 (code, date) PK 중복 시 IntegrityError.
+        """Phase B 합류 — bulk insert (ON CONFLICT DO NOTHING idempotent, first-wins).
 
-        호출자 (KRX 일배치) 가 dedup 책임 — save_prices 와 동일 정책. 각 record
-        의 citation_id 가 source_citations 에 미리 save 돼 있어야 FK 만족
-        (배치 orchestrator 가 citation → market_cap 순서 강제).
+        같은 (code, effective_date) PK 가 이미 있으면 조용히 skip — KRX 일배치
+        재실행 안전 (SqlPriceRepository.save_prices 와 동일 정책). §2.10 byte-동일:
+        KRX 시가총액도 정정이 없어 같은 (code,date)=같은 값 → first-wins/last-wins
+        관측 동일 (FakeMarketCapRepository.save_market_caps 와 대칭).
+
+        conflict target = PK (code, effective_date). surrogate `id` UNIQUE 위반은
+        별개로 여전히 raise (다른 (code,date)에 같은 id 를 넣는 경우).
+
+        각 record 의 citation_id 가 source_citations 에 미리 save 돼 있어야 FK
+        만족 (배치 orchestrator 가 citation → market_cap 순서 강제).
         """
-        for r in records:
-            self._session.add(market_cap_record_to_orm(r))
+        if not records:
+            return  # 빈 values insert 회피 (no-op).
+        # M1/M2 — save_prices 와 동일: dialect-aware DO NOTHING + converter 산출값
+        # 전 컬럼 매핑.
+        values = [
+            _orm_insert_values(market_cap_record_to_orm(r)) for r in records
+        ]
+        stmt = _insert_on_conflict_do_nothing(
+            self._session, MarketCapDailyORM,
+            index_elements=("code", "effective_date"),
+        ).values(values)
+        self._session.execute(stmt)
         self._session.flush()
 
 
@@ -579,6 +658,60 @@ class SqlFinancialRepository(FinancialRepository):
                 rec = financial_orm_to_record(o)
                 grouped[rec.code].append(rec)
         return {c: tuple(grouped.get(c, ())) for c in dict.fromkeys(codes)}
+
+    def fetch_active_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+        ifrs_type: str,
+    ) -> tuple[str | None, tuple[FinancialRecord, ...]]:
+        """현재 active(superseded_by IS NULL) 인 (code, fiscal_period, ifrs_type)
+        그룹의 (active_rcept_no, active_rows) — DART 정정공시 배치 전용.
+
+        D1 = citation-join: financials 엔 rcept_no 컬럼이 없으므로 source_citations
+        (identifier = rcept_no) 와 JOIN 하여 active row 의 rcept_no 를 함께 읽는다.
+        migration 불필요(read-only SELECT). active = superseded_by IS NULL.
+
+        active 그룹 key 에 ifrs_type 을 포함하는 것이 **load-bearing**: CFS/OFS 는
+        별개 fact·별개 supersede chain 이므로, 같은 (code, fiscal_period) 에 CFS
+        active 와 OFS active 가 공존한다. ifrs_type 으로 좁혀야 cross-ifrs supersede
+        (절대 금지)를 구조적으로 차단한다.
+        """
+        # financials.citation_id → source_citations.id JOIN 으로 identifier(rcept_no)
+        # 동반 SELECT. superseded_by IS NULL 인 active head 만.
+        stmt = (
+            select(FinancialORM, SourceCitationORM.identifier)
+            .join(
+                SourceCitationORM,
+                FinancialORM.citation_id == SourceCitationORM.id,
+            )
+            .where(
+                FinancialORM.code == code,
+                FinancialORM.fiscal_period == fiscal_period,
+                FinancialORM.ifrs_type == ifrs_type,
+                FinancialORM.superseded_by.is_(None),
+            )
+        )
+        rows: list[FinancialRecord] = []
+        rcept_nos: set[str] = set()
+        for orm, identifier in self._session.execute(stmt).all():
+            rows.append(financial_orm_to_record(orm))
+            rcept_nos.add(identifier)
+        if not rows:
+            # 첫 공시 직전 — active 전무.
+            return (None, ())
+        # 단일 rcept_no assertion — DART 1회 fetch 는 N account row 가 모두 같은
+        # rcept_no 1개를 공유하므로 정상 active head 의 rcept_no 는 단일해야 한다.
+        # 여러 rcept_no = 중복 active head(수동 corruption / chain 누락) → fail-loud
+        # (no-UNIQUE 환경에서 silent 진행 차단, oracle Critical 방어선).
+        if len(rcept_nos) != 1:
+            raise PITDataCorruptionError(
+                f"multiple active rcept_no for code={code} "
+                f"fiscal_period={fiscal_period} ifrs_type={ifrs_type}: "
+                f"{sorted(rcept_nos)} — 중복 active head (corruption)"
+            )
+        (active_rcept_no,) = tuple(rcept_nos)
+        return (active_rcept_no, tuple(rows))
 
     def fetch_restatement_history(
         self,
@@ -758,6 +891,49 @@ class SqlTreasurySharesRepository(TreasurySharesRepository):
                 rec = treasury_shares_orm_to_record(o)
                 grouped[rec.code].append(rec)
         return {c: tuple(grouped.get(c, ())) for c in dict.fromkeys(codes)}
+
+    def fetch_active_treasury_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+    ) -> tuple[str | None, TreasurySharesRecord | None]:
+        """현재 active(superseded_by IS NULL) 인 (code, fiscal_period) 자사주의
+        (active_rcept_no, active_row) — DART 정정공시 배치 전용.
+
+        financials 의 fetch_active_disclosure 동형이나 **account 축이 없어** active
+        row 는 최대 1건. D1 = citation-join(identifier = rcept_no, migration 없음).
+        """
+        stmt = (
+            select(TreasurySharesORM, SourceCitationORM.identifier)
+            .join(
+                SourceCitationORM,
+                TreasurySharesORM.citation_id == SourceCitationORM.id,
+            )
+            .where(
+                TreasurySharesORM.code == code,
+                TreasurySharesORM.fiscal_period == fiscal_period,
+                TreasurySharesORM.superseded_by.is_(None),
+            )
+        )
+        rows: list[TreasurySharesRecord] = []
+        rcept_nos: set[str] = set()
+        for orm, identifier in self._session.execute(stmt).all():
+            rows.append(treasury_shares_orm_to_record(orm))
+            rcept_nos.add(identifier)
+        if not rows:
+            return (None, None)
+        # account 축이 없으므로 active row 는 1건이어야 한다 — 2건 이상이면 중복
+        # active head(corruption) → fail-loud (financials 다중 rcept_no assertion
+        # 과 동일 방어선). 같은 rcept_no 라도 row 가 2건이면 비정상이므로 row 수로
+        # 판정한다(자사주는 1 group=1 row).
+        if len(rows) != 1:
+            raise PITDataCorruptionError(
+                f"multiple active treasury rows for code={code} "
+                f"fiscal_period={fiscal_period}: rcept_no={sorted(rcept_nos)} "
+                f"({len(rows)} rows) — 중복 active head (corruption)"
+            )
+        (active_rcept_no,) = tuple(rcept_nos)
+        return (active_rcept_no, rows[0])
 
     def save_treasury_shares(
         self, records: Sequence[TreasurySharesRecord],

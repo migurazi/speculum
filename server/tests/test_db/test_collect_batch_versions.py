@@ -4,7 +4,9 @@
     1. 빈 batch_runs → krx/dart/dividend batch_id 모두 "" (미존재 = empty string).
     2. source 별 max(started_at) 성공 batch 선택 (KRX/DART/FSC).
     3. as_of 필터 — started_at::date > as_of 인 batch 제외.
-    4. status 필터 — 'running' / 'skipped' batch 제외 (success 만).
+    4. status 필터 — 'running' / 'skipped' batch 제외 (success + partial 수용).
+    4b. partial batch 도 freeze 후보 — §2.10 byte-동일 (partial 도입 전 'success'
+        저장과 자격 동일).
     5. collect_run_data_versions(session) → 17 키 (정책 14 + batch 3).
     6. collect_run_data_versions(None) → 정책-only 14 키 (Fake-mode 하위호환).
     7. collect_active_policy_versions() 무인자 순수 함수 불변 (14 키, batch 무관).
@@ -18,6 +20,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from app.db.orm.batch_runs import (
+    BATCH_STATUS_PARTIAL,
     BATCH_STATUS_RUNNING,
     BATCH_STATUS_SKIPPED,
     BATCH_STATUS_SUCCESS,
@@ -145,6 +148,50 @@ def test_status_filter_excludes_non_success(db_session: Session) -> None:
 
     result = collect_batch_versions(date(2024, 5, 30), db_session)
     assert result["krx_batch_id"] == str(success)
+
+
+# =============================================================================
+# 4b. §2.10 byte-동일 — partial 도 freeze 후보, skipped/running 은 제외
+# =============================================================================
+
+def test_partial_batch_is_freeze_candidate(db_session: Session) -> None:
+    """partial 배치도 collect_batch_versions 가 freeze 후보로 집어야 함.
+
+    §2.10 핵심 — partial 도입 전엔 이 배치가 'success' 로 저장됐고 그때도 후보
+    였으므로, partial 라벨로 바뀌어도 freeze 자격이 동일해야 data_versions 의
+    batch_id 가 동일 배치를 가리킨다 (byte-동일). 성공분의 실 데이터를 commit
+    했으므로 자격 보존.
+    """
+    partial = _insert_batch(
+        db_session, source="DART", started=_utc(2024, 5, 7),
+        status=BATCH_STATUS_PARTIAL,
+    )
+    result = collect_batch_versions(date(2024, 5, 7), db_session)
+    assert result["dart_batch_id"] == str(partial)
+
+
+def test_partial_chosen_over_older_success(db_session: Session) -> None:
+    """더 최신 partial 이 옛 success 보다 우선 — 자격 동등 + max(started_at)."""
+    _insert_batch(
+        db_session, source="DART", started=_utc(2024, 5, 1),
+        status=BATCH_STATUS_SUCCESS,
+    )
+    newer_partial = _insert_batch(
+        db_session, source="DART", started=_utc(2024, 5, 7),
+        status=BATCH_STATUS_PARTIAL,
+    )
+    result = collect_batch_versions(date(2024, 5, 7), db_session)
+    assert result["dart_batch_id"] == str(newer_partial)
+
+
+def test_skipped_still_excluded_after_partial_intro(db_session: Session) -> None:
+    """skipped 는 데이터 미생산이라 여전히 freeze 후보에서 제외 (partial 과 구분)."""
+    _insert_batch(
+        db_session, source="KRX", started=_utc(2024, 5, 9),
+        status=BATCH_STATUS_SKIPPED,
+    )
+    result = collect_batch_versions(date(2024, 5, 30), db_session)
+    assert result["krx_batch_id"] == ""
 
 
 # =============================================================================

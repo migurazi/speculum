@@ -460,6 +460,20 @@ class CachingFinancialRepository:
             code, fiscal_period=fiscal_period, as_of=as_of,
         )
 
+    def fetch_active_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+        ifrs_type: str,
+    ) -> tuple[str | None, tuple[FinancialRecord, ...]]:
+        """DART 정정공시 배치 전용 active head 조회는 캐싱 무관 — inner 위임.
+
+        본 데코레이터는 read-path(screen/backtest 평가) 전용이라 운영에서 호출되지
+        않으나, drop-in 일관성을 위해 Protocol 의 모든 메서드를 inner 위임한다
+        (fetch_restatement_history / update_superseded_by 와 동일 근거).
+        """
+        return self._inner.fetch_active_disclosure(code, fiscal_period, ifrs_type)
+
     def save_financials(self, records: Sequence[FinancialRecord]) -> None:
         """write 경로는 캐싱 무관 — inner 위임(Protocol 완전성)."""
         self._inner.save_financials(records)
@@ -542,6 +556,15 @@ class CachingTreasurySharesRepository:
             return None
         self._enforcer.assert_no_lookahead((record,), as_of)
         return record
+
+    def fetch_active_treasury_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+    ) -> tuple[str | None, TreasurySharesRecord | None]:
+        """DART 정정공시 배치 전용 active head 조회는 캐싱 무관 — inner 위임
+        (CachingFinancialRepository.fetch_active_disclosure 와 동일 근거)."""
+        return self._inner.fetch_active_treasury_disclosure(code, fiscal_period)
 
     def save_treasury_shares(
         self, records: Sequence[TreasurySharesRecord],

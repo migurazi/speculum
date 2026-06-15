@@ -70,13 +70,16 @@ def test_disclosure_deadline_matrix() -> None:
     assert _disclosure_deadline(2023, 4) == date(2024, 3, 30)
 
 
-def test_disclosure_deadline_matches_dart_adapter() -> None:
-    """scheduler 와 dart_adapter 의 신고기한 산식 일치 — 중복 구현 불일치 회귀 방지 (M-4)."""
+def test_disclosure_deadline_is_dart_adapter_reexport() -> None:
+    """scheduler._disclosure_deadline 이 dart_adapter 의 것을 re-export (DRY).
+
+    과거엔 scheduler 에 중복 정의가 있어 두 산식의 값 일치를 검증했으나, 이제
+    중복을 제거하고 dart_adapter 의 단일 정의를 import 한다 → **같은 객체**
+    (`is` 동일성)임을 확인. 산식 drift 자체가 구조적으로 불가능 (M-4 해소).
+    """
     from app.adapters.dart_adapter import _disclosure_deadline as dart_dd
 
-    for year in (2022, 2023, 2024, 2025):
-        for quarter in (1, 2, 3, 4):
-            assert _disclosure_deadline(year, quarter) == dart_dd(year, quarter)
+    assert _disclosure_deadline is dart_dd
 
 
 # =============================================================================

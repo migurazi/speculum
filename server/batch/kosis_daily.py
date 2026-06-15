@@ -59,7 +59,7 @@ from sqlalchemy.orm import Session
 from app.adapters.base import AdapterError, FetchResult, MacroIndicatorRow
 from app.adapters.kosis_adapter import KosisAdapter
 from app.db.converters import macro_indicator_record_to_orm
-from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS
+from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL, BATCH_STATUS_SUCCESS
 from app.repositories.batch_run_repository import (
     BatchRunRepository,
     SqlBatchRunRepository,
@@ -318,26 +318,31 @@ class KosisDailyBatch:
         )
 
     def _finalize_batch_run(self, summary: KosisBatchSummary) -> None:
-        """배치 종료 시 batch_runs row finalize (UPDATE → status='success').
+        """배치 종료 시 batch_runs row finalize (UPDATE).
 
-        Note:
-            BATCH_STATUS_PARTIAL 이 미지원이므로 failure_count>0 도 'success'
-            로 저장하되 경고 로그로 부분 실패를 가시화 (dart_daily 동일 패턴).
-            KOSIS 는 지표 3개라 1개 실패 = 의미있는 부분실패 — 운영 alerting 필요.
+        failure_count>0 이면 status='partial', 아니면 'success'. KOSIS 는 지표
+        3개라 1개 실패 = 의미있는 부분실패 — 운영 alerting 필요. partial 도
+        성공분의 실 데이터를 commit 했으므로 freeze 후보·freshness 자격은
+        success 와 동일 (collect_batch_versions / latest_successful 가 둘 다
+        수용) — 라벨만 운영 가시성 위해 분리 (dart_daily 동일 패턴).
         """
         if self._batch_run_repo is None:
             return
+        status = (
+            BATCH_STATUS_PARTIAL if summary.failure_count > 0
+            else BATCH_STATUS_SUCCESS
+        )
         if summary.failure_count > 0:
             logger.warning(
                 "KOSIS 배치 부분 실패 — batch_id=%s failure_count=%d failures=%s "
-                "(status=success 로 저장, BATCH_STATUS_PARTIAL 미지원)",
+                "(status=partial 로 저장)",
                 summary.batch_id, summary.failure_count, summary.failures,
             )
         self._batch_run_repo.finalize(
             run_id=summary.batch_id,
             ended_at=summary.ended_at,
             success_count=summary.success_count,
-            status=BATCH_STATUS_SUCCESS,
+            status=status,
         )
 
     # =========================================================================

@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.orm.batch_runs import (
+    BATCH_STATUS_PARTIAL,
     BATCH_STATUS_RUNNING,
     BATCH_STATUS_SUCCESS,
     BatchRunORM,
@@ -142,8 +143,9 @@ class BatchRunRecord:
         started_at: batch 시작 시각 (UTC tz-aware).
         ended_at: batch 종료 시각 (UTC tz-aware). finalize 전엔 started_at 동일값.
         success_count: 성공 처리 종목/회사 수. finalize 전엔 0.
-        status: "running" | "success" | "skipped" — BatchRunORM 의 BATCH_STATUS_*.
-            T48b collect_batch_versions 는 "success" 만 freeze 후보로 사용.
+        status: "running" | "success" | "partial" | "skipped" — BatchRunORM 의
+            BATCH_STATUS_*. T48b collect_batch_versions 는 "success" + "partial"
+            을 freeze 후보로 사용 (partial = 성공분 commit, 자격 동일 — byte-동일).
     """
 
     id: UUID
@@ -202,13 +204,22 @@ class BatchRunRepository(Protocol):
         ...
 
     def latest_successful(self, source: str) -> BatchRunRecord | None:
-        """그 `source` 의 status='success' batch 중 `started_at` 최신 1건 (M5 #4a).
+        """그 `source` 의 status ∈ {success, partial} batch 중 `started_at` 최신 1건.
 
-        `collect_batch_versions` (`snapshot_versions.py:149`) 의 source 별 max
+        "successful" = committed data 를 생산한 배치 = success + partial. partial
+        (부분 실패) 배치도 성공분의 실 데이터(citation/row)를 commit 했으므로
+        데이터 기준일(freshness) source 자격이 success 와 동일하다. partial 도입
+        전엔 이 배치들이 'success' 로 저장됐고 그때도 본 메서드가 집었으므로 본
+        변경은 **byte-동일** (자격 불변, status 라벨만 운영 가시성 위해 분리).
+        skipped/running 은 데이터 미생산·미확정이라 제외 (M5 #4a). 메서드명은
+        파급 회피 위해 latest_successful 유지.
+
+        `collect_batch_versions` (`snapshot_versions.py`) 의 source 별 max
         started_at 선택 패턴을 차용하되, **as_of 필터 없이** 그 source 전체에서
-        가장 최근 성공 batch 를 반환 — 데이터 신선도(stale) 진단의 "데이터 기준일"
-        source. tie (동일 started_at, 재시도 batch) 는 id 내림차순으로 결정성 확보
-        (`collect_batch_versions` 의 `ORDER BY started_at DESC, id DESC` 와 동일).
+        가장 최근 성공/부분성공 batch 를 반환 — 데이터 신선도(stale) 진단의
+        "데이터 기준일" source. tie (동일 started_at, 재시도 batch) 는 id
+        내림차순으로 결정성 확보 (`collect_batch_versions` 의
+        `ORDER BY started_at DESC, id DESC` 와 동일).
 
         후보가 없으면 None (그 source 의 성공 batch 가 한 번도 없음 = 데이터 없음).
         본 메서드는 사실(최신 성공 batch 의 시각)만 반환 — stale 판정·해석은 상위
@@ -284,11 +295,14 @@ class FakeBatchRunRepository(BatchRunRepository):
         ))
 
     def latest_successful(self, source: str) -> BatchRunRecord | None:
-        # source 일치 + status='success' 후보 중 max(started_at), tie 는 id
-        # (SQL 의 ORDER BY started_at DESC, id DESC LIMIT 1 과 동일 결정성).
+        # source 일치 + status ∈ {success, partial} 후보 중 max(started_at),
+        # tie 는 id (SQL 의 ORDER BY started_at DESC, id DESC LIMIT 1 동일 결정성).
+        # partial 도 성공분 데이터를 commit 했으므로 자격 동일 — partial 도입 전
+        # 'success' 저장과 byte-동일 (라벨만 분리).
         candidates = [
             r for r in self._by_id.values()
-            if r.source == source and r.status == BATCH_STATUS_SUCCESS
+            if r.source == source
+            and r.status in (BATCH_STATUS_SUCCESS, BATCH_STATUS_PARTIAL)
         ]
         if not candidates:
             return None
@@ -370,14 +384,18 @@ class SqlBatchRunRepository(BatchRunRepository):
         return self.fetch_by_id(batch_id)
 
     def latest_successful(self, source: str) -> BatchRunRecord | None:
-        # collect_batch_versions (snapshot_versions.py:189) 의 정렬 패턴 차용 —
+        # collect_batch_versions (snapshot_versions.py) 의 정렬 패턴 차용 —
         # as_of 필터 없이 그 source 전체에서 최신 성공 batch 1건. started_at tie
-        # 는 id 내림차순 (재시도 batch 결정성).
+        # 는 id 내림차순 (재시도 batch 결정성). success + partial 모두 수용 —
+        # partial 도 성공분 데이터를 commit 했으므로 자격 동일 (partial 도입 전
+        # 'success' 저장과 byte-동일, 라벨만 분리).
         stmt = (
             select(BatchRunORM)
             .where(
                 BatchRunORM.source == source,
-                BatchRunORM.status == BATCH_STATUS_SUCCESS,
+                BatchRunORM.status.in_(
+                    (BATCH_STATUS_SUCCESS, BATCH_STATUS_PARTIAL)
+                ),
             )
             .order_by(BatchRunORM.started_at.desc(), BatchRunORM.id.desc())
             .limit(1)

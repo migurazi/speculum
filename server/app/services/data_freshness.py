@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
+from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL
 from app.services.krx_calendar import CalendarRangeError
 
 if TYPE_CHECKING:
@@ -67,7 +68,7 @@ class SourceFreshness:
     """한 source 의 신선도 사실 — 판정·해석 문구 없음 (§2.1 Fidelity).
 
     Attributes:
-        source: "KRX" | "DART".
+        source: "KRX" | "DART" | "KOSIS".
         latest_batch_at: 최신 성공 batch 의 종료 시각(ended_at, UTC tz-aware).
             그 source 의 성공 batch 가 한 번도 없으면 None (데이터 없음).
         is_stale: stale 여부 (사실 — 임계 초과 경과 또는 데이터 없음).
@@ -75,12 +76,21 @@ class SourceFreshness:
         elapsed_days: 최신 성공 batch 종료일부터 `now` 까지 경과 calendar days.
             batch 부재면 None (경과 산정 대상 없음). KRX 도 표시는 calendar days
             (사실) — stale 판정만 영업일 기준 (영업일 경과 ≠ calendar 경과).
+        latest_batch_partial: 신선도 기준이 된 최신 batch 가 부분 실패(status=
+            'partial' — 일부 종목/회사 fetch 실패하고도 성공분은 commit)였는지의
+            사실. batch 부재 또는 완전 성공(status='success')이면 False. 해석·판정
+            문구 없음 (§2.1 Fidelity / §2.2 No Advice) — "partial 이라 부정확/위험"
+            같은 평가 어휘는 client layer 도 쓰지 않는다. BATCH_STATUS_PARTIAL 도
+            freeze 후보·freshness 소스 자격을 가지므로(latest_successful 가 success+
+            partial 수용) 이 필드가 True 여도 latest_batch_at/elapsed_days 산정에는
+            영향 없다 — 단지 "그 batch 가 부분 실패였다"는 부가 사실의 노출.
     """
 
     source: str
     latest_batch_at: datetime | None
     is_stale: bool
     elapsed_days: int | None
+    latest_batch_partial: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,11 +154,13 @@ def _assess_krx(
     record = batch_run_repo.latest_successful(_SOURCE_KRX)
     if record is None:
         # 데이터 없음 — stale (look-ahead 와 무관, 단순 부재 사실).
+        # batch 부재 = partial 도 아님 (False).
         return SourceFreshness(
             source=_SOURCE_KRX,
             latest_batch_at=None,
             is_stale=True,
             elapsed_days=None,
+            latest_batch_partial=False,
         )
 
     batch_date = record.ended_at.date()
@@ -180,6 +192,7 @@ def _assess_krx(
         latest_batch_at=record.ended_at,
         is_stale=is_stale,
         elapsed_days=elapsed_days,
+        latest_batch_partial=record.status == BATCH_STATUS_PARTIAL,
     )
 
 
@@ -197,11 +210,13 @@ def _assess_dart(
     """
     record = batch_run_repo.latest_successful(_SOURCE_DART)
     if record is None:
+        # batch 부재 = 데이터 없음 = stale, partial 도 아님 (False) — _assess_krx 동일.
         return SourceFreshness(
             source=_SOURCE_DART,
             latest_batch_at=None,
             is_stale=True,
             elapsed_days=None,
+            latest_batch_partial=False,
         )
 
     elapsed_days = (now.date() - record.ended_at.date()).days
@@ -211,6 +226,7 @@ def _assess_dart(
         latest_batch_at=record.ended_at,
         is_stale=is_stale,
         elapsed_days=elapsed_days,
+        latest_batch_partial=record.status == BATCH_STATUS_PARTIAL,
     )
 
 
@@ -226,11 +242,13 @@ def _assess_kosis(
     """
     record = batch_run_repo.latest_successful(_SOURCE_KOSIS)
     if record is None:
+        # batch 부재 = 데이터 없음 = stale, partial 도 아님 (False) — _assess_krx 동일.
         return SourceFreshness(
             source=_SOURCE_KOSIS,
             latest_batch_at=None,
             is_stale=True,
             elapsed_days=None,
+            latest_batch_partial=False,
         )
 
     elapsed_days = (now.date() - record.ended_at.date()).days
@@ -240,4 +258,5 @@ def _assess_kosis(
         latest_batch_at=record.ended_at,
         is_stale=is_stale,
         elapsed_days=elapsed_days,
+        latest_batch_partial=record.status == BATCH_STATUS_PARTIAL,
     )

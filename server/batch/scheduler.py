@@ -45,7 +45,10 @@ from typing import Final
 from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.adapters.dart_adapter import DartAdapter
+from app.adapters.dart_adapter import (
+    DartAdapter,
+    _disclosure_deadline,
+)
 from app.adapters.ecos_adapter import EcosAdapter
 from app.adapters.fdr_adapter import FdrAdapter
 from app.adapters.kosis_adapter import KosisAdapter
@@ -94,13 +97,6 @@ VALID_JOBS: Final[tuple[str, ...]] = (
     "all", "corp-code", "krx", "ecos", "kosis", "dart", "snapshot",
 )
 
-# 공시 신고기한 기준 분기말 + lag (일). dart_adapter._disclosure_deadline 매트릭스
-# 와 동일 — 본 모듈은 "현재 공시 완료가 보장된 가장 최근 분기" 산정용.
-_QUARTER_END: Final[dict[int, tuple[int, int]]] = {
-    1: (3, 31), 2: (6, 30), 3: (9, 30), 4: (12, 31),
-}
-
-
 # =============================================================================
 # fiscal 추정 helper
 # =============================================================================
@@ -133,18 +129,10 @@ def recent_completed_quarter(today: date) -> tuple[int, int]:
     return today.year - 1, 4  # pragma: no cover
 
 
-def _disclosure_deadline(year: int, quarter: int) -> date:
-    """분기 신고기한 — dart_adapter._disclosure_deadline 매트릭스 동일 (보수값).
-
-    Q1~Q3 분기보고서 = 분기말 + 45일, Q4 사업보고서 = 사업연도말 + 90일.
-    timedelta 캘린더 산술 (윤년 자동 처리).
-    """
-    from datetime import timedelta
-
-    month, day = _QUARTER_END[quarter]
-    quarter_end = date(year, month, day)
-    lag_days = 90 if quarter == 4 else 45
-    return quarter_end + timedelta(days=lag_days)
+# `_disclosure_deadline` 은 `app.adapters.dart_adapter` 의 단일 정의를 re-import
+# (위 import). 과거엔 scheduler 에 중복 정의돼 있었고 test_scheduler 가 두 산식의
+# 일치를 역설적으로 검증했으나, 이제 같은 객체라 DRY 위반·drift 위험 0
+# (ADR-0012 D1 신고기한 매트릭스의 단일 출처 = dart_adapter).
 
 
 # =============================================================================

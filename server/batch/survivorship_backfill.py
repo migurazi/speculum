@@ -40,18 +40,19 @@ ADR-0003 D6(throttle), ADR-0002 D3(citation persistence).
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
 from app.adapters.base import AdapterError, OHLCVRow
 from app.adapters.pykrx_adapter import PykrxAdapter
-from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS
+from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL, BATCH_STATUS_SUCCESS
 from app.repositories.batch_run_repository import (
     BatchRunRepository,
     SqlBatchRunRepository,
@@ -63,7 +64,10 @@ from app.repositories.pit_protocols import (
     StockMasterRecord,
 )
 from app.repositories.stocks_master_repository import StocksMasterRepository
+from app.services.lineage import lineage_id_for_code
 from batch.alerts import BatchAlertHandler, NullAlertHandler
+
+logger = logging.getLogger(__name__)
 
 __all__ = ["BackfillSummary", "SurvivorshipBackfillBatch"]
 
@@ -365,8 +369,11 @@ class SurvivorshipBackfillBatch:
         krx_daily.KrxDailyBatch._lineage_id_for_code 와 **동일 규약** — backfill row 와
         정규 일배치 row 가 같은 lineage 해소를 공유해야 prices 테이블이 정합(T13 Phase B
         실제 lineage 매핑 전까지 placeholder).
+
+        공식은 `app.services.lineage.lineage_id_for_code` 공유 helper 로 위임(단일 출처).
+        기존 호출부/테스트는 그대로 보존.
         """
-        return uuid5(NAMESPACE_OID, f"lineage|{code}")
+        return lineage_id_for_code(code)
 
     def _build_price_records(
         self,
@@ -426,14 +433,28 @@ class SurvivorshipBackfillBatch:
     def _finalize_batch_run(self, summary: BackfillSummary) -> None:
         """배치 종료 시 batch_runs finalize(UPDATE). dry_run/Fake 모드 skip.
 
-        backfill 은 휴장일/universe-fetch-실패 같은 skip 사유가 없으므로 항상 success
-        (universe 가 비어도 정상 실행). success_count = 처리 종목 수.
+        backfill 은 휴장일/universe-fetch-실패 같은 skip 사유가 없으나 종목별
+        실패는 가능 → failure_count>0 이면 status='partial', 아니면 'success'
+        (universe 가 비어도 정상 실행). success_count = 처리 종목 수. partial 도
+        성공분의 실 데이터를 commit 했으므로 freeze 후보·freshness 자격은 success
+        와 동일 (collect_batch_versions / latest_successful 가 둘 다 수용) — 라벨만
+        운영 가시성 위해 분리.
         """
         if self._batch_run_repo is None or summary.dry_run:
             return
+        status = (
+            BATCH_STATUS_PARTIAL if summary.failure_count > 0
+            else BATCH_STATUS_SUCCESS
+        )
+        if summary.failure_count > 0:
+            logger.warning(
+                "survivorship backfill 배치 부분 실패 — batch_id=%s "
+                "failure_count=%d (status=partial 로 저장)",
+                summary.batch_id, summary.failure_count,
+            )
         self._batch_run_repo.finalize(
             run_id=summary.batch_id,
             ended_at=summary.ended_at,
             success_count=summary.success_count,
-            status=BATCH_STATUS_SUCCESS,
+            status=status,
         )

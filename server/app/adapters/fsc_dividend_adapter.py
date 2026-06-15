@@ -69,7 +69,7 @@ import os
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Final, Protocol, runtime_checkable
-from uuid import NAMESPACE_OID, UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -82,6 +82,7 @@ from app.adapters.base import (
 from app.models.source_citation import SourceCitation, SourceKind
 from app.repositories.pit_protocols import CorporateActionRecord
 from app.services.krx_calendar import CalendarRangeError
+from app.services.lineage import lineage_id_for_code
 
 __all__ = [
     "DATA_GAP_PREFIX",
@@ -446,7 +447,7 @@ class FscDividendAdapter(DataSourceAdapter):
         skip + warning. effective_date = dvdnBasDt 직전 거래일 (배당락),
         announced_date = effective_date (ADR-0035 D6).
         """
-        lineage_id = uuid5(NAMESPACE_OID, f"lineage|{code}")
+        lineage_id = lineage_id_for_code(code)
         pairs: list[tuple[CorporateActionRecord, SourceCitation]] = []
         warnings: list[str] = []
         # H1 — 캘린더 verified 범위 밖으로 드롭한 배당 수. >0 이면 요약 1줄을

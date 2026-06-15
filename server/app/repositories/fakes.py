@@ -45,7 +45,7 @@ from app.repositories.pit_resolution import (
     resolve_latest_treasury,
 )
 from app.repositories.sql_repositories import AppendOnlyViolationError
-from app.services.pit_enforcer import PITEnforcer
+from app.services.pit_enforcer import PITDataCorruptionError, PITEnforcer
 
 __all__ = [
     "FakeCorporateActionRepository",
@@ -195,18 +195,21 @@ class FakePriceRepository(PriceRepository):
         }
 
     def save_prices(self, records: Sequence[PriceRecord]) -> None:
-        """T18 합류 — bulk insert. 같은 (code, date) overwrite 의미 (Fake 정책).
+        """T18 합류 — bulk insert (Sql ON CONFLICT DO NOTHING 대칭 first-wins).
 
-        SQL 구현체는 UNIQUE constraint 로 중복 raise — 호출자가 dedup 해야 함.
-        Fake 는 단순화: 같은 (code, effective_date) 가 있으면 새 record 로 교체.
+        SqlPriceRepository.save_prices 가 PK (code, effective_date) ON CONFLICT
+        DO NOTHING 로 first-wins(기존 row 보존) 이므로, Fake 도 같은 (code,
+        effective_date) 가 이미 있으면 **skip(기존 보존)** 한다. KRX 가격은 정정이
+        없어 같은 (code,date)=같은 값 → first-wins/last-wins 관측 동일(§2.10
+        byte-동일), Sql 과 Fake 의 idempotency semantic 을 일치시킨다.
         """
         for new_record in records:
             bucket = self._by_code[new_record.code]
-            # 같은 (code, effective_date) 의 기존 record 제거 후 새로 삽입.
-            bucket[:] = [
-                r for r in bucket
-                if r.effective_date != new_record.effective_date
-            ]
+            # first-wins — 같은 (code, effective_date) 가 이미 있으면 보존하고 skip.
+            if any(
+                r.effective_date == new_record.effective_date for r in bucket
+            ):
+                continue
             bucket.append(new_record)
         # 영향받은 code 만 재정렬.
         for new_record in records:
@@ -288,18 +291,21 @@ class FakeMarketCapRepository(MarketCapRepository):
         return result
 
     def save_market_caps(self, records: Sequence[MarketCapRecord]) -> None:
-        """Phase B 합류 — bulk insert. 같은 (code, date) overwrite (Fake 정책).
+        """Phase B 합류 — bulk insert (Sql ON CONFLICT DO NOTHING 대칭 first-wins).
 
-        SQL 구현체는 UNIQUE constraint 로 중복 raise — 호출자가 dedup 해야 함.
-        Fake 는 단순화: 같은 (code, effective_date) 가 있으면 새 record 로 교체
-        (FakePriceRepository.save_prices 와 동일).
+        SqlMarketCapRepository.save_market_caps 가 PK (code, effective_date)
+        ON CONFLICT DO NOTHING 로 first-wins 이므로, Fake 도 같은 (code,
+        effective_date) 가 이미 있으면 skip(기존 보존). KRX 시가총액도 정정 없어
+        first-wins/last-wins 관측 동일(§2.10 byte-동일, FakePriceRepository.
+        save_prices 와 동일 정책).
         """
         for new_record in records:
             bucket = self._by_code[new_record.code]
-            bucket[:] = [
-                r for r in bucket
-                if r.effective_date != new_record.effective_date
-            ]
+            # first-wins — 기존 (code, effective_date) 보존, skip.
+            if any(
+                r.effective_date == new_record.effective_date for r in bucket
+            ):
+                continue
             bucket.append(new_record)
         for new_record in records:
             self._by_code[new_record.code].sort(
@@ -319,6 +325,7 @@ class FakeFinancialRepository(FinancialRepository):
         records: Sequence[FinancialRecord],
         *,
         citation_runs: Mapping[UUID, CitationBatch] | None = None,
+        citation_identifiers: Mapping[UUID, str] | None = None,
     ) -> None:
         self._by_code: dict[str, list[FinancialRecord]] = defaultdict(list)
         for r in records:
@@ -326,6 +333,12 @@ class FakeFinancialRepository(FinancialRepository):
         self._enforcer = PITEnforcer()
         # M1 T48c — citation_id → 생산 batch 평탄화 map (cutoff 필터 시만).
         self._citation_runs = citation_runs
+        # DART 정정공시 배치 — citation_id → identifier(rcept_no) map. SQL 의
+        # source_citations JOIN 등가물(Fake 는 citation 테이블이 없으므로 주입).
+        # fetch_active_disclosure 가 active row 의 rcept_no 를 도출하는 출처.
+        self._citation_identifiers: dict[UUID, str] = dict(
+            citation_identifiers or {}
+        )
 
     def save_financials(self, records: Sequence[FinancialRecord]) -> None:
         """T19 DART 일배치 합류 — bulk insert. 같은 id overwrite (Fake 단순화).
@@ -429,6 +442,87 @@ class FakeFinancialRepository(FinancialRepository):
             result[code] = tuple(candidates)
         return result
 
+    def fetch_active_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+        ifrs_type: str,
+    ) -> tuple[str | None, tuple[FinancialRecord, ...]]:
+        """현재 active(superseded_by IS NULL) 인 (code, fiscal_period, ifrs_type)
+        그룹의 (active_rcept_no, active_rows) — SqlFinancialRepository 등가물.
+
+        SQL 의 source_citations JOIN 을 Fake 는 _citation_identifiers map 으로 대체.
+        active = superseded_by is None. CFS/OFS 독립을 위해 ifrs_type 필터 포함.
+        """
+        rows = [
+            r
+            for r in self._by_code.get(code, [])
+            if r.fiscal_period == fiscal_period
+            and r.ifrs_type == ifrs_type
+            and r.superseded_by is None
+        ]
+        if not rows:
+            return (None, ())
+        # 빈 문자열 fallback 은 SQL inner-join 의 row-탈락과 의미가 다르다:
+        # production 은 citation 을 항상 함께 주입하므로 SQL 은 citation 미존재
+        # row 를 JOIN 에서 떨어뜨리지만, Fake 는 _citation_identifiers 에 없는
+        # citation_id 를 ""(빈 식별자)로 본다 — 테스트 헬퍼 편의 경로(직접
+        # seed 시 citation 등록 생략 허용)이며 정상 운영에서는 도달하지 않는다.
+        rcept_nos = {
+            self._citation_identifiers.get(r.citation_id, "") for r in rows
+        }
+        # 단일 rcept_no assertion — Sql 과 동일 corruption 방어선.
+        if len(rcept_nos) != 1:
+            raise PITDataCorruptionError(
+                f"multiple active rcept_no for code={code} "
+                f"fiscal_period={fiscal_period} ifrs_type={ifrs_type}: "
+                f"{sorted(rcept_nos)} — 중복 active head (corruption)"
+            )
+        (active_rcept_no,) = tuple(rcept_nos)
+        return (active_rcept_no, tuple(rows))
+
+    def update_superseded_by(
+        self, record_id: UUID, successor_id: UUID,
+    ) -> None:
+        """정정공시 chain — 옛 active row 의 superseded_by 를 NULL→successor set.
+
+        SqlFinancialRepository.update_superseded_by 와 동일 불변식 (대상/successor
+        부재 또는 이미 superseded 면 AppendOnlyViolationError). frozen dataclass 라
+        superseded_by 만 바꾼 새 record 로 교체.
+        """
+        target: FinancialRecord | None = None
+        target_code: str | None = None
+        target_index: int | None = None
+        for c, bucket in self._by_code.items():
+            for i, e in enumerate(bucket):
+                if e.id == record_id:
+                    target, target_code, target_index = e, c, i
+                    break
+            if target is not None:
+                break
+        if target is None:
+            raise AppendOnlyViolationError(
+                f"financials row {record_id} 부재 — update_superseded_by 불가"
+            )
+        if target.superseded_by is not None:
+            raise AppendOnlyViolationError(
+                f"financials row {record_id} 는 이미 superseded "
+                f"(superseded_by={target.superseded_by}) — chain 1 회성 위반"
+            )
+        successor_exists = any(
+            e.id == successor_id
+            for bucket in self._by_code.values()
+            for e in bucket
+        )
+        if not successor_exists:
+            raise AppendOnlyViolationError(
+                f"successor financials row {successor_id} 부재 — self-FK 무결성 위반"
+            )
+        assert target_code is not None and target_index is not None
+        self._by_code[target_code][target_index] = replace(
+            target, superseded_by=successor_id,
+        )
+
 
 class FakeTreasurySharesRepository(TreasurySharesRepository):
     """In-memory 자사주 store + supersede chain 해소 (financials 패턴).
@@ -443,6 +537,7 @@ class FakeTreasurySharesRepository(TreasurySharesRepository):
         records: Sequence[TreasurySharesRecord],
         *,
         citation_runs: Mapping[UUID, CitationBatch] | None = None,
+        citation_identifiers: Mapping[UUID, str] | None = None,
     ) -> None:
         self._by_code: dict[str, list[TreasurySharesRecord]] = defaultdict(list)
         for r in records:
@@ -450,6 +545,11 @@ class FakeTreasurySharesRepository(TreasurySharesRepository):
         self._enforcer = PITEnforcer()
         # M1 T48c — citation_id → 생산 batch 평탄화 map (cutoff 필터 시만).
         self._citation_runs = citation_runs
+        # DART 정정공시 배치 — citation_id → identifier(rcept_no) map
+        # (FakeFinancialRepository 와 동일, SQL 의 source_citations JOIN 등가물).
+        self._citation_identifiers: dict[UUID, str] = dict(
+            citation_identifiers or {}
+        )
 
     def fetch_latest_active(
         self,
@@ -500,6 +600,84 @@ class FakeTreasurySharesRepository(TreasurySharesRepository):
                 ]
             result[code] = tuple(candidates)
         return result
+
+    def fetch_active_treasury_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+    ) -> tuple[str | None, TreasurySharesRecord | None]:
+        """현재 active(superseded_by IS NULL) 인 (code, fiscal_period) 자사주의
+        (active_rcept_no, active_row) — SqlTreasurySharesRepository 등가물.
+
+        account 축이 없어 active row 는 최대 1건. 2건 이상이면 corruption raise.
+        """
+        rows = [
+            r
+            for r in self._by_code.get(code, [])
+            if r.fiscal_period == fiscal_period and r.superseded_by is None
+        ]
+        if not rows:
+            return (None, None)
+        # 빈 문자열 fallback 은 SQL inner-join 의 row-탈락과 의미가 다르다:
+        # production 은 citation 을 항상 함께 주입하지만(SQL JOIN 은 미존재 row
+        # 탈락), Fake 는 _citation_identifiers 에 없는 citation_id 를 ""(빈
+        # 식별자)로 본다 — 테스트 헬퍼 편의 경로이며 정상 운영에서는 미도달.
+        rcept_nos = {
+            self._citation_identifiers.get(r.citation_id, "") for r in rows
+        }
+        # account 축 없음 → active 1건이어야 함. 2건 이상이면 중복 active head
+        # (corruption) → fail-loud (financials 와 동일 방어선, row 수 판정).
+        if len(rows) != 1:
+            raise PITDataCorruptionError(
+                f"multiple active treasury rows for code={code} "
+                f"fiscal_period={fiscal_period}: rcept_no={sorted(rcept_nos)} "
+                f"({len(rows)} rows) — 중복 active head (corruption)"
+            )
+        (active_rcept_no,) = tuple(rcept_nos)
+        return (active_rcept_no, rows[0])
+
+    def update_superseded_by(
+        self, record_id: UUID, successor_id: UUID,
+    ) -> None:
+        """정정공시 chain — 옛 active 자사주 row 의 superseded_by 를 NULL→successor.
+
+        SqlTreasurySharesRepository.update_superseded_by 와 동일 불변식
+        (FakeFinancialRepository.update_superseded_by 미러).
+        """
+        target: TreasurySharesRecord | None = None
+        target_code: str | None = None
+        target_index: int | None = None
+        for c, bucket in self._by_code.items():
+            for i, e in enumerate(bucket):
+                if e.id == record_id:
+                    target, target_code, target_index = e, c, i
+                    break
+            if target is not None:
+                break
+        if target is None:
+            raise AppendOnlyViolationError(
+                f"treasury_shares row {record_id} 부재 — "
+                f"update_superseded_by 불가"
+            )
+        if target.superseded_by is not None:
+            raise AppendOnlyViolationError(
+                f"treasury_shares row {record_id} 는 이미 superseded "
+                f"(superseded_by={target.superseded_by}) — chain 1 회성 위반"
+            )
+        successor_exists = any(
+            e.id == successor_id
+            for bucket in self._by_code.values()
+            for e in bucket
+        )
+        if not successor_exists:
+            raise AppendOnlyViolationError(
+                f"successor treasury_shares row {successor_id} 부재 — "
+                f"self-FK 무결성 위반"
+            )
+        assert target_code is not None and target_index is not None
+        self._by_code[target_code][target_index] = replace(
+            target, superseded_by=successor_id,
+        )
 
     def save_treasury_shares(
         self, records: Sequence[TreasurySharesRecord],

@@ -50,7 +50,11 @@ from typing import Final
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS, BatchRunORM
+from app.db.orm.batch_runs import (
+    BATCH_STATUS_PARTIAL,
+    BATCH_STATUS_SUCCESS,
+    BatchRunORM,
+)
 from app.services.as_of_policy import PIT_POLICY_VERSION
 from app.services.db_universe_distribution import DISTRIBUTION_POLICY_VERSION
 from app.services.factor_evaluator import EVALUATOR_POLICY_VERSION
@@ -192,8 +196,13 @@ def collect_batch_versions(
 
     선택 규칙 (M1 지시서 T48b; M7 #5 에서 source "FSC" 1 키 추가):
         - source ∈ {"KRX", "DART", "FSC"} 별로
-          `status = 'success' AND started_at::date <= as_of` 인 batch_runs row 중
-          `max(started_at)` 의 id 를 str(UUID) 로 반환.
+          `status ∈ {'success', 'partial'} AND started_at::date <= as_of` 인
+          batch_runs row 중 `max(started_at)` 의 id 를 str(UUID) 로 반환.
+          partial(부분 실패) 배치도 성공분의 실 데이터(citation/row)를 commit
+          했으므로 freeze 후보 자격 유지 — partial 도입 전엔 이 배치들이 'success'
+          로 저장됐고 그때도 후보였으므로 본 변경은 **byte-동일** (status 라벨만
+          운영 가시성 위해 분리, 자격 불변). skipped/running 은 데이터 미생산·
+          미확정이라 여전히 제외.
         - 해당 source 의 후보가 없으면 빈 문자열 "" (정책: 미존재 = empty,
           None 아님 — JCS hash 입력의 str 결정성 + diff_versions 의 `("", new)`
           하위호환). FSC 배치는 #2 후속이라 현재 항상 "" 로 해소 (동일 경로).
@@ -218,7 +227,12 @@ def collect_batch_versions(
             select(BatchRunORM.id)
             .where(
                 BatchRunORM.source == source,
-                BatchRunORM.status == BATCH_STATUS_SUCCESS,
+                # success + partial 모두 freeze 후보 — partial 은 성공분 실
+                # 데이터를 commit 했으므로 자격 동일. partial 도입 전 'success'
+                # 저장 시점과 byte-동일 (자격 불변, 라벨만 분리).
+                BatchRunORM.status.in_(
+                    (BATCH_STATUS_SUCCESS, BATCH_STATUS_PARTIAL)
+                ),
                 func.date(BatchRunORM.started_at) <= as_of,
             )
             .order_by(BatchRunORM.started_at.desc(), BatchRunORM.id.desc())

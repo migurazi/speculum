@@ -538,6 +538,51 @@ class FinancialRepository(Protocol):
         """
         ...
 
+    def fetch_active_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+        ifrs_type: str,
+    ) -> tuple[str | None, tuple[FinancialRecord, ...]]:
+        """현재 active(superseded_by IS NULL) 인 (code, fiscal_period, ifrs_type)
+        그룹의 (active_rcept_no, active_rows) 를 반환 — DART 정정공시 배치 전용.
+
+        **D1 = citation-join, migration 없음** (oracle 설계검토). financials 테이블엔
+        rcept_no 컬럼이 없고 SourceCitation.identifier 에 14자리 rcept_no 가 저장된다.
+        SQL 구현체는 financials JOIN source_citations(financials.citation_id =
+        source_citations.id) 로 active row 들의 identifier(=rcept_no) 를 함께 읽는다.
+
+        active 정의:
+            superseded_by IS NULL 인 row 만. (정정 chain 의 현재 head.)
+
+        반환 의미:
+            - (None, ()) — 해당 그룹에 active row 가 전혀 없음 (첫 공시 직전 상태).
+            - (rcept_no, rows) — active head 의 rcept_no 와 그 row 들. DART 1회
+              fetch 는 N account row 가 **모두 같은 rcept_no 1개**를 공유하므로,
+              정상 상태에서 active row 들의 rcept_no 는 단일해야 한다.
+
+        **단일 rcept_no assertion (corruption fail-loud 방어선)**:
+            반환 대상 active row 들이 서로 다른 rcept_no 를 가지면(= 여러 active
+            head 가 공존하면) 이는 수동 DB corruption 또는 chain 누락이다 —
+            `PITDataCorruptionError` 를 raise(메시지에 code/fiscal_period/ifrs_type +
+            발견된 rcept_no 들). 정정 배치가 (a) skip/insert/restate 분기를 내리기
+            전에 데이터 무결성을 강제하는 마지막 방어선. no-UNIQUE 제약(financials
+            자연키에 UNIQUE 없음) 환경에서 중복 active head 를 silent 진행시키지
+            않는다.
+
+        Args:
+            code: KRX 종목코드.
+            fiscal_period: "2024Q1" 등 DART 일배치 표준 분기 표기.
+            ifrs_type: "consolidated" | "separate" — CFS/OFS 독립 chain 보장 key.
+
+        Returns:
+            (active_rcept_no, active_rows) — active 없으면 (None, ()).
+
+        Raises:
+            PITDataCorruptionError: active row 들이 다중 rcept_no (중복 active head).
+        """
+        ...
+
     def save_financials(self, records: Sequence[FinancialRecord]) -> None:
         """재무제표 row bulk insert — T19 DART 일배치 합류.
 
@@ -548,6 +593,25 @@ class FinancialRepository(Protocol):
               FK 만족. T19 orchestrator 가 citation → financial 순서.
             - SQL 구현체는 같은 id 중복 시 IntegrityError (id 는 PK). Fake 는
               overwrite (단순화).
+        """
+        ...
+
+    def update_superseded_by(
+        self, record_id: UUID, successor_id: UUID,
+    ) -> None:
+        """정정공시 chain — 옛 active row 의 superseded_by 를 NULL→successor set.
+
+        ADR-0020 D4 — financials 의 **유일 허용 UPDATE 경로**. DART 정정공시 배치가
+        (정정 row insert + 본 메서드로 옛 row supersede) 2 단계로 chain 을 연장한다.
+        insert 순서(successor-first)에 의존하지 않는다.
+
+        불변식 (ADR-0020 D1):
+            - 대상 row 존재 + 현재 superseded_by 가 NULL (chain 1 회성).
+            - successor row 가 같은 테이블에 존재 (self-FK 무결성).
+            - superseded_by 외 컬럼 미변경.
+
+        Raises:
+            AppendOnlyViolationError: 대상/successor 부재 또는 이미 superseded.
         """
         ...
 
@@ -578,6 +642,43 @@ class TreasurySharesRepository(Protocol):
         """
         ...
 
+    def fetch_active_treasury_disclosure(
+        self,
+        code: str,
+        fiscal_period: str,
+    ) -> tuple[str | None, TreasurySharesRecord | None]:
+        """현재 active(superseded_by IS NULL) 인 (code, fiscal_period) 자사주의
+        (active_rcept_no, active_row) 를 반환 — DART 정정공시 배치 전용.
+
+        financials 의 `fetch_active_disclosure` 동형이나 **account 축이 없다** —
+        한 (code, fiscal_period) 에 active row 는 최대 1건이어야 한다. 따라서 row 는
+        tuple 이 아니라 단건(None 가능)으로 반환한다.
+
+        D1 = citation-join (migration 없음): treasury_shares JOIN source_citations
+        로 identifier(=rcept_no) 를 함께 읽는다.
+
+        반환 의미:
+            - (None, None) — active row 없음 (첫 공시 직전).
+            - (rcept_no, row) — active head 의 rcept_no 와 그 단건 row.
+
+        **단일 active assertion (corruption fail-loud)**:
+            active row 가 2건 이상이면(account 축이 없으므로 정정 head 가 둘 이상
+            공존하는 것 = corruption) `PITDataCorruptionError` raise(메시지에
+            code/fiscal_period + 발견된 rcept_no 들). financials 의 다중 rcept_no
+            assertion 과 동일 방어선.
+
+        Args:
+            code: KRX 종목코드.
+            fiscal_period: "2024Q1" 등.
+
+        Returns:
+            (active_rcept_no, active_row) — active 없으면 (None, None).
+
+        Raises:
+            PITDataCorruptionError: active row 가 2건 이상 (중복 active head).
+        """
+        ...
+
     def save_treasury_shares(
         self, records: Sequence[TreasurySharesRecord],
     ) -> None:
@@ -589,6 +690,20 @@ class TreasurySharesRepository(Protocol):
             - 각 record 의 `citation_id` 가 source_citations 에 미리 save 돼
               있어야 FK 만족 (배치 orchestrator 가 citation → treasury 순서).
             - SQL 구현체는 같은 id 중복 시 IntegrityError. Fake 는 overwrite.
+        """
+        ...
+
+    def update_superseded_by(
+        self, record_id: UUID, successor_id: UUID,
+    ) -> None:
+        """정정공시 chain — 옛 active 자사주 row 의 superseded_by 를 NULL→successor.
+
+        ADR-0020 D4 — treasury_shares 의 유일 허용 UPDATE 경로 (financials 의
+        update_superseded_by 와 동일 불변식). DART 정정공시 배치가 (정정 row insert +
+        본 메서드) 2 단계로 chain 을 연장한다.
+
+        Raises:
+            AppendOnlyViolationError: 대상/successor 부재 또는 이미 superseded.
         """
         ...
 

@@ -426,6 +426,9 @@ def test_dart_dry_run_skips_save() -> None:
     # FakeFinancialRepository 는 save 가 silent 누적 → mock spy 가 dry_run
     # 검증의 가장 명확한 신호.
     financial_repo = MagicMock(spec=FinancialRepository)
+    # 정정공시 배치는 dry_run 에서도 active head 를 조회(결정 산출). 미공시 그룹
+    # 이므로 (None, ()) = 첫 공시 → dry_run insert 결정(write 는 skip).
+    financial_repo.fetch_active_disclosure.return_value = (None, ())
     mapping = CorpCodeMapping.from_dict({"005930": "00126380"})
     adapter = _make_dart_adapter_mock(account_count=5)
 

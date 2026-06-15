@@ -842,6 +842,113 @@ def test_sql_price_repository_rejects_duplicate_id(
 
 
 # =============================================================================
+# KRX 재실행 idempotency — ON CONFLICT DO NOTHING first-wins (Sql/Fake 대칭)
+# =============================================================================
+
+def test_sql_price_save_idempotent_first_wins(db_session: Session) -> None:
+    """같은 (code, effective_date) 를 다른 값으로 2회 save → 첫 값 보존(first-wins).
+
+    SqlPriceRepository.save_prices 의 ON CONFLICT DO NOTHING — PK 충돌 시 raise
+    대신 조용히 skip 하여 KRX 일배치 재실행 안전. financials supersede 선례 미러.
+    """
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    sql_repo = SqlPriceRepository(db_session)
+    eff = date(2024, 5, 7)
+    sql_repo.save_prices([_price(effective_date=eff, close=70000.0)])
+    # 같은 (code, date), 다른 close — DO NOTHING 으로 skip, 첫 값 70000 보존.
+    sql_repo.save_prices([_price(effective_date=eff, close=99999.0)])
+
+    fetched = sql_repo.fetch_prices("005930", as_of=eff, start=eff)
+    assert len(fetched) == 1  # 중복 insert 안 됨 (PK 1건).
+    assert fetched[0].close_raw == Decimal("70000.0")  # first-wins.
+
+
+def test_fake_price_save_idempotent_first_wins() -> None:
+    """FakePriceRepository.save_prices 도 first-wins — Sql DO NOTHING 과 대칭."""
+    fake = FakePriceRepository(records=())
+    eff = date(2024, 5, 7)
+    fake.save_prices([_price(effective_date=eff, close=70000.0)])
+    fake.save_prices([_price(effective_date=eff, close=99999.0)])
+
+    fetched = fake.fetch_prices("005930", as_of=eff, start=eff)
+    assert len(fetched) == 1
+    assert fetched[0].close_raw == Decimal("70000.0")  # first-wins (Sql 대칭).
+
+
+def test_sql_market_cap_save_idempotent_first_wins(db_session: Session) -> None:
+    """같은 (code, effective_date) 시총 2회 save → 첫 값 보존(first-wins)."""
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    sql_repo = SqlMarketCapRepository(db_session)
+    eff = date(2024, 5, 7)
+    sql_repo.save_market_caps([_mc(effective_date=eff, market_cap=4e14)])
+    sql_repo.save_market_caps([_mc(effective_date=eff, market_cap=9e14)])
+
+    fetched = sql_repo.fetch_latest("005930", as_of=eff)
+    assert fetched is not None
+    assert fetched.market_cap == Decimal(str(4e14))  # first-wins.
+
+
+def test_fake_market_cap_save_idempotent_first_wins() -> None:
+    """FakeMarketCapRepository.save_market_caps 도 first-wins — Sql DO NOTHING 대칭."""
+    fake = FakeMarketCapRepository(records=())
+    eff = date(2024, 5, 7)
+    fake.save_market_caps([_mc(effective_date=eff, market_cap=4e14)])
+    fake.save_market_caps([_mc(effective_date=eff, market_cap=9e14)])
+
+    fetched = fake.fetch_latest("005930", as_of=eff)
+    assert fetched is not None
+    assert fetched.market_cap == Decimal(str(4e14))  # first-wins (Sql 대칭).
+
+
+def test_sql_price_save_empty_is_noop(db_session: Session) -> None:
+    """빈 records save → no-op (빈 values insert 회피, raise 없음)."""
+    sql_repo = SqlPriceRepository(db_session)
+    sql_repo.save_prices([])  # 예외 없이 통과.
+    assert sql_repo.fetch_prices(
+        "005930", as_of=date(2024, 5, 7), start=date(2024, 5, 7),
+    ) == ()
+
+
+def test_sql_market_cap_save_empty_is_noop(db_session: Session) -> None:
+    """빈 records save → no-op."""
+    sql_repo = SqlMarketCapRepository(db_session)
+    sql_repo.save_market_caps([])
+    assert sql_repo.fetch_latest("005930", as_of=date(2024, 5, 7)) is None
+
+
+def test_sql_price_save_intra_call_dup_first_wins(db_session: Session) -> None:
+    """**한 save 호출** 안에 같은 (code, effective_date) 2건(다른 값) → 1 row, 첫 값
+    보존. cross-call(2회 호출)뿐 아니라 intra-statement 중복도 first-wins 임을 잠금
+    (어댑터가 같은 거래일을 중복 산출하는 경로 방어 — SQLite ON CONFLICT 는 첫 row
+    insert 후 두 번째를 같은 statement 내에서 DO NOTHING).
+    """
+    _seed_citation(db_session, _DUMMY_CITATION_ID)
+    sql_repo = SqlPriceRepository(db_session)
+    eff = date(2024, 5, 7)
+    # 같은 (code, date), 다른 close — surrogate id 는 _price 가 매번 새로 생성.
+    sql_repo.save_prices([
+        _price(effective_date=eff, close=70000.0),
+        _price(effective_date=eff, close=99999.0),
+    ])
+    fetched = sql_repo.fetch_prices("005930", as_of=eff, start=eff)
+    assert len(fetched) == 1  # intra-call 중복 흡수 — PK 1건.
+    assert fetched[0].close_raw == Decimal("70000.0")  # first-wins.
+
+
+def test_fake_price_save_intra_call_dup_first_wins() -> None:
+    """Fake 도 한 save 호출 내 중복을 first-wins — Sql intra-statement 대칭."""
+    fake = FakePriceRepository(records=())
+    eff = date(2024, 5, 7)
+    fake.save_prices([
+        _price(effective_date=eff, close=70000.0),
+        _price(effective_date=eff, close=99999.0),
+    ])
+    fetched = fake.fetch_prices("005930", as_of=eff, start=eff)
+    assert len(fetched) == 1
+    assert fetched[0].close_raw == Decimal("70000.0")  # first-wins (Sql 대칭).
+
+
+# =============================================================================
 # C3 regression — UTCDateTime 의 non-UTC tz 정규화
 # =============================================================================
 

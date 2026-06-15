@@ -20,7 +20,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db.orm.batch_runs import BATCH_STATUS_SUCCESS
+from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL, BATCH_STATUS_SUCCESS
 from app.main import create_app
 from app.repositories.batch_run_repository import FakeBatchRunRepository
 
@@ -220,11 +220,16 @@ def test_data_freshness_empty_returns_stale_schema(client: TestClient) -> None:
     assert set(body.keys()) == {"krx", "dart", "kosis", "as_of"}
     for src_key in ("krx", "dart", "kosis"):
         src = body[src_key]
-        assert set(src.keys()) == {"source", "latest_batch_at", "is_stale", "elapsed_days"}
+        assert set(src.keys()) == {
+            "source", "latest_batch_at", "is_stale", "elapsed_days",
+            "latest_batch_partial",
+        }
         assert src["source"] == src_key.upper()
         assert src["is_stale"] is True
         assert src["latest_batch_at"] is None
         assert src["elapsed_days"] is None
+        # batch 부재 = partial 도 아님 (False).
+        assert src["latest_batch_partial"] is False
     # as_of 는 서버 now (ISO 8601) — 존재만 검증 (결정성은 서비스 테스트 책임).
     assert isinstance(body["as_of"], str) and body["as_of"]
 
@@ -247,12 +252,35 @@ def test_data_freshness_with_seeded_batch() -> None:
     assert body["krx"]["latest_batch_at"] == "2024-05-07T02:00:00Z"
     assert body["krx"]["elapsed_days"] is not None
     assert isinstance(body["krx"]["is_stale"], bool)
+    # 완전 성공 batch → partial 아님 (False).
+    assert body["krx"]["latest_batch_partial"] is False
     # DART seed 없음 → 여전히 stale + null.
     assert body["dart"]["latest_batch_at"] is None
     assert body["dart"]["is_stale"] is True
     # KOSIS seed 없음 → 여전히 stale + null.
     assert body["kosis"]["latest_batch_at"] is None
     assert body["kosis"]["is_stale"] is True
+
+
+def test_data_freshness_exposes_partial_batch() -> None:
+    """partial batch 주입 → latest_batch_partial=True 가 엔드포인트로 노출 (M-2)."""
+    app = create_app()
+    repo = FakeBatchRunRepository()
+    rid = uuid4()
+    ended = datetime(2024, 5, 7, 2, tzinfo=UTC)
+    repo.start(run_id=rid, market="KOSPI", source="KRX", started_at=ended)
+    # 부분 실패 — 성공분 commit + 일부 실패 (status='partial').
+    repo.finalize(
+        run_id=rid, ended_at=ended, success_count=8, status=BATCH_STATUS_PARTIAL,
+    )
+    app.state.batch_run_repo_override = repo
+    with TestClient(app) as c:
+        res = c.get("/api/data-freshness")
+    assert res.status_code == 200
+    body = res.json()
+    # partial 사실 노출 — partial 도 freshness 소스 자격 유지(latest_batch_at 노출).
+    assert body["krx"]["latest_batch_partial"] is True
+    assert body["krx"]["latest_batch_at"] == "2024-05-07T02:00:00Z"
 
 
 def test_data_freshness_with_kosis_seeded_batch() -> None:

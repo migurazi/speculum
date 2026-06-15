@@ -16,9 +16,12 @@
       M7 #5 에서 FSC=금융위 배당 adapter 조회 추가) 가 source 별 max(started_at)
       성공 batch 를 조회하는 인덱스 key. DB 레벨 CHECK 제약 없음 (String(16) 만)
       — 허용 값은 application(collect_batch_versions._BATCH_VERSION_KEYS) 이 강제.
-    - **`status`** — "running" | "success" | "skipped". `collect_batch_versions`
-      (T48b) 는 `status='success'` 만 freeze 후보로 사용 (휴장일 skip /
-      universe fetch 실패 / 미완료(running) batch → 데이터 미생산·미확정 → 제외).
+    - **`status`** — "running" | "success" | "partial" | "skipped".
+      `collect_batch_versions` (T48b) 는 `status ∈ {'success', 'partial'}` 을
+      freeze 후보로 사용 (휴장일 skip / universe fetch 실패 / 미완료(running)
+      batch → 데이터 미생산·미확정 → 제외). "partial" = 일부 종목/지표 실패했으나
+      성공분의 실 데이터(citation/row)는 commit 한 배치 — 운영 가시성 위해
+      "success" 와 라벨만 분리하되 freeze 자격은 동일(byte-동일, 1c 참조).
     - **`started_at` / `ended_at`** — UTC tz-aware. `started_at` 은 batch 의
       uuid4 생성 직후 시각 (BatchSummary.started_at 와 동일). T48b 의
       `started_at::date <= as_of` PIT 필터 + source 별 max(started_at) 정렬 key.
@@ -38,7 +41,8 @@
     - `started_at` ↔ `started_at`
     - `ended_at` ↔ `ended_at` (finalize 시 갱신; 시작 시점엔 started_at 동일값)
     - `success_count` ↔ `success_count` (finalize 시 갱신; 시작 시점엔 0)
-    - `status` ↔ "running"(시작) → "skipped"(skipped_reason 있음) / "success"(정상)
+    - `status` ↔ "running"(시작) → "skipped"(skipped_reason 있음) /
+      "partial"(failure_count>0, 성공분은 commit) / "success"(전부 성공)
 
 관련:
 - M1 지시서 Phase M1-0 T48a
@@ -61,6 +65,12 @@ from app.db.types import UTCDateTime
 # 영속화 코드가 공유. typo drift 차단.
 BATCH_STATUS_RUNNING = "running"
 BATCH_STATUS_SUCCESS = "success"
+# 부분 실패 — 일부 종목/지표는 실패했으나 성공분의 실 데이터(citation/row)는
+# commit 한 배치. 운영 모니터링이 "전부 성공" 과 구분할 수 있도록 별도 라벨.
+# freeze 후보·freshness 자격은 success 와 동일 (collect_batch_versions /
+# latest_successful 가 둘 다 수용 — 성공분 데이터가 실재하므로). String(16)
+# 컬럼의 새 값일 뿐이라 migration 불필요.
+BATCH_STATUS_PARTIAL = "partial"
 BATCH_STATUS_SKIPPED = "skipped"
 
 
@@ -79,12 +89,16 @@ class BatchRunORM(Base):
     started_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     ended_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     success_count: Mapped[int] = mapped_column(Integer, nullable=False)
-    # "running" | "success" | "skipped" — BATCH_STATUS_* 상수.
+    # "running" | "success" | "partial" | "skipped" — BATCH_STATUS_* 상수.
     status: Mapped[str] = mapped_column(String(16), nullable=False)
 
     __table_args__ = (
-        # T48b — source 별 (status='success' AND started_at::date <= as_of) 의
-        # max(started_at) row 조회 hot path. (source, status, started_at) 복합.
+        # T48b — source 별 (status IN ('success','partial') AND
+        # started_at::date <= as_of) 의 max(started_at) row 조회 hot path.
+        # (source, status, started_at) 복합. partial 도 committed 데이터를 생산해
+        # freeze 후보·freshness 소스 자격을 가지므로 status range 로 조회
+        # (collect_batch_versions / latest_successful 와 일관).
+        # row 수가 작아(일 ~6 row) status range 의 정렬 merge 비용은 무시 가능.
         Index(
             "ix_batch_runs_source_status_started",
             "source",

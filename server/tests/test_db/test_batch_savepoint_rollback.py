@@ -17,7 +17,7 @@ write 만 rollback.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -138,6 +138,88 @@ def test_krx_savepoint_rolls_back_failed_code_only(
     identifiers = {c.identifier for c in cited}
     assert any("005930" in i for i in identifiers)
     assert not any("000660" in i for i in identifiers)
+
+
+def test_krx_full_rerun_idempotent_no_partial(
+    db_session: Session,
+) -> None:
+    """KRX 일배치 전체 재실행 회귀가드 — 재실행이 PARTIAL 로 오분류되지 않음.
+
+    현 버그 재현·수정 검증: 같은 (code, effective_date) 재insert 시 PK 충돌
+    IntegrityError → `except Exception` 이 failure 로 오분류 → BATCH_STATUS_PARTIAL
+    로 저장 → data_freshness latest_batch_partial=True 왜곡.
+
+    repository-level ON CONFLICT DO NOTHING 으로 충돌이 흡수되어 재실행도
+    failure_count=0, status=SUCCESS, latest_batch_partial=False 유지(이게 핵심).
+    """
+    from app.repositories.batch_run_repository import (
+        BATCH_STATUS_SUCCESS,
+        SqlBatchRunRepository,
+    )
+    from app.repositories.sql_repositories import SqlMarketCapRepository
+    from app.services.data_freshness import assess_data_freshness
+
+    as_of = date(2024, 5, 7)
+    pykrx_mock = MagicMock()
+    pykrx_mock.get_market_ticker_list = MagicMock(
+        return_value=["005930", "000660"],
+    )
+    pykrx_mock.get_market_ohlcv = MagicMock(
+        side_effect=lambda fromdate, todate, code: _ohlcv_df(
+            day=as_of, close=70000.0,
+        ),
+    )
+    pykrx_mock.get_market_cap_by_date = MagicMock(
+        side_effect=lambda fromdate, todate, code: _market_cap_df(day=as_of),
+    )
+
+    def _make_batch() -> KrxDailyBatch:
+        return KrxDailyBatch(
+            primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+            verify_adapter=None,
+            conflict_detector=None,
+            calendar=DEFAULT_CALENDAR,
+            citation_repo=SqlCitationRepository(db_session),
+            price_repo=SqlPriceRepository(db_session),
+            market_cap_repo=SqlMarketCapRepository(db_session),
+            throttle_seconds=0,
+            session=db_session,  # SAVEPOINT + SqlBatchRunRepository auto-create.
+        )
+
+    # ── 1차 적재 ─────────────────────────────────────────────────────────────
+    summary1 = _make_batch().run(as_of=as_of, market="KOSPI")
+    assert summary1.failure_count == 0
+    assert summary1.success_count == 2
+
+    # ── 2차 동일 run() 재실행 (현 버그 회귀 가드) ────────────────────────────
+    # PK 중복이 ON CONFLICT DO NOTHING 으로 흡수 → failure 0, SUCCESS 유지.
+    summary2 = _make_batch().run(as_of=as_of, market="KOSPI")
+    assert summary2.failure_count == 0, (
+        f"재실행 failure 0 이어야 함 (got {summary2.failure_count}, "
+        f"failures={summary2.failures}) — PK 충돌이 failure 로 오분류됨."
+    )
+    assert summary2.success_count == 2
+
+    # 가격/시총은 (code,date) 당 1건만 (중복 insert 안 됨, first-wins).
+    price_repo = SqlPriceRepository(db_session)
+    for code in ("005930", "000660"):
+        assert len(price_repo.fetch_prices(code, as_of=as_of, start=as_of)) == 1
+
+    # batch_runs 최신 = SUCCESS (PARTIAL 아님).
+    run_repo = SqlBatchRunRepository(db_session)
+    latest = run_repo.latest_successful("KRX")
+    assert latest is not None
+    assert latest.status == BATCH_STATUS_SUCCESS, (
+        f"재실행 batch status SUCCESS 이어야 함 (got {latest.status})."
+    )
+
+    # data_freshness 진단 — latest_batch_partial=False (왜곡 0, 핵심 회귀 가드).
+    freshness = assess_data_freshness(
+        now=datetime(2024, 5, 8, 9, 0, tzinfo=UTC),
+        batch_run_repo=run_repo,
+        calendar=DEFAULT_CALENDAR,
+    )
+    assert freshness.krx.latest_batch_partial is False
 
 
 # =============================================================================
