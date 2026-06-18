@@ -40,6 +40,8 @@ next-env.d.ts
 .env.production
 .env.development
 !.env.example
+# 평문 키 파일 — 절대 commit 금지 (keys.zip 은 의도적 commit 대상이라 제외 안 함).
+keys.txt
 
 # IDE
 .vscode/
