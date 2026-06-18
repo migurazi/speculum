@@ -271,6 +271,48 @@ def test_fetch_financial_statement_returns_canonical_rows() -> None:
 
 
 # =============================================================================
+# 1-bis. sj_div 재무제표 dedup + 자본변동표(SCE) 제외
+# =============================================================================
+
+def test_multi_statement_dedup_and_sce_excluded() -> None:
+    """fnlttSinglAcntAll 의 5 재무제표 중복을 dedup + 자본변동표(SCE) 제외.
+
+    실데이터 회귀: 삼성 등 실 응답은 같은 보고서의 BS/IS/CIS/CF/SCE 를 한 list 로
+    반환하며, net_income(ifrs-full_ProfitLoss)이 IS/CIS/CF/SCE 에 반복·total_equity
+    (ifrs-full_Equity)가 BS/SCE 에 반복된다. dedup 없으면 단일 fetch 내 canonical
+    중복 → 저장 시 PITDataCorruptionError. 본 테스트가 그 회귀를 가드한다.
+    """
+    rows_raw = [
+        _dart_row(account_id="ifrs-full_Assets", thstrm_amount="100", sj_div="BS"),
+        # total_equity — BS(정본 잔액) + SCE(기말/기초 반복). BS 채택, SCE 제외.
+        _dart_row(account_id="ifrs-full_Equity", thstrm_amount="60", sj_div="BS"),
+        _dart_row(account_id="ifrs-full_Equity", thstrm_amount="55", sj_div="SCE"),
+        _dart_row(account_id="ifrs-full_Equity", thstrm_amount="60", sj_div="SCE"),
+        # net_income — IS(정본) + CIS + CF 동일 값 반복. IS 채택, 나머지 dedup.
+        _dart_row(account_id="ifrs-full_ProfitLoss", thstrm_amount="10", sj_div="IS"),
+        _dart_row(account_id="ifrs-full_ProfitLoss", thstrm_amount="10", sj_div="CIS"),
+        _dart_row(account_id="ifrs-full_ProfitLoss", thstrm_amount="10", sj_div="CF"),
+        # SCE 전용 반복 항목 — 전부 제외돼야 함.
+        _dart_row(account_id="ifrs-full_ProfitLoss", thstrm_amount="10", sj_div="SCE"),
+    ]
+    adapter = _adapter_with_response(_dart_response(rows=rows_raw))
+    result = adapter.fetch_financial_statement(
+        code="005930", corp_code="00126380", fiscal_year=2024,
+        fiscal_quarter=1, ifrs_type=IfrsType.CFS, batch_id=uuid4(),
+    )
+    accounts = [r.account for r in result.data]
+    # canonical 중복 0 (PIT 무결성 가드 충족).
+    assert len(accounts) == len(set(accounts)), f"중복 canonical: {accounts}"
+    by_acc = {r.account: r.value for r in result.data}
+    assert by_acc["total_assets"] == Decimal("100")
+    # total_equity 는 BS(60) — SCE(55/60) 미채택.
+    assert by_acc["total_equity"] == Decimal("60")
+    # net_income 은 IS 1건만 (CIS/CF/SCE 중복 제거).
+    assert by_acc["net_income"] == Decimal("10")
+    assert accounts.count("net_income") == 1
+
+
+# =============================================================================
 # 2. CFS / OFS 분리 fs_div
 # =============================================================================
 

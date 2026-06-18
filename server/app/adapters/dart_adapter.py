@@ -91,6 +91,21 @@ _STATUS_AUTH_FAILURE: Final[frozenset[str]] = frozenset({"010", "011"})
 # 가 이 에러를 잡아 빈 결과로 변환 (`_call_dart` 시그니처/동작은 변경 없음).
 _STATUS_NO_DATA: Final[str] = "013"
 
+# 재무제표 구분(sj_div)별 채택 우선순위 — fnlttSinglAcntAll 응답은 한 보고서의
+# BS/IS/CIS/CF/SCE 5 개 재무제표를 한 list 로 반환한다. 같은 canonical 계정이 복수
+# 재무제표에 나타날 수 있어(예: net_income=ifrs-full_ProfitLoss 는 손익(IS)·포괄손익
+# (CIS)·현금흐름(CF) 모두에 동일 값으로 등장) 단일 fetch 내 중복이 생긴다. PIT 무결성
+# 가드("1 fetch = canonical 계정당 1 row")를 만족하도록 **재무제표 우선순위로 dedup**:
+# 잔액·손익 정본인 BS > IS > CIS > CF 순으로 첫 1건만 채택(값은 statement 간 동일).
+_STATEMENT_PRIORITY: Final[dict[str, int]] = {"BS": 0, "IS": 1, "CIS": 2, "CF": 3}
+# 자본변동표(SCE) 는 같은 계정(자본총계·당기순이익 등)을 기초/변동/기말 컬럼마다
+# 반복(period-flow)해 중복의 주원인이며, 기말 잔액은 BS·순이익은 IS 에 이미 있으므로
+# **적재 대상에서 제외**한다(ADR-0005 — 적재 1차 재무제표는 BS/IS/CIS/CF, 자본변동표 외).
+_EXCLUDED_STATEMENTS: Final[frozenset[str]] = frozenset({"SCE"})
+# 알 수 없는/누락 sj_div 는 known 재무제표보다 후순위(dedup 시 known 우선)이나 적재는
+# 유지 — 단일 statement mock·향후 신규 sj_div 에 대한 graceful 동작.
+_UNKNOWN_STATEMENT_PRIORITY: Final[int] = len(_STATEMENT_PRIORITY)
+
 # stockTotqySttus.json (주식의 총수 현황) 의 `se` (구분) 값 — 자사주 추출 규칙.
 # KRX shares_outstanding (market_caps) 가 보통주 기준이므로 일관성을 위해 "보통주"
 # 행의 `tesstk_co` 를 1순위 사용. "보통주" 행 부재 시 "합계" fallback.
@@ -771,10 +786,16 @@ class DartAdapter(DataSourceAdapter):
         # rcept_no 도출 (ADR-0012 D6) 결과에 의존하므로 row 생성은 2차로 미룸.
         # 분기 내 모든 row 가 같은 보고서 = 같은 rcept_no = 같은 effective_date.
         skipped_row_count = 0
-        unmapped_account_count = 0
         rcept_no = ""
-        # (canonical_account, value, rcept_no, currency) 누적.
-        parsed_rows: list[tuple[str, Decimal, str, str]] = []
+        # canonical_account → 후보 row list [(statement_priority, value, rcept_no,
+        # currency)]. 같은 canonical 이 복수 재무제표에 등장(예: net_income 은 손익
+        # (IS)·포괄손익(CIS)·현금흐름(CF) 동일 값)하면 **재무제표 우선순위(BS>IS>CIS>
+        # CF)가 가장 높은 statement 의 row 만 채택** = cross-statement dedup(값 동일,
+        # 무손실). 단 **같은 statement 내 같은 canonical 이 복수**면(같은 우선순위 2건+)
+        # 그대로 **모두 보존** → 진짜 데이터 모순(동일 계정·동일 표·다른 값)을 저장
+        # 시점 PIT 무결성 가드가 잡도록 한다(silent 삼킴 금지). 자본변동표(SCE)는
+        # period-flow 반복원이라 적재 제외(_EXCLUDED_STATEMENTS).
+        candidates: dict[str, list[tuple[int, Decimal, str, str]]] = {}
 
         for raw in raw_list:
             # 필수 필드 검증 — schema drift fail-fast.
@@ -788,6 +809,11 @@ class DartAdapter(DataSourceAdapter):
                     f"DART schema drift — missing field in row: {exc}. "
                     f"row keys: {list(raw.keys()) if isinstance(raw, dict) else type(raw)}"
                 ) from exc
+
+            # 적재 제외 재무제표(자본변동표 SCE) — period-flow 계정 반복이 중복원.
+            sj_div = str(raw.get("sj_div") or "").strip()
+            if sj_div in _EXCLUDED_STATEMENTS:
+                continue
 
             # thstrm_amount 가 string ("455905830000000") 또는 빈 string.
             # 빈 string / "-" 는 결측 — skipped_row_count.
@@ -803,16 +829,28 @@ class DartAdapter(DataSourceAdapter):
                 continue
 
             canonical_account = map_ifrs_account(ifrs_account_id)
-            if is_unmapped(canonical_account):
-                # 미매핑 — row 는 보존 (canonical key 가 "unmapped:..." prefix).
-                unmapped_account_count += 1
-
-            parsed_rows.append(
-                (canonical_account, value, str(rcept_no_raw), str(currency))
+            priority = _STATEMENT_PRIORITY.get(sj_div, _UNKNOWN_STATEMENT_PRIORITY)
+            candidates.setdefault(canonical_account, []).append(
+                (priority, value, str(rcept_no_raw), str(currency))
             )
             # rcept_no 는 보통 한 보고서 단위로 동일 — 첫 valid row 채택.
             if not rcept_no:
                 rcept_no = str(rcept_no_raw)
+
+        # 미매핑 계정 수 — 고유 canonical 기준 (canonical key 가 "unmapped:..."
+        # prefix). row 는 보존.
+        unmapped_account_count = sum(1 for acc in candidates if is_unmapped(acc))
+        # 각 canonical 의 최우선 statement(min priority) row 만 채택 — 같은 우선순위
+        # (= 같은 statement) 가 복수면 모두 보존(저장 가드가 모순 탐지). cross-statement
+        # 동일 계정(다른 우선순위)은 승자 1건만 → 단일 fetch 중복 0(정상 경로).
+        parsed_rows: list[tuple[str, Decimal, str, str]] = []
+        for acc, cands in candidates.items():
+            min_priority = min(c[0] for c in cands)
+            parsed_rows.extend(
+                (acc, value, row_rcept_no, currency)
+                for (priority, value, row_rcept_no, currency) in cands
+                if priority == min_priority
+            )
 
         if not parsed_rows:
             raise AdapterError(

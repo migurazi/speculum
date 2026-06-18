@@ -60,7 +60,9 @@ class FinancialORM(Base):
     effective_date: Mapped[date] = mapped_column(Date, nullable=False)
     fiscal_period: Mapped[str] = mapped_column(String(16), nullable=False)
     # "net_income_consolidated_ifrs" 등 dart_account_mapper 정규화된 account 키.
-    account: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 매핑 canonical 은 짧으나(≤~33), 미매핑 보존 키("unmapped:ifrs-full_<원문>")는
+    # IFRS 전체 taxonomy 명을 담아 최대 ~154 자 → String(255) (migration 0023).
+    account: Mapped[str] = mapped_column(String(255), nullable=False)
     value: Mapped[Decimal] = mapped_column(_FINANCIAL_NUMERIC, nullable=False)
     unit: Mapped[str] = mapped_column(String(16), nullable=False)
     # "consolidated" | "separate" — ADR-0005.
