@@ -91,9 +91,15 @@ __all__ = [
 ]
 
 
-# 공공데이터포털 GetStocDiviInfoService — getDiviInfo (주식배당정보 조회).
+# 공공데이터포털 GetStocDiviInfoService_V2 — getDiviInfo_V2 (주식배당정보 조회).
+# ⚠ V2 정본 경로 (활용가이드 page 4 Call Back URL). 구버전 V1
+# (/service/GetStocDiviInfoService/getDiviInfo) 은 현 키로 HTTP 403(키가 V2 전용
+# 구독). V2 는 /service segment 없음 + operation 에 _V2 접미.
+# **요청 파라미터 주의**: V2 는 배당기간 필터(beginBasDt/endBasDt)를 제공하지 않는다
+# (가이드 page 4: basDt[스냅샷 기준일·옵션]·crno·stckIssuCmpyNm 뿐). 배당기간 조회는
+# crno 로 전체 history 를 받아 dvdnBasDt 를 클라이언트에서 필터한다(fetch_cash_dividends).
 _FSC_DIVI_URL: Final[str] = (
-    "https://apis.data.go.kr/1160100/service/GetStocDiviInfoService/getDiviInfo"
+    "https://apis.data.go.kr/1160100/GetStocDiviInfoService_V2/getDiviInfo_V2"
 )
 
 # 공공데이터포털 resultCode 분류 (DART status code 분기 동형).
@@ -205,19 +211,21 @@ class FscDividendAdapter(DataSourceAdapter):
     ) -> FetchResult[tuple[CorporateActionRecord, ...]]:
         """단일 법인(crno)의 기간 내 현금배당 → CorporateActionRecord tuple.
 
-        getDiviInfo 를 crno + 배당기준일 기간 (beginBasDt~endBasDt) 으로 페이징
-        조회. 각 item 을 현금배당 record 로 변환 (보통주만 — 우선주는 후속 cycle).
+        getDiviInfo_V2 를 crno 로 조회(V2 는 배당기간 서버필터 부재 → crno 전체
+        history 페이징 수신) 후 `dvdnBasDt`(배당기준일)가 [begin_bas_dt, end_bas_dt]
+        안인 item 만 변환. 각 item 을 현금배당 record 로 (보통주만 — 우선주는 후속).
 
-        변환 규칙 (ADR-0035 D6):
-            - 현금배당 필터: `stckGnrlDvdnAmt` (주당현금배당금) 비었거나 "0" 이면
+        변환 규칙 (ADR-0035 D6, V2 필드 — 활용가이드):
+            - 기간 필터: `dvdnBasDt` ∈ [begin, end] (클라이언트, 서버필터 부재).
+            - 현금배당 필터: `stckGenrDvdnAmt` (1주당 현금배당금) 비었거나 "0" 이면
               skip (현금배당 아님).
-            - 보통주만: `stckKndNm != "보통주"` 면 skip + warning.
+            - 보통주만: `scrsItmsKcdNm != "보통주"` 면 skip + warning.
             - `effective_date` = `trading_calendar` 로 구한 `dvdnBasDt` (배당기준일)
               직전 거래일 = 배당락일. 캘린더 범위 밖이면 warning + skip (역산 금지).
             - `announced_date` = `effective_date` (금융위 API 공시일 부재 —
               배당락일이 look-ahead 안전 하한, 이중 PIT 두 축 수렴).
-            - `payment_date` = `cshDvdnPayDt` 파싱 (없으면 None).
-            - `cash_amount` = Decimal(stckGnrlDvdnAmt).
+            - `payment_date` = `cashDvdnPayDt` 파싱 (없으면 None).
+            - `cash_amount` = Decimal(stckGenrDvdnAmt).
             - `details` = JSON-scalar only (per_share 문자열).
 
         Args:
@@ -257,12 +265,14 @@ class FscDividendAdapter(DataSourceAdapter):
         # tail 을 조용히 드롭한다. full 페이지 (_NUM_OF_ROWS 만큼) 가 계속 오면
         # 끝까지 읽고, totalCount 와 누적이 어긋나면 drift 를 [DATA_GAP] 로 고지.
         while page_no <= _MAX_PAGES:
+            # V2 요청 파라미터(가이드 page 4): crno 로 전체 배당 history 조회.
+            # beginBasDt/endBasDt 는 V2 에 없다(서버 기간필터 부재) → 아래
+            # _convert_items 호출 전 dvdnBasDt 로 클라이언트 기간 필터. basDt(스냅샷
+            # 기준일)는 미지정 = 최신 스냅샷(전체 history 포함).
             params = {
                 "serviceKey": service_key,
                 "resultType": "json",
                 "crno": crno,
-                "beginBasDt": begin_bas_dt,
-                "endBasDt": end_bas_dt,
                 "pageNo": str(page_no),
                 "numOfRows": str(_NUM_OF_ROWS),
             }
@@ -307,8 +317,20 @@ class FscDividendAdapter(DataSourceAdapter):
                 f"tail 누락 가능 (crno={crno})"
             )
 
+        # V2 클라이언트 기간 필터 — 서버가 배당기간 필터를 제공하지 않으므로
+        # (crno 전체 history 반환) dvdnBasDt(배당기준일, YYYYMMDD)가 요청 기간
+        # [begin_bas_dt, end_bas_dt] 안인 record 만 변환 대상으로 남긴다. 사전식
+        # 비교 가능(YYYYMMDD 고정폭). dvdnBasDt 부재/형식오류는 범위 비교에서
+        # 자연히 탈락(빈 문자열 < begin) → 요청 범위 밖 노이즈가 _convert_items
+        # 경고(우선주/0배당 등)를 오염시키지 않는다.
+        period_items = [
+            it
+            for it in all_items
+            if isinstance(it, dict)
+            and begin_bas_dt <= str(it.get("dvdnBasDt", "")).strip() <= end_bas_dt
+        ]
         records, warnings = self._convert_items(
-            items=all_items,
+            items=period_items,
             code=code,
             crno=crno,
             batch_id=batch_id,
@@ -459,22 +481,24 @@ class FscDividendAdapter(DataSourceAdapter):
                 warnings.append(f"FSC non-dict item skipped (crno={crno})")
                 continue
 
-            # 1. 종류 — 보통주만 (우선주 등은 후속 cycle).
-            stock_knd = str(item.get("stckKndNm", "")).strip()
+            # 1. 종류 — 보통주만 (우선주 등은 후속 cycle). V2 필드 scrsItmsKcdNm
+            #    (유가증권종목종류코드명, 예 "보통주"/"우선주" — 가이드 page 6).
+            stock_knd = str(item.get("scrsItmsKcdNm", "")).strip()
             if stock_knd != _STOCK_KND_COMMON:
                 warnings.append(
-                    f"FSC non-common stock skipped — stckKndNm="
+                    f"FSC non-common stock skipped — scrsItmsKcdNm="
                     f"{stock_knd!r} (보통주만 지원, code={code})"
                 )
                 continue
 
-            # 2. 현금배당 필터 — 주당현금배당금 비었거나 "0" 이면 현금배당 아님.
-            amount_str = str(item.get("stckGnrlDvdnAmt", "")).strip().replace(
+            # 2. 현금배당 필터 — 주당현금배당금(V2 stckGenrDvdnAmt="1주당 현금 배당
+            #    금액", 가이드 page 7) 비었거나 "0" 이면 현금배당 아님.
+            amount_str = str(item.get("stckGenrDvdnAmt", "")).strip().replace(
                 ",", "",
             )
             if not amount_str or amount_str == "-":
                 warnings.append(
-                    f"FSC empty stckGnrlDvdnAmt skipped (현금배당 아님, "
+                    f"FSC empty stckGenrDvdnAmt skipped (현금배당 아님, "
                     f"code={code})"
                 )
                 continue
@@ -482,13 +506,13 @@ class FscDividendAdapter(DataSourceAdapter):
                 cash_amount = Decimal(amount_str)
             except (InvalidOperation, ValueError):
                 warnings.append(
-                    f"FSC non-numeric stckGnrlDvdnAmt skipped "
+                    f"FSC non-numeric stckGenrDvdnAmt skipped "
                     f"({amount_str!r}, code={code})"
                 )
                 continue
             if cash_amount == 0:
                 warnings.append(
-                    f"FSC zero stckGnrlDvdnAmt skipped (현금배당 아님, "
+                    f"FSC zero stckGenrDvdnAmt skipped (현금배당 아님, "
                     f"code={code})"
                 )
                 continue
@@ -496,7 +520,7 @@ class FscDividendAdapter(DataSourceAdapter):
             # schema drift 로 거부하는 패턴과 일관 (silent 통과 금지).
             if cash_amount < 0:
                 warnings.append(
-                    f"FSC negative stckGnrlDvdnAmt skipped "
+                    f"FSC negative stckGenrDvdnAmt skipped "
                     f"({amount_str!r} — 음수 배당 무의미, code={code})"
                 )
                 continue
@@ -531,14 +555,15 @@ class FscDividendAdapter(DataSourceAdapter):
             #    배당락일이 look-ahead 안전 하한, 이중 PIT 두 축 수렴).
             announced_date = effective_date
 
-            # 6. payment_date — 없으면 None.
+            # 6. payment_date — 없으면 None. V2 필드 cashDvdnPayDt(현금배당지급일자).
             payment_date = _parse_yyyymmdd(
-                str(item.get("cshDvdnPayDt", "")).strip()
+                str(item.get("cashDvdnPayDt", "")).strip()
             )
 
-            # 7. 배당종류 (dvdnRcdNm) — 결산/중간/특별 등. C1: identifier 의
-            #    유일성 키 일부이자 details["type"].
-            dvdn_rcd_nm = str(item.get("dvdnRcdNm", "")).strip()
+            # 7. 배당사유 (V2 stckDvdnRcdNm — 주식배당사유코드명, 예 "현금배당"/
+            #    "무배당"/결산·중간 등, 가이드 page 6). C1: identifier 의 유일성 키
+            #    일부이자 details["type"].
+            dvdn_rcd_nm = str(item.get("stckDvdnRcdNm", "")).strip()
 
             # 8. details — JSON-scalar only (Decimal/date 금지, per_share 문자열).
             details: dict[str, object] = {

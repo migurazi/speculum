@@ -101,15 +101,15 @@ def _divi_item(
     csh_dvdn_pay_dt: str = "20250401",
     dvdn_rcd_nm: str = "결산배당",
 ) -> dict[str, Any]:
-    """getDiviInfo items.item 의 1 entry."""
+    """getDiviInfo_V2 items.item 의 1 entry (V2 필드명 — 활용가이드 page 5~7)."""
     return {
         "crno": "1301110006246",
         "stckIssuCmpyNm": "테스트전자",
-        "stckKndNm": stck_knd_nm,
-        "stckGnrlDvdnAmt": stck_gnrl_dvdn_amt,
+        "scrsItmsKcdNm": stck_knd_nm,
+        "stckGenrDvdnAmt": stck_gnrl_dvdn_amt,
         "dvdnBasDt": dvdn_bas_dt,
-        "cshDvdnPayDt": csh_dvdn_pay_dt,
-        "dvdnRcdNm": dvdn_rcd_nm,
+        "cashDvdnPayDt": csh_dvdn_pay_dt,
+        "stckDvdnRcdNm": dvdn_rcd_nm,
     }
 
 
@@ -315,13 +315,18 @@ def test_mixed_common_and_preferred() -> None:
 
 @pytest.mark.parametrize("bas_dt", ["", "NOTADATE", "2024"])
 def test_missing_or_invalid_bas_dt_skipped(bas_dt: str) -> None:
-    """배당기준일 부재/비정상 → effective_date 산출 불가 → skip + warning."""
+    """배당기준일 부재/비정상 → record 미생성.
+
+    V2 는 crno 전체 history 를 반환하고 dvdnBasDt 를 요청 기간 [begin,end] 으로
+    클라이언트 필터하므로(서버 기간필터 부재), 빈/비정상 dvdnBasDt 는 기간 범위
+    비교(begin <= "" <= end == False 등)에서 자연히 탈락한다 → 요청 범위 밖
+    노이즈가 경고를 오염시키지 않음(record 0, 경고 불요). _convert_items 의
+    missing-dvdnBasDt 방어 경고는 in-period 항목에만 도달(여기선 미도달)."""
     adapter = _adapter_with_response(
         _divi_response(items=[_divi_item(dvdn_bas_dt=bas_dt)]),
     )
     result = _fetch(adapter)
     assert len(result.data) == 0
-    assert any("dvdnBasDt" in w for w in result.warnings)
 
 
 # =============================================================================
@@ -359,7 +364,9 @@ def test_calendar_range_error_does_not_drop_valid_dividends() -> None:
             _divi_item(stck_gnrl_dvdn_amt="600", dvdn_bas_dt="20991231"),
         ]),
     )
-    result = _fetch(adapter, calendar=cal)
+    # 다년 backfill 모사 — 두 dvdnBasDt 모두 요청 기간 안(클라 기간필터 통과)이되,
+    # 캘린더는 2024 만 verified → 20991231 은 캘린더 범위 밖 [DATA_GAP] 드롭.
+    result = _fetch(adapter, calendar=cal, begin="20200101", end="21001231")
     assert {r.cash_amount for r in result.data} == {Decimal("500")}
     assert any(
         DATA_GAP_PREFIX in w and "20991231" in w for w in result.warnings
@@ -485,7 +492,7 @@ def test_no_items_container_returns_empty() -> None:
 
 
 # =============================================================================
-# 10. params 캡처 — crno / beginBasDt / serviceKey 전달
+# 10. params 캡처 — crno / serviceKey 전달 (V2 는 beginBasDt/endBasDt 없음)
 # =============================================================================
 
 def test_request_params_captured() -> None:
@@ -503,10 +510,11 @@ def test_request_params_captured() -> None:
     _fetch(adapter, crno="1301110006246", begin="20240101", end="20241231")
 
     assert captured["crno"] == "1301110006246"
-    assert captured["beginBasDt"] == "20240101"
-    assert captured["endBasDt"] == "20241231"
     assert captured["serviceKey"] == "svc_key_xyz"
     assert captured["resultType"] == "json"
+    # V2 는 배당기간 서버필터 부재 → beginBasDt/endBasDt 미전송(클라 dvdnBasDt 필터).
+    assert "beginBasDt" not in captured
+    assert "endBasDt" not in captured
     assert captured["numOfRows"] == "100"
 
 
