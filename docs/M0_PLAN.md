@@ -117,51 +117,53 @@ T0 scaffold = `client/` + `server/` + README (ko/en) + `docker-compose.yml`
 
 ## 2. Acceptance (M0 종료 조건)
 
+> **구현 현황 (실측 검증 2026-06-18)**. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존(키·실데이터·자문·운영). 데이터(§2.2)·운영(§2.5) 다수는 코드는 준비됐으나 실데이터 적재/운영 cycle 에 게이트됨.
+
 ### 2.1 기능 (8 항목)
 
-- [ ] AC-F-01: Google OAuth 로그인 → 첫 진입 동의 모달 → 메인 진입
-- [ ] AC-F-02: 종목 검색 (한글 / 종목코드) 250ms 이내 응답
-- [ ] AC-F-03: Screener — 조건 추가/제거 + 결과 60fps (1만 종목 가상화)
-- [ ] AC-F-04: Stock Detail — 지표 카드 + 가격 차트 + 재무 시계열 표 (최근 4 분기)
-- [ ] AC-F-05: Compare — 2~6 종목 동시 비교 + 차트 오버레이
-- [ ] AC-F-06: Watchlist — 폴더링 + 종목 추가/제거 + 메모
-- [ ] AC-F-07: 조건셋 저장 / 불러오기
-- [ ] AC-F-08: Screen Run snapshot 저장 (§2.10)
+- [~] AC-F-01: Google OAuth 로그인 → 동의 모달 → 진입 — 코드 완비(`client/lib/auth.ts` GoogleProvider, `ConsentModal.tsx`)이나 실 OAuth 키 미설정 시 로그인 불가
+- [~] AC-F-02: 종목 검색 250ms — 코드 존재(`routes/stocks.py` /search), 250ms SLA 는 실데이터·실환경 측정 필요
+- [~] AC-F-03: Screener 60fps (1만 종목 **가상화**) — **가상화(useVirtualizer) 미구현, plain table 만**(plan §3 T36 "M0 scope 외" 명시)
+- [x] AC-F-04: Stock Detail 지표카드+가격차트+재무 시계열 — `stock/[code]/page.tsx`, `StockDetail/PriceChart.tsx`(lightweight-charts), `FinancialSeriesTable.tsx`
+- [x] AC-F-05: Compare 2~6 종목 + 차트 오버레이 — `compare/page.tsx`, `Compare/CompareChart.tsx`
+- [x] AC-F-06: Watchlist 폴더링+추가/제거+메모 — `watchlist/page.tsx`, `routes/watchlists.py`
+- [x] AC-F-07: 조건셋 저장/불러오기 — `routes/screener_sets.py`
+- [x] AC-F-08: Screen Run snapshot 저장 — `SaveRunButton.tsx`, `routes/runs.py`, `orm/screen_runs.py`
 
 ### 2.2 데이터 (6 항목)
 
-- [ ] AC-D-01: KOSPI/KOSDAQ 전 보통주 마스터 (~2,500 종목)
-- [ ] AC-D-02: 분기 재무제표 4 분기 이상 (~10,000 record)
-- [ ] AC-D-03: 가격 시계열 5 년 이상
-- [ ] AC-D-04: 휴장일 캘린더 정확성 (지난 3 년 검증)
-- [ ] AC-D-05: 모든 fact 에 `effective_date` 또는 `as_of` 보존
-- [ ] AC-D-06: 정정공시 → 새 record 추가 (기존 변경 X)
+- [blocked] AC-D-01: 전 보통주 마스터 (~2,500) — 코드 `batch/krx_daily.py`+`orm/stocks_master.py`, 실 적재 필요
+- [blocked] AC-D-02: 분기 재무제표 4분기+ — 코드 `batch/dart_daily.py`+`orm/financials.py`, DART 키+적재 필요
+- [blocked] AC-D-03: 가격 시계열 5년+ — 코드 `batch/krx_daily.py`+`orm/prices_daily.py`, 실 적재 필요
+- [~] AC-D-04: 휴장일 캘린더 정확성 (지난 3년) — `services/krx_calendar.py` 존재하나 **2024 단년만 verified**(T17.1 백로그). "3년" 미충족
+- [x] AC-D-05: 모든 fact `effective_date`/`as_of` 보존 — prices/financials/corporate_actions ORM + `pit_enforcer.py`
+- [x] AC-D-06: 정정공시 → 새 record(기존 변경 X) — `financials.py:superseded_by` chain + append-only trigger(migration 0007)
 
-### 2.3 10 기둥 conformance (10 항목)
+### 2.3 10 기둥 conformance (10 항목) — 전부 코드 확인
 
-- [ ] AC-P-01 (Fidelity): 모든 지표 값 hover/inspect → 식·출처·기준일 표시
-- [ ] AC-P-02 (No Advice): 금지 어휘 0 (코드 + 콘텐츠 + 이메일)
-- [ ] AC-P-03 (Active Inspection): 홈 화면이 추천 위젯 0
-- [ ] AC-P-04 (PIT): 모든 historical 쿼리가 PIT Enforcer 통과 (raw query path 없음)
-- [ ] AC-P-05 (Open Data): 유료 데이터 의존 0, 네이버/다음 크롤링 0
-- [ ] AC-P-06 (KRX-Native): K-IFRS 연결/별도 명시, 결산기 일급, 휴장일 일급
-- [ ] AC-P-07 (Observation): UI 에 사람 작성 텍스트 0 (공시 링크는 metadata 만)
-- [ ] AC-P-08 (Conformance): KRX·DART·K-IFRS 1차 자료 only, multi-id ambiguous indicators
-- [ ] AC-P-09 (Temporal Continuity): corporate action 보정 raw/adjusted 토글
-- [ ] AC-P-10 (Reproducibility): Screen Run snapshot DB schema + Save Run 버튼
+- [x] AC-P-01 (Fidelity): 값 hover → 식·출처·기준일 — `SourceAttribution.tsx` + `tools/check_source_attribution.py`
+- [x] AC-P-02 (No Advice): 금지 어휘 0 — `services/forbidden_words.py` + middleware + `shared/forbidden-words.json` + CI
+- [x] AC-P-03 (Active Inspection): 홈 추천 위젯 0 — `client/app/page.tsx`(QUICK_LINKS 만)
+- [x] AC-P-04 (PIT): 모든 historical 쿼리 PIT Enforcer — `pit_enforcer.py` + CI `tools/check_pit_bypass.py`
+- [x] AC-P-05 (Open Data): 유료/크롤링 0 — pykrx/FDR/DART/ECOS/KOSIS 공개 API only
+- [x] AC-P-06 (KRX-Native): K-IFRS 연결/별도·휴장일 일급 — `orm/financials.py`(ifrs_type) + `krx_calendar.py`
+- [x] AC-P-07 (Observation): UI 사람 작성 텍스트 0 — i18n 키만, 공시 링크 metadata
+- [x] AC-P-08 (Conformance): KRX·DART·K-IFRS 1차 자료 only
+- [x] AC-P-09 (Temporal Continuity): raw/adjusted 토글 — `price_adjuster.py` + `PriceChart.tsx`
+- [x] AC-P-10 (Reproducibility): snapshot schema + Save Run — `orm/screen_runs.py` + `SaveRunButton.tsx`
 
 ### 2.4 법적 (4 항목)
 
-- [ ] AC-L-01: 동의 모달 + footer disclaimer 모든 화면
-- [ ] AC-L-02: ADR-006 법률 자문 결과 반영
-- [ ] AC-L-03: 데이터 라이선스 footer 표기 (DART/KRX 출처)
-- [ ] AC-L-04: 개인정보처리방침 + 이용약관 작성·노출
+- [x] AC-L-01: 동의 모달 + footer disclaimer — `ConsentModal.tsx`, `DisclaimerFooter.tsx` + CI `check_disclaimer_coverage.py`
+- [blocked] AC-L-02: ADR-006 법률 자문 반영 — ADR-0006 D9 자문 미실시, ADR-0018/0019 파일 부재. 외부 자문 대기
+- [x] AC-L-03: 데이터 라이선스 footer 표기 — `DisclaimerFooter.tsx`(DART/KRX/pykrx/FDR)
+- [x] AC-L-04: 처리방침 + 이용약관 노출 — `app/privacy/page.tsx`, `app/terms/page.tsx`(1차 초안, 자문 후 확정)
 
 ### 2.5 운영 (3 항목)
 
-- [ ] AC-O-01: 일배치 (KRX 16:30 + DART 03:00) 7 일 연속 무결 성공
-- [ ] AC-O-02: Sentry 통합 + 일배치 실패 alert
-- [ ] AC-O-03: Adapter 충돌 (FDR vs pykrx 값 불일치) 감지 + 로그
+- [blocked] AC-O-01: 일배치 7일 연속 무결 — 코드 `batch/krx_daily.py`·`dart_daily.py`·`scheduler.py`, 실 운영 cycle 필요
+- [~] AC-O-02: Sentry 통합 + 실패 alert — `batch/alerts.py` Protocol + `LoggingAlertHandler` 만, **`SentryAlertHandler` 미구현**(alerts.py 주석 "별도 cycle")
+- [x] AC-O-03: Adapter 충돌(FDR vs pykrx) 감지 + 로그 — `services/conflict_detector.py` + `krx_daily.py` cross-check
 
 ---
 

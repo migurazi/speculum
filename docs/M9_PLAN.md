@@ -127,3 +127,32 @@ idempotent(UNIQUE 제약 — 같은 날 재수집 skip). 실 수집은 운영 cy
 deliverable #1~#5 구현 + KOSIS 거시지표 fetch→적재→field/표시 + vintage PIT(ECOS 일관) +
 월단위 freshness + Momus 전방위 OKAY + 전체 게이트(server pytest·ruff·forbidden / client
 관련) green. 외부 blocker 없음(KOSIS 무료 공개).
+
+---
+
+## §6 구현 현황 체크리스트 (실측 검증 2026-06-18)
+
+> 코드 적대적 검증. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존.
+
+### #1 KosisAdapter
+- [x] `adapters/kosis_adapter.py`(`SOURCE_KIND="KOSIS"`, `ADAPTER_VERSION="1.0.0"`, `fetch_statistic`) — statisticsData.do, objL1 단일, PRD_DE/DT 파싱, vintage=observed_date, indicator_id=`kosis/{org}/{tbl}/{itm}`
+- [x] err 분기(err 20 등 모든 JSON err→AdapterError 무재시도; 5xx/timeout→Retry) + apiKey 미포함 citation
+- [x] mock 테스트 26-case — `tests/test_adapters/test_kosis_adapter.py`
+
+### #2 field/factor 노출
+- [x] `kosis_unemployment_rate`/`kosis_employment_rate`/`kosis_industrial_production` `_RESOLUTIONS` + `_MACRO_INDICATORS`(market.py) 등록
+- [ ] **`kosis_leading_index`(경기선행지수) — 없음**(계획 §3 #2 에 명시됐으나 `_RESOLUTIONS`/`_MACRO_INDICATORS`/배치/테스트 전부 부재)
+- [x] CPI 제외(ECOS 1차 SoT) + `_resolve_macro_indicator` 무수정(generic)
+
+### #3 월단위 freshness
+- [x] `_SOURCE_KOSIS`·`_KOSIS_STALE_CALENDAR_DAYS=45`·`_assess_kosis()`·`DataFreshness.kosis` — `data_freshness.py:53,63,233,109` + 경계 테스트
+
+### #4 KOSIS 적재 배치
+- [x] `batch/kosis_daily.py`(`KosisDailyBatch`, dart_daily 패턴: per-indicator SAVEPOINT·idempotent·citation→record FK) + scheduler `run_kosis_job`("all"=corp-code→krx→ecos→kosis→dart→snapshot)
+- [blocked] 실 수집 — `KOSIS_API_KEY`(무료) + itmId/objL 식별자 `⚠ provisional`(실 키로 검증 필요)
+
+### #5 테스트
+- [x] adapter mock 26 + field resolve(`test_db_field_provider.py:1625`) + freshness 경계 + 배치 10-case + scheduler dispatch
+- [~] **MacroIndicatorRepository KOSIS 전용 vintage PIT 테스트 — 없음**(계획 §3 #5 명시). PIT 정합성은 Fake repo field-resolve 로 transitive 커버만, SQL-level KOSIS 전용 vintage isolation 테스트 부재
+
+**요약(2026-06-18)**: 5개 구조 deliverable(adapter·배치·freshness·field·테스트) **실재·non-trivial**. **실 갭 2건**: (1) `kosis_leading_index` field 미구현, (2) KOSIS 전용 repository vintage PIT 테스트 미작성(transitive 커버만). itmId/objL 는 provisional(실 키 검증 대기 = 외부). 외부 blocker: `KOSIS_API_KEY`(무료).

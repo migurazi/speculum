@@ -84,3 +84,46 @@ squash 직전 Momus 전방위 검토: 8기둥(Fidelity/No Advice/Conformance) + 
 ## 5. release blocker (직렬)
 1. ADR-0006 D9 변호사 자문(M2 잔여) — 세금(#5) 세무사 자문과 묶어 일괄 해소.
 2. 백테스트 survivorship universe 데이터 레벨 선검증.
+
+---
+
+## 6. 구현 현황 체크리스트 (실측 검증 2026-06-18)
+
+> 코드 적대적 검증(문서의 "완료" 표기를 신뢰하지 않고 실제 코드 대조). 범례:
+> `[x]` 코드 확인 완료 / `[~]` 부분 구현·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존(자문·키·실데이터·운영).
+
+### #2 공시 metadata (ADR-0026) — 완료
+- [x] T-M3-01 `fetch_disclosure_list` — `adapters/dart_adapter.py:531` (list.json, on-demand) + `test_dart_disclosure.py`
+- [x] T-M3-02 `GET /api/stocks/{code}/disclosures` — `api/routes/stocks.py:531` (corp_code 매핑 + as_of PIT)
+- [x] T-M3-03 client `StockDetail/DisclosurePanel.tsx` + `lib/api/disclosures.ts`
+- [x] T-M3-04 `disclosure-panel-gate.test.tsx` + `test_api/test_disclosures.py`
+
+### #1 백테스트 (ADR-0027) — 완료
+- [x] backtest engine as_of 그리드 rebalance + PIT 횡단면 — `services/backtest_engine.py:run_backtest`
+- [x] freeze schema — `schemas/backtest.py:FreezeOut`(result_hash/pack_content_hash/batch_id/conditions/data_versions)
+- [x] route `api/routes/backtest.py` + client `Backtest/BacktestPanel.tsx` + `backtest-visual-gate.test.tsx`
+- [x] 거래비용(수수료 1.5bp + 거래세 15bp) default 강제 노출(0 숨김 불가) — `backtest_engine.py:100`
+- [x] survivorship 디스클로저(`missing_price_ratio`/`survivorship_complete`) + grayscale + 디스클레이머 게이트
+- [blocked] survivorship 실데이터 backfill(폐지종목 과거 OHLCV) — `survivorship_complete=True` 는 운영 적재 후에만 가능
+
+### #3 Factor pack community (ADR-0028) — 완료(명칭 drift 1건)
+- [x] USER_SHARED scope 활성화 — `forbidden_words.py:105` + `custom_packs.py:253` public 토글 게이트
+- [~] `list_for_community()` — **실제 심볼은 `list_public()`** (`custom_pack_repository.py:218`, 의미 동일·계획 명칭과 차이)
+- [x] 공유/import route(`factor_packs.py` import-check/import) + client `CommunityPackBrowser.tsx` + content_hash fail-loud + 큐레이션 0
+
+### #4 Portfolio 회계 (ADR-0029) — 완료
+- [x] `PortfolioPosition` — `services/portfolio_position.py` / route `portfolio.py` / `Portfolio/PortfolioPanel.tsx` / ORM `portfolio_transactions.py`
+- [x] grayscale(손익색 0, ADR-0029 D3) + 수동 입력만(증권사 연동 0) + 세전(세금 미결합) + CA 보정
+- [~] USER_PRIVATE — **구조적 강제**(공유 route 자체 부재)이며 명시 `scope=USER_PRIVATE` assert 호출은 아님(의도 충족)
+
+### #5 세금 계산 (ADR-0030) — 코드 완료, 운영 blocked
+- [x] 증권거래세 계산기 — `services/securities_transaction_tax.py`(효력일 freeze 세율표) / route `tax.py` / 디스클레이머 게이트
+- [x] 양도세 미구현(의도대로) — `test_api/test_tax.py:test_no_capital_gains_endpoint` 404
+- [blocked] 세무사+변호사 자문 — release blocker(코드 외)
+
+### #6 AI 통합 (ADR-0031) — 코드 완료, 운영 blocked
+- [x] 구조화 사실추출 — `services/disclosure_fact_extraction.py`(요약 아님·필드 추출) + LLM 출력 SYSTEM forbidden-words 게이트
+- [x] LLM adapter 추상화 — `services/llm/anthropic_fact_extractor.py`(키 없으면 `build_default_fact_extractor()`→None) + client `DisclosureFactsPanel.tsx`
+- [blocked] 운영 LLM 연동(`ANTHROPIC_API_KEY`) — fake extractor 로만 테스트
+
+**요약(2026-06-18)**: 6개 기능 전부 **코드 구현·테스트 완료** — claimed-done-but-no-code 0건. 외부 blocker만 잔존(#5 세무/변호사 자문, #6 운영 LLM 키, #1 survivorship 실데이터). 단일 명칭 drift: #3 `list_for_community`→`list_public`(의미 동일).

@@ -109,3 +109,43 @@ squash 직전 Momus 전방위 검토: 8기둥(특히 **§2.10 Reproducibility = 
 4. #5 게이트 시점 → #3 client-fetch URL import.
 5. #4 provenance metadata → #6 license 표시.
 6. Momus §6 종료 검토 → squash. (운영 노출은 release blocker 1 자문 후.)
+
+---
+
+## 8. 구현 현황 체크리스트 (실측 검증 2026-06-18)
+
+> 코드 적대적 검증. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존.
+
+### #1 JCS 재현 recipe lock (Critical)
+- [x] schema `decimalString` 제약(지수표기·leading-zero 금지) — `shared/schemas/factor-pack-v1.json:164` (const/weights/winsorize 적용)
+- [x] `_jcs.py` 결정성(sort_keys·ensure_ascii=False·allow_nan=False) — `services/_jcs.py:75`
+- [x] Python 측 conformance golden anchor — `tests/test_jcs_conformance.py`(golden hash `sha256:39c17d9e…`)
+- [x] AST 재귀 depth cap(`_MAX_AST_NESTING=64`) — `services/factor_pack.py:198`
+- [ ] **client(Node/vitest) cross-runtime JCS conformance fixture — 없음**. `client/lib/factor/` 디렉터리는 존재하나 **hash 계산 코드가 없다**(`pack-io.ts:19` 가 content_hash 를 backend 에 위임) → 계획의 "server pytest + client vitest 양쪽" 미충족. `FACTOR_PACK_FORMAT.md §5` 가 "client 는 server import-check verdict 사용" 으로 known-limit 문서화(외부 구현자는 Python golden anchor 로 검증 가능)
+
+### #2 spec 문서 + validator
+- [x] `docs/FACTOR_PACK_FORMAT.md` — 필드표·JCS recipe(§5)·golden fixture
+- [x] `tools/validate_pack.py` standalone CLI(thin wrapper, exit 0/1/2)
+- [x] 예제 pack `examples/factor-packs/example-debt-ratio-v1.0.0.json` + CI parity `tests/test_validate_pack_cli.py`
+
+### #3 client-fetch URL import
+- [x] `Lab/PackIO.tsx` URL input + fetch + 1MiB/JSON 가드 + CORS fallback 안내
+- [x] content_hash 불일치 fail-loud UI(경고, 비차단 — ADR-0032 D2 일관)
+- [x] 백엔드 신규 fetch 경로 0(SSRF surface 미추가, 확인됨)
+
+### #5 외부 pack forbidden-words 게이트 시점
+- [x] import-check/import route 가 `assert_clean(USER_SHARED)`(name/desc) — `factor_packs.py:400` `_gate_import_pack_meta`
+- [x] client 는 게이트 통과분만 렌더(`PackIO.tsx:219`) + `validate_pack.py` 발행 게이트
+
+### #4 provenance
+- [x] migration `source_url` 컬럼 — `alembic/…0020_custom_packs_source_url.py` / ORM `custom_packs.py:91`
+- [~] `imported_at`/`imported_from` 컬럼 — **미구현**(계획 T-M4-04a 에 명시됐으나 `source_url` 만 추가). provenance 핵심 의도는 충족
+- [x] import→save provenance 기록 + hash 불변 회귀(`test_source_url_does_not_affect_content_hash`)
+
+### #6 license/citation 표시
+- [x] `Lab/PackAttribution.tsx`(license+publisher+source_url, https만 링크) + `PackLibrary.tsx` provenance row + `PackAttribution.test.tsx`
+
+### release blocker
+- [blocked] ADR-0006 변호사 재자문(제3자 factor 콘텐츠 fetch·표시·공유의 material expansion)
+
+**요약(2026-06-18)**: #2·#3·#5·#6 + #1 Python 측 완료. **실 갭 1건**: #1 의 client(Node) cross-runtime conformance fixture 부재(아키텍처상 client 가 hash 미계산이라 known-limit 으로 문서화됨 — 계획 문구 기준으로는 미충족). 경미: #4 `imported_at`/`imported_from` 미추가(`source_url` 로 갈음).

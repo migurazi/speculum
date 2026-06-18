@@ -247,3 +247,40 @@ publisher 인증 사칭 차단(#3 handle 일치 게이트·예약 handle)·표�
 - `shared/schemas/factor-pack-v1.json:26-41` v1 pack_slug pattern·publisher(불변).
 - `tests/test_jcs_conformance.py`·`test_reproduce_pack_reload.py`(#5 회귀 anchor).
 - M2 NextAuth·ADR-0002 D4·ADR-0025 D5·ADR-0032 D1·ADR-0006.
+
+---
+
+## 7. 구현 현황 체크리스트 (실측 검증 2026-06-18)
+
+> 코드 적대적 검증. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존.
+
+### #1 v2 namespace schema
+- [x] `shared/schemas/factor-pack-v2.json` — `pack_slug` `^@{publisher}/{slug}$`, maxLength 128, publisher display-only
+- [x] 예약 prefix 거부 — `services/publisher_identity.py:_RESERVED_HANDLES`(claim route 422; 계획의 custom_packs.py:96 대신 publisher_identity 경로로 구현, 동등)
+- [x] `derive_tier` `@`→community 분기(v1 무영향) — `factor_pack_identity.py:65` + 테스트
+
+### #2 v1/v2 dual-load registry
+- [x] `@` slug → custom 경로 자동(별도 분기 불필요), v1 byte-불변, data_versions 신규 키 0 — `pack_registry.py:156`
+- [x] v2 reproduce = hash-only `load_pack_from_body`(schema dispatch 불요) — `pack_registry.py:59` + `test_reproduce_pack_reload.py`
+
+### #3 publisher 인증 발급 (publishers 테이블)
+- [x] `publishers` 테이블 migration(user_id FK UNIQUE + handle UNIQUE, append-only) — `alembic/…0021_publishers.py` + ORM
+- [x] 사칭 차단(save route `verify_publisher_owns_slug`→403) — `custom_packs.py:139`
+- [x] handle claim endpoint `POST /api/publishers`(예약 422/중복 409) — `api/routes/publishers.py`
+
+### #4 v2 pack 생성·검증·import·저장
+- [x] v1/v2 validator dispatch(`$schema` URI 기준, v1 byte-불변) — `factor_pack.py:_select_validator`/`_VALIDATORS` + 테스트
+- [x] derive_tier(community)·forbidden-words·content_hash·citation 게이트 v2 적용 + ≤128 UniqueConstraint + e2e 저장 테스트
+
+### #5 v1 불변 회귀 가드
+- [x] v1 content_hash golden anchor — `test_jcs_conformance.py`(golden 불변)
+- [x] v1 result_hash + reproduce 불변(data_versions 키 0) — `test_reproduce_pack_reload.py`
+- [x] cross-pack identity 회귀(community-community first-wins) — `test_factor_pack_identity.py:131`
+
+### #6 인증 identity 표시
+- [x] `Lab/PackAttribution.tsx`(`@{publisher}/{slug}` + "인증된 publisher(이 인스턴스)" + 외부권위 미보증 disclosure, grayscale) + `PublisherClaim.tsx` + i18n + 테스트
+
+### release blocker
+- [blocked] ADR-0006 재자문(제3자 publisher 콘텐츠 식별·호스팅 강화, M-2 조건부) — 코드 작업 무관, 운영 노출만 게이트
+
+**요약(2026-06-18)**: 6개 deliverable **전부 코드 구현·테스트 완료, overclaim 0건**. 핵심 3요소(v2 schema·publishers 테이블·v1/v2 validator dispatch) 모두 실재. 경미한 구조 차이: 예약 prefix 게이트를 publisher_identity claim 경로에 둠(계획 위치와 다르나 더 안전). 외부 blocker: ADR-0006 재자문(조건부).

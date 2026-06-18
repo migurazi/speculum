@@ -23,10 +23,12 @@ DART/KRX   PIT 토글            Notes              Pack share
 
 | Milestone | Version | 시점(추정) | 추정 기간 | 상태 |
 |---|---|---|---|---|
-| **M0** | `0.1.0` | 2026-08~10 | 3~5 개월 | **planning** |
-| **M1** | `0.5.0` | M0 + 2~4 개월 | 2~4 개월 | outlook |
-| **M2** | `1.0.0` | M1 + 4~6 개월 | 4~6 개월 | outlook |
+| **M0** | `0.1.0` | 2026-08~10 | 3~5 개월 | 코드 구현 완료 (v0.1.0 태그 없이 v1.0.0 통합, release blocker: 자문) |
+| **M1** | `0.5.0` | M0 + 2~4 개월 | 2~4 개월 | 코드 구현 완료 (잔여: T53/T54 backfill) |
+| **M2** | `1.0.0` | M1 + 4~6 개월 | 4~6 개월 | 코드 구현 완료 (tag v1.0.0 부착, ETF 데이터 deferred) |
 | **M3** | `1.x` | M2 + ? | ? | **구현 완료 (release blocker: 자문)** |
+
+> **현황 종합은 §8 (실측 검증 2026-06-18) 참조.** M0~M9 전 마일스톤이 squash `dbeee96` 계열로 develop 에 통합·`v1.0.0` 태그 부착됨. 위 "추정 기간/시점" 은 최초 기획 시 추정이며 실제 진행과 무관.
 
 ---
 
@@ -161,3 +163,28 @@ ROADMAP §5 의 6개 후보를 **단일 M3** 로 확정·구현 완료(2026-06-0
 - 블로거·연구자가 자신의 팩터를 Factor Lab pack 으로 git 에 올리고 다른 사람이 import 해서 재현
 - 백테스트 결과의 신뢰성이 PIT 데이터 layer 덕분에 환상이 아닌 것이 확인됨
 - 누구도 "Speculum 이 추천한 종목" 이라 부르지 않음 — Speculum 은 추천하지 않으므로
+
+---
+
+## 8. 구현 현황 종합 (실측 검증 2026-06-18)
+
+> 각 마일스톤 plan 문서에 **세부 체크리스트**를 추가하고, 코드 적대적 검증(문서의 "완료" 표기를 신뢰하지 않고 실제 코드 대조)으로 표기. 마일스톤별 상세는 각 `M*_PLAN.md` 의 "구현 현황 체크리스트" 섹션 참조.
+
+| 마일스톤 | 테마 | 코드 상태 | 실 갭 (코드 없음/계획과 차이) |
+|---|---|---|---|
+| M0 | MVP 4뷰 + 1차 파이프라인 | 구현 완료 | AC-F-03 Screener 가상화 미구현, AC-O-02 SentryAlertHandler 미구현, 캘린더 2024 단년만 |
+| M1 | 확장뷰 + PIT + ECOS | 구현 완료 | T53 list.json backfill 스크립트 부재(rcept_no 로 설계 대체), T54 기존 row 소급 정밀화 backfill 미구현 |
+| M2 | Factor Lab + 멀티유저 + universe | 구현 완료 | ETF NAV/괴리율/AUM 데이터 어댑터 부재(R4 deferred) |
+| M3 | outlook 6종(백테스트·Portfolio·세금·AI 등) | 구현 완료 | 없음(명칭 drift 1건: `list_public`) |
+| M4 | Open Format / Community pack | 구현 완료 | #1 client(Node) cross-runtime JCS conformance fixture 부재(known-limit 문서화), `imported_at/from` 컬럼 미추가 |
+| M5 | 재현성·신뢰성 검증 layer | 구현 완료 | `tools/verify_run.py` 미구현, 후보 어휘(초과수익/승률) 미추가(deferred) |
+| M6 | Factor pack identity v2 (publisher namespace) | 구현 완료 | 없음 |
+| M7 | Total Return + 배당 layer | **부분** | ⚠ #2 배당 수집이 DART→FSC 로 선회 + **배치 미배선**(실 배당 적재 경로 부재), #6 차트 total-return 3-변이 토글 미구현, `close_price_total_return` field 부재 |
+| M8 | AI 운영 마일스톤 (ADR-0031) | 구현 완료 | 운영 LLM 키만 외부 blocker |
+| M9 | KOSIS 거시지표 | 구현 완료 | `kosis_leading_index` field 부재, KOSIS 전용 vintage PIT 테스트 부재 |
+
+### 정직한 결론
+- **대부분의 마일스톤은 코드·테스트가 실재**한다. 단 메모리/문서의 "100% 완료" 는 **부정확** — 위 "실 갭" 들은 실제 코드에 없거나 계획과 다르다.
+- **가장 큰 doc↔code 괴리 = M7**: 배당 데이터 실 적재 배치가 배선되지 않았고(adapter 코어만), 차트 total-return 토글이 미구현이다. "완료" 로 기록돼 있었으나 실제로는 미완.
+- **외부 blocker(코드 무관)**: 변호사/세무사 자문(ADR-0006/0030), 운영 데이터 적재(DART/ECOS/KOSIS/FSC API 키), 운영 LLM 키(ADR-0031), survivorship 실데이터 backfill.
+- **순수 코드 잔여 작업 후보**: M7 배당 배치 배선 + 차트 3-변이 토글, M5 `tools/verify_run.py`, M9 `kosis_leading_index`, M4 client JCS fixture, M0 Screener 가상화·SentryAlertHandler.

@@ -185,3 +185,44 @@ M4 가 pack 을 **열린 포맷**으로 만들었다면, M5 는 그 위에서 �
 - `server/app/repositories/pit_protocols.py:50,83` — effective_date PIT 키(#1 키 정정).
 - `shared/forbidden-words.json:55-91` — 성과 어휘 기등록(#5 재정의).
 - 재현 byte-동일 불변식 = ADR-0025 D5 / `docs/work-orders/m1-t48c-reproduction.md`(ADR-0020=append-only·ADR-0032=provenance 와 구분).
+
+---
+
+## 7. 구현 현황 체크리스트 (실측 검증 2026-06-18)
+
+> 코드 적대적 검증. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존.
+
+### #1 PIT look-ahead runtime 게이트 (§2.4/§2.9)
+- [x] `assert_no_lookahead`(+ macro 용 `assert_no_vintage_lookahead`) — `services/pit_enforcer.py:169,202`
+- [x] **운영 serve 경로에 실제 배선**(test-only 아님) — `sql_repositories.py` prices/financials/market_cap/treasury/corporate_action(announced 축만)/macro(vintage) 6종 + `caching_repositories.py` serve-time assert
+- [x] 적대적 회귀(stub 주입 fail-loud) — `tests/test_db/test_pit_runtime_gate_integration.py`
+- [~] distribution 경로 — repo 경유로 transitive 커버(`test_distribution_input_is_pit`), 전용 stub-assert 테스트는 없음
+- [x] backtest 가격 경로 — 동일 `SqlPriceRepository` 배선
+
+### #2 survivorship·비용 사실 고지 (M3 상속)
+- [x] server `missing_price_ratio`/`survivorship_complete`/`cost_assumptions`(숨김 불가) — `backtest_engine.py:187`
+- [x] client survivorship 경고 + 비용 표시 + `backtest-visual-gate.test.tsx`
+
+### #3 재현 무결성: backtest 신설 + screen 강화 (계획상 핵심 격차)
+- [x] **`reproduce_backtest` 신설(존재·동작)** — `services/reproduce.py:495` + endpoint `api/routes/backtest.py:282`
+- [x] FreezeOut 재현 입력 운반(conditions/data_versions/pack_slug/version/engine_version) — `schemas/backtest.py:135`
+- [x] baseline equity_curve 별도 운반(result_hash 입력 불변) — `BacktestReproduceIn.equity_curve`
+- [x] cutoff 주입 재실행(`_resolve_cutoff` krx/dart) — `reproduce.py:603`
+- [x] `pack_tampered` bool 분리(backtest+screen) — `schemas/backtest.py:252`·`schemas/screen.py:432`
+- [x] 회귀: round-trip matches=True / pack-hash mismatch matches=False — `test_backtest_engine.py:451,570`
+- [ ] **T-M5-03c `tools/verify_run.py` offline CLI — 없음**(계획에 thin wrapper 로 명시됐으나 미구현)
+- [~] screen 측 `pack_tampered=True` 산출 전용 적대적 테스트 미확인(필드·매핑은 존재)
+
+### #4 데이터 신선도·정정 미반영 추적
+- [x] 신선도(배치 실패→stale, KRX/DART/KOSIS 임계) — `services/data_freshness.py:113`
+- [x] 정정 chain-diff(restatement_lag, financial-only known-limit) — `services/restatement_lag.py:72` + endpoint `runs.py:439` + 테스트
+
+### #5 No Advice 게이트 신규 출력 경로 검증
+- [x] `tools/check_forbidden_words.py` 가 신규 출력 문자열(packTampered·freshness i18n) 스캔(제외 목록에 없음)
+- [~] 후보 어휘 "초과수익"/"승률" — **`shared/forbidden-words.json` 에 미추가**(계획상 ADR-0033 확정 후행 deferred). 기존 어휘로 신규 출력은 사실 문자열이라 위반 0
+
+### #6 client 신뢰성 표시(중립 배지)
+- [x] backtest matches/pack_tampered 배지 + DataFreshnessPanel(grayscale) + `reproduce-trust-gate.test.tsx` + i18n
+- [~] screen run/reproduce 화면의 pack_tampered 배지 렌더 전용 테스트 미확인(매핑 `lib/api/runs.ts` 는 존재)
+
+**요약(2026-06-18)**: 계획이 "핵심 격차"로 지목한 **backtest reproduce·PIT runtime 게이트는 완전 구현·테스트됨**. **실 갭 2건**: (1) `tools/verify_run.py` 미구현, (2) 후보 어휘 초과수익/승률 미추가(의도적 deferred). 부분: distribution 전용 PIT 테스트·screen pack_tampered 전용 테스트는 transitive 커버만.

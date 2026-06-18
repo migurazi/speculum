@@ -97,24 +97,30 @@ M1(확장 뷰 + PIT + 거시지표 표시)에서 **"데이터를 정직하게 �
 
 ## 4. Acceptance Criteria (M2 종료 조건, 초안)
 
-### 기능
-- [ ] AC-M2-F-01: Google OAuth 로그인 + user 세션, 미인증 정책(§7 결정대로)
-- [ ] AC-M2-F-02: Factor Lab DAG(Primary→Derived→Composite) 정의·저장·JSON export
-- [ ] AC-M2-F-03: custom pack import + canonical/community/custom identity 구분 + 충돌 명시 매핑
-- [ ] AC-M2-F-04: 종목별 Notes CRUD(user-scoped, Markdown, sanitize)
-- [ ] AC-M2-F-05: ETF/우선주/리츠 뷰 + 전용 factor(출처 동반)
-- [ ] AC-M2-F-06: Screener self-identifying JSON export + 재현
-- [ ] AC-M2-F-07: 정정공시 history view
+> **구현 현황 (실측 검증 2026-06-18)**. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존. Tasks T68~T84 도 검증함(아래 요약). tag `v1.0.0` 은 실제 부착됨(squash `dbeee96` 계열).
 
-### 정합성 (8 기둥) — 자동 게이트 우선
-- [ ] AC-M2-C-01: **빌트인 multi-factor score/weighted factor 0** (T73 CI 게이트로 자동 강제, 수동 검토 아님)
-- [ ] AC-M2-C-02: Composite **출력 시각 요소**(등락색/랭킹 라벨/하이라이트) 0 (T74 시각 게이트)
-- [ ] AC-M2-C-03: Composite 는 사용자 정의만 + 산출식·가중치 항상 visible (Fidelity §2.1)
-- [ ] AC-M2-C-04: user 격리 — 본인 외 데이터 접근 0 (우회 negative test 403/404)
-- [ ] AC-M2-C-05: 가격/재무/매크로 fact user 무관, **M1 저장 run 을 마이그레이션 후 user 무관 재현 → result_hash byte 동일**(user_id 는 hash 입력 아님, ADR-0021 D5)
-- [ ] AC-M2-C-06: Factor DAG 정적 acyclic, 순환 정의 저장 거부 (fail-loud)
-- [ ] AC-M2-C-07: ECOS factor 입력 `vintage_date<=as_of` PIT
-- [ ] AC-M2-C-08: Momus M2 review OKAY (M1 회귀 0)
+### 기능
+- [blocked] AC-M2-F-01: Google OAuth + user 세션 — 코드 골격 완비(`client/lib/auth.ts`, `dependencies/auth.py`, users 테이블 FK migration 0012), **실 Google credential 미주입**(외부 blocker, conformance deferred)
+- [x] AC-M2-F-02: Factor Lab DAG 정의·저장·JSON export — `Lab/FactorForm.tsx`, `routes/factor_packs.py`(export), `routes/custom_packs.py`(DB 영속 저장)
+- [x] AC-M2-F-03: custom pack import + 3-tier identity + 충돌 명시 매핑 — `services/factor_pack_identity.py`, `Lab/ImportConflictResolver.tsx`(canonical replace 금지)
+- [x] AC-M2-F-04: Notes CRUD(user-scoped, Markdown, sanitize) — `routes/notes.py`, `lib/markdown.ts`(DOMPurify), `markdown-xss-chokepoint-gate.test.tsx`
+- [~] AC-M2-F-05: ETF/우선주/리츠 뷰 + 전용 factor — security_type 컬럼/CHECK + `SecurityTypeSelector.tsx` + 리츠 reference pack 완료. **ETF NAV/괴리율/AUM 데이터 어댑터 부재**(R4 deferred, conformance 명시)
+- [x] AC-M2-F-06: self-identifying JSON export + 재현 — `routes/runs.py:236` export/reproduce, `Runs/ReproduceImport.tsx`
+- [x] AC-M2-F-07: 정정공시 history view — `routes/stocks.py:461` + `StockDetail/RestatementHistory.tsx`
+
+### 정합성 (8 기둥) — 자동 게이트 우선 (전부 코드 확인)
+- [x] AC-M2-C-01: 빌트인 composite/weighted factor 0 — `factor_pack.py:469` `validate_builtin_no_composite()`(load 시 자동)
+- [x] AC-M2-C-02: Composite 출력 시각요소 0 — `lab-visual-gate.test.tsx`(neutral 톤·랭킹 배지 부재)
+- [x] AC-M2-C-03: Composite 사용자 정의만 + 산출식·가중치 visible — `Lab/FormulaPreview.tsx`
+- [x] AC-M2-C-04: user 격리(우회 403/404) — `test_screen_runs.py:256`, `test_custom_packs.py:215`(IDOR negative test 다수)
+- [x] AC-M2-C-05: M1 run 마이그레이션 후 user 무관 재현 byte-동일 — `screen_run.py:318`(user_id hash 입력 아님) + `test_auth_jwt.py:18`
+- [x] AC-M2-C-06: Factor DAG 정적 acyclic 저장 거부 — `factor_pack.py:488` `validate_acyclic()`(3색 DFS) `CyclicDependency`
+- [x] AC-M2-C-07: ECOS factor 입력 `vintage_date<=as_of` PIT — `db_field_provider.py:905` 이중 PIT
+- [x] AC-M2-C-08: Momus M2 review OKAY(M1 회귀 0) — `m2-conformance-review.md`(Critical 0/High 0)
+
+**Tasks T68~T84 요약**: T68 OAuth 골격·T69 users FK+격리·T70a/b ADR-0022+validate_acyclic·T71~T75 Factor Lab(editor/composite/CI 게이트/시각 게이트/import 매핑)·T76 Notes·T77~T79 universe(뷰/CHECK, ETF 데이터 deferred)·T80 self-identifying·T81 ECOS factor·T82 정정 history·T83 Momus OKAY·**T84 tag v1.0.0 부착됨** — 전부 구현. claimed-done-but-no-code 0건.
+
+**요약(2026-06-18)**: M2 전체 코드 구현·테스트 완료. 외부/의도 한계: AC-M2-F-01 OAuth credential(외부), AC-M2-F-05 ETF/리츠 데이터 어댑터(R4 deferred), §8 의 V-M2-* intended-limit(트리거 불가·FK 부재 등) 유지.
 
 ---
 

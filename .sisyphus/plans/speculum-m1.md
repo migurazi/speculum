@@ -103,28 +103,40 @@ M0(4뷰 MVP + KRX/DART 1차 파이프라인)는 코드 완성. M0에서 **"구�
 
 ## 4. Acceptance Criteria (M1 종료 조건)
 
+> **구현 현황 (실측 검증 2026-06-18)**. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존. Tasks T48~T67 도 함께 검증함(대부분 구현 완료; 주의 항목은 T53/T54).
+
+### Tasks (요점)
+- [x] T48 batch_id freeze(`SNAPSHOT_SCHEMA_VERSION` + krx/dart_batch_id) — `snapshot_versions.py`
+- [x] T49 ADR-0020 append-only + alembic trigger / T50 `DbFieldProvider` 실 wiring(stub 제거) / T51 `trading_value_20d_avg` 20영업일 / T52 재현성 테스트
+- [~] T53 DART list.json fetch — adapter 는 구현(`dart_adapter.py:531`)이나 **계획상 rate-limit backfill 스크립트는 부재**(ADR-0012 D6 가 rcept_no 직접 추출로 대체 — 설계 변경)
+- [~] T54 effective_date 정밀화 — 신규 적재는 정밀, **기존 row 소급 정밀화 backfill 배치 미구현**(`effective_date_precise` 컬럼·신규 ingest 한정)
+- [x] T56~T59 lightweight-charts + PriceChart/CompareChart + chart-visual-gate / T60 `/api/market-overview` / T61 Market Overview view / T62~T64 ecos_adapter + vintage / T66 Momus OKAY / T67 i18n CI 게이트
+- [blocked] T65 ECOS 약관 변호사 검토
+
 ### 기능
-- [ ] AC-M1-F-04: Stock Detail 가격차트(raw/adjusted 토글) + 재무 시계열 표 (M0 AC-F-04 완성)
-- [ ] AC-M1-F-05: Compare 차트 오버레이 + 정책 버전 tooltip (M0 AC-F-05 완성)
-- [ ] AC-M1-F-09: Sector/Market Overview view + 홈 시장통계 (실데이터)
-- [ ] AC-M1-F-10: 4뷰가 FieldProvider 실평가로 동작 (precomputed stub 0)
+- [x] AC-M1-F-04: Stock Detail 가격차트(raw/adjusted 토글) + 재무 시계열 — `StockDetail/PriceChart.tsx`, `FinancialSeriesTable.tsx`
+- [x] AC-M1-F-05: Compare 차트 오버레이 + 정책 버전 tooltip — `Compare/CompareChart.tsx`(adj_policy 라벨)
+- [x] AC-M1-F-09: Sector/Market Overview view + 홈 시장통계 — `client/app/market/page.tsx`
+- [x] AC-M1-F-10: 4뷰 FieldProvider 실평가(stub 0) — `services/db_field_provider.py` `_RESOLUTIONS`, `routes/stocks.py:73`
 
 ### 재현성·PIT (10 기둥)
-- [ ] AC-M1-P-01: factor 값이 동일 (as_of + batch_id)에서 byte-동일
-- [ ] AC-M1-P-02: 저장된 Screen Run 재실행 시 result_hash 동일, 또는 `data_versions` diff에 batch_id 변경 explicit 노출
-- [ ] AC-M1-P-03: 모든 입력 테이블 append-only (UPDATE 0건 — 정밀화/정정 모두 supersede chain)
-- [ ] AC-M1-P-04: C 정밀화 후 `effective_date<=as_of` 위반 0, 정밀값 ≤ 보수추정값
-- [ ] AC-M1-P-05: ECOS 각 값에 `vintage_date` 보존, `as_of<vintage_date` 값은 조회 제외
-- [ ] AC-M1-P-06: market-overview 집계의 모든 입력이 `effective_date<=as_of`
-- [ ] AC-M1-P-07: 20영업일 window = KRX 캘린더 기준, 상장<20일·거래정지 종목 N/A
+- [x] AC-M1-P-01: factor 값 byte-동일(as_of+batch_id) — `test_db/test_field_provider_reproducibility.py`
+- [x] AC-M1-P-02: Screen Run 재실행 result_hash 동일/batch_id diff explicit — `test_db/test_reproduction.py`
+- [x] AC-M1-P-03: 입력 테이블 append-only(UPDATE 0) — ADR-0020 + alembic trigger 0007 + `test_append_only_invariant.py`
+- [~] AC-M1-P-04: 정밀화 후 위반 0, 정밀값≤보수추정 — **신규 fetch 한정 검증**(기존 row 소급 정밀화 backfill 없음, `effective_date_precise=false` 잔존)
+- [x] AC-M1-P-05: ECOS `vintage_date` 보존, future-vintage 제외 — `test_db/test_macro_indicator_repository.py`
+- [x] AC-M1-P-06: market-overview 입력 `effective_date<=as_of` — `routes/market.py`→DbFieldProvider PIT
+- [x] AC-M1-P-07: 20영업일 window KRX 캘린더, <20일/정지 N/A — `db_field_provider.py:785`
 
 ### 정합성·무회귀
-- [ ] AC-M1-C-01: Momus M1 review OKAY (V1/V3 회귀 0)
-- [ ] AC-M1-C-02: 차트·overview 시각 요소가 Active Inspection·No Advice 위반 0 (T59 gate 통과)
-- [ ] AC-M1-C-03: ECOS 표시에 해석 텍스트 0 (Observation 기둥)
+- [x] AC-M1-C-01: Momus M1 review OKAY(V1/V3 회귀 0) — `m1-milestone.md:178`
+- [x] AC-M1-C-02: 차트·overview 시각 요소 위반 0 — `chart-visual-gate.test.tsx`
+- [x] AC-M1-C-03: ECOS 표시 해석 텍스트 0 — `market/page.tsx`, `schemas/market.py`(값+출처+기준일만)
 
 ### 법적 (release 의존)
-- [ ] AC-M1-L-01: ECOS API 이용약관 변호사 검토 (V6 합류, release blocker)
+- [blocked] AC-M1-L-01: ECOS API 약관 변호사 검토 (V6, release blocker)
+
+**요약(2026-06-18)**: M1 본체(FieldProvider 실연결·batch_id freeze·append-only·차트·market-overview·ECOS)는 **코드 구현·테스트 완료**. **실 갭**: T53 list.json backfill 스크립트(rcept_no 직접추출로 설계 대체)·T54 기존 row 소급 정밀화 backfill 미구현(신규 ingest 만 정밀). AC-M1-L-01 외부 자문.
 
 ---
 

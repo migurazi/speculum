@@ -169,3 +169,39 @@ client typecheck·lint·vitest·build·check:i18n) green.
 
 **release blocker(코드외)**: 세후 total return은 세무 자문 의존(§1 유보). 세전 M7은
 자문 무관 — 사실(공시 배당) 기반.
+
+---
+
+## §6 구현 현황 체크리스트 (실측 검증 2026-06-18)
+
+> 코드 적대적 검증. 범례: `[x]` 코드 확인 / `[~]` 부분·계획과 차이 / `[ ]` 코드 없음 / `[blocked]` 외부 의존.
+> **주의**: 이 마일스톤은 계획과 실제 코드 간 차이가 가장 크다(아래 ⚠ 항목).
+
+### #1 현금배당 PIT 데이터 layer — 완료
+- [x] `DividendRepository` Protocol+Fake+SQL, `fetch_dividends(code, as_of)` dual-PIT(announced + effective<=as_of) — `pit_protocols.py:731`·`sql_repositories.py:1106`·`fakes.py:784`
+- [x] PIT 경계 테스트 — `test_db/test_dividend_repository.py`(supersede chain 포함)
+
+### #2 DART 배당결정 공시 수집 — ⚠ 계획과 다름·배치 미배선
+- [ ] **DART `alotMatter.json` `fetch_cash_dividends` — 없음**. 계획은 DART alotMatter(+pykrx cross-check)였으나 **구현은 다른 소스(`FscDividendAdapter`, 금융위 `getDiviInfo`)로 선회**
+- [~] `FscDividendAdapter.fetch_cash_dividends` 존재(`adapters/fsc_dividend_adapter.py:196` + 14-case mock test) — **그러나 `batch/scheduler.py` 에 dividend/FSC job 미배선**(배치 cycle 부재, adapter 코어만)
+- [blocked] pykrx 배당락일 cross-check — 미구현(FSC docstring 이 "#2 후속 DART cross-ref" 로 deferred)
+
+### #3 TotalReturnAdjuster — 완료
+- [x] 별도 모듈 `services/total_return_adjuster.py`(`_POLICY_MATRIX` 미접촉), 배당락일 재투자, `TOTAL_RETURN_POLICY_VERSION="1.0"` + `POLICY_CONTENT_HASH` + 테스트
+
+### #4 field/factor 등록 — 완료(명칭 1건 차이)
+- [x] `dividend_per_share_trailing_annual` 실데이터 연결 — `db_field_provider.py:362`
+- [x] `total_return_trailing_1y` field — `db_field_provider.py:372`(`_resolve_total_return_trailing_1y`)
+- [ ] **`close_price_total_return` field — 없음**(계획 명칭). 실제는 `total_return_trailing_1y`(스칼라 derived)로 대체
+- [x] `speculum-builtin-v1.1.0.json`(`price-return:total-annual`) 신설 + v1.0.0 보존 + `DEFAULT_PACK`→"1.1.0" — `factor_pack.py:807`
+
+### #5 §2.10 격리 — 완료
+- [x] `SNAPSHOT_SCHEMA_VERSION="1.3"` + `dividend_batch_id`(source FSC) + `TOTAL_RETURN_POLICY_VERSION`/`total_return_policy_hash` — `snapshot_versions.py:108,162,183`
+- [x] v1.2 frozen run result_hash byte-불변 golden anchor + diff_versions `("",new)` fallback — `test_screen_run.py:249`
+
+### #6 client 표시 — ⚠ 3-변이 토글 미완
+- [~] 차트 변이 토글 — **현재 raw/adjusted 2-변이만**(`PriceChart.tsx`). 계획의 "원주가/권리락/권리락+배당재투자(Total Return)" 3-변이 중 **total-return 변이·데이터 바인딩 없음**
+- [x] 세전 disclosure — `StockDetail/PreTaxDisclosure.tsx` + i18n + `pretax-disclosure-gate.test.tsx`
+- [~] multi-ID(PackAttribution) 신규 factor 출처 표시 — stock detail 전용 배선 미확인
+
+**요약(2026-06-18)**: #1·#3·#5 완료. **실 갭 3건**: (1) #2 DART alotMatter 대신 FSC 로 선회 + **배치 미배선**(실 배당 적재 경로 부재), (2) #4 `close_price_total_return` field 미존재(`total_return_trailing_1y` 로 대체), (3) #6 차트 total-return 3-변이 토글 미구현. **M7 은 메모리상 "완료" 였으나 실제로는 #2 배치·#6 토글이 미완** — 가장 큰 doc↔code 괴리.
