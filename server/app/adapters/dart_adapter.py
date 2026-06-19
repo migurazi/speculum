@@ -57,7 +57,12 @@ from app.adapters.base import (
 from app.adapters.dart_account_mapper import is_unmapped, map_ifrs_account
 from app.models.source_citation import SourceCitation, SourceKind
 
-__all__ = ["DartAdapter", "DisclosureItem", "TreasurySharesResult"]
+__all__ = [
+    "CompanyInfo",
+    "DartAdapter",
+    "DisclosureItem",
+    "TreasurySharesResult",
+]
 
 
 # DART OpenAPI base URL (2026 기준 — opendart.fss.or.kr).
@@ -163,6 +168,32 @@ class DisclosureItem:
     rcept_date: date
     rcept_no: str
     dart_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyInfo:
+    """`fetch_company_info` 의 기업개황 — crno(법인등록번호) 매핑 layer 전용.
+
+    DART `company.json`(기업개황) 응답에서 **식별자 매핑에 필요한 필드만** 추출.
+    M7 #2 crno 매핑(KRX 종목코드 ↔ 법인등록번호)의 source — FscDividendAdapter 가
+    배당 조회 키로 crno 를 받기 때문에 종목코드→crno 매핑이 필요하다. corpCode.xml
+    (종목코드↔corp_code)에는 crno 가 없어 corp_code 별 company.json 의 `jurir_no`
+    필드로 보강한다 (CorpCodeMapping 과 동일하게 **citation 무관 매핑 layer** —
+    ADR-0002 D3, 1차 사실 아님).
+
+    Attributes:
+        corp_code: DART 8자리 회사코드 (요청 키 echo).
+        corp_name: 정식 회사명 (`corp_name`). 진단/감사용.
+        stock_code: KRX 6자리 단축코드 (`stock_code`). 상장사만 채워짐 — 비상장/
+            이상 format 은 빈 문자열 (cross-check 용, 매핑 키 아님).
+        jurir_no: 법인등록번호(crno) — 하이픈/공백 제거 후 13자리 numeric. DART 가
+            빈 값/이상 format 으로 줄 수 있어 빈 문자열 가능 (호출자가 skip 판정).
+    """
+
+    corp_code: str
+    corp_name: str
+    stock_code: str
+    jurir_no: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -647,6 +678,63 @@ class DartAdapter(DataSourceAdapter):
             data=ordered,
             citations=(citation,),
             warnings=tuple(warnings),
+        )
+
+    def fetch_company_info(self, *, corp_code: str) -> CompanyInfo:
+        """단일 회사의 기업개황 fetch — crno(법인등록번호) 매핑 source (M7 #2).
+
+        DART `company.json`(기업개황) 을 corp_code 로 조회해 `jurir_no`(법인등록번호
+        = crno) 를 추출한다. CorpCodeMapping(종목코드↔corp_code) 위에 corp_code →
+        crno 한 단계를 더해 최종적으로 종목코드 → crno 매핑을 구축하기 위함
+        (CrnoBootstrap 가 본 메서드를 corp_code 별로 호출). batch/영속화는 호출자
+        책임 — 본 메서드는 단일 회사 변환만.
+
+        jurir_no 정규화: DART 가 "130111-0006246" 처럼 하이픈을 넣거나 공백을 줄 수
+        있어 비숫자(하이픈/공백)를 제거한다. 결과가 13자리 numeric 이 아니면
+        **빈 문자열로 반환**(raise X) — 일부 회사가 jurir_no 를 비워 둘 수 있으므로
+        조용한 실패 대신 호출자가 skip + 카운트로 가시화하게 한다(§2.1, corpCode
+        bootstrap 의 skipped 통계 패턴 일관).
+
+        Args:
+            corp_code: DART 8자리 회사코드. 호출자(CrnoBootstrap)가 CorpCodeMapping
+                에서 해소.
+
+        Returns:
+            CompanyInfo — corp_code/corp_name/stock_code/jurir_no. jurir_no 는
+            13자리 numeric 또는 빈 문자열(format 위반/부재).
+
+        Raises:
+            AdapterError: 입력 검증 실패, API key 미설정, DART status code
+                non-rate-limit 에러(auth·013 데이터없음 포함 — 유효 corp_code 는
+                개황이 반드시 있어야 함, `_call_dart` 가 raise).
+            AdapterRetryError: DART status "020"(요청 제한) 또는 네트워크 단절.
+        """
+        _validate_corp_code(corp_code)
+
+        params = {
+            "crtfc_key": self._resolve_api_key(),
+            "corp_code": corp_code,
+        }
+        client = self._get_http_client()
+        context = f"fetch_company_info(corp={corp_code})"
+        response_json = self._call_dart(
+            client=client,
+            endpoint="company.json",
+            params=params,
+            context=context,
+        )
+
+        # jurir_no — 하이픈/공백 등 비숫자 제거 후 13자리 검증. 위반 시 빈 문자열
+        # (호출자 skip + 카운트). corp_name/stock_code 는 진단/cross-check 용 그대로.
+        raw_jurir = str(response_json.get("jurir_no", "")).strip()
+        digits = "".join(ch for ch in raw_jurir if ch.isdigit())
+        jurir_no = digits if len(digits) == 13 else ""
+
+        return CompanyInfo(
+            corp_code=corp_code,
+            corp_name=str(response_json.get("corp_name", "")).strip(),
+            stock_code=str(response_json.get("stock_code", "")).strip(),
+            jurir_no=jurir_no,
         )
 
     # -------------------------------------------------------------------------

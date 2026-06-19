@@ -40,6 +40,7 @@ from app.adapters.dart_account_mapper import (
     map_ifrs_account,
 )
 from app.adapters.dart_adapter import (
+    CompanyInfo,
     DartAdapter,
     _disclosure_deadline,
     _rcept_date,
@@ -1099,3 +1100,86 @@ def test_fetch_treasury_shares_only_preferred_stock_is_missing() -> None:
         fiscal_year=2023, fiscal_quarter=4, batch_id=uuid4(),
     )
     assert result.data.shares_treasury is None
+
+
+# =============================================================================
+# fetch_company_info — crno(jurir_no) 매핑 source (M7 #2)
+# =============================================================================
+
+def _company_response(
+    *,
+    status: str = "000",
+    jurir_no: str = "1301110006246",
+    corp_name: str = "삼성전자",
+    stock_code: str = "005930",
+) -> dict[str, Any]:
+    """DART company.json 정상 응답 mock (필요 필드만)."""
+    return {
+        "status": status,
+        "message": "정상",
+        "corp_name": corp_name,
+        "stock_code": stock_code,
+        "jurir_no": jurir_no,
+    }
+
+
+def test_fetch_company_info_returns_jurir_no() -> None:
+    """정상 — 13자리 jurir_no + corp_name/stock_code 추출."""
+    adapter = _adapter_with_response(_company_response())
+    info = adapter.fetch_company_info(corp_code="00126380")
+    assert isinstance(info, CompanyInfo)
+    assert info.corp_code == "00126380"
+    assert info.jurir_no == "1301110006246"
+    assert info.corp_name == "삼성전자"
+    assert info.stock_code == "005930"
+
+
+def test_fetch_company_info_normalizes_hyphenated_jurir() -> None:
+    """하이픈 포함 jurir_no("130111-0006246") → 비숫자 제거 후 13자리."""
+    adapter = _adapter_with_response(
+        _company_response(jurir_no="130111-0006246")
+    )
+    info = adapter.fetch_company_info(corp_code="00126380")
+    assert info.jurir_no == "1301110006246"
+
+
+def test_fetch_company_info_empty_jurir_when_absent() -> None:
+    """jurir_no 부재 → 빈 문자열(raise X — 호출자 skip)."""
+    adapter = _adapter_with_response(_company_response(jurir_no=""))
+    info = adapter.fetch_company_info(corp_code="00126380")
+    assert info.jurir_no == ""
+
+
+def test_fetch_company_info_empty_jurir_when_wrong_length() -> None:
+    """jurir_no 가 13자리 아님(자릿수 위반) → 빈 문자열."""
+    adapter = _adapter_with_response(_company_response(jurir_no="12345"))
+    info = adapter.fetch_company_info(corp_code="00126380")
+    assert info.jurir_no == ""
+
+
+def test_fetch_company_info_auth_failure_raises() -> None:
+    """status 010(인증 실패) → AdapterError."""
+    adapter = _adapter_with_response(_company_response(status="010"))
+    with pytest.raises(AdapterError):
+        adapter.fetch_company_info(corp_code="00126380")
+
+
+def test_fetch_company_info_rate_limit_raises_retry() -> None:
+    """status 020(요청 제한) → AdapterRetryError."""
+    adapter = _adapter_with_response(_company_response(status="020"))
+    with pytest.raises(AdapterRetryError):
+        adapter.fetch_company_info(corp_code="00126380")
+
+
+def test_fetch_company_info_no_data_raises() -> None:
+    """status 013(데이터 없음) → AdapterError(유효 corp_code 는 개황 必)."""
+    adapter = _adapter_with_response(_company_response(status="013"))
+    with pytest.raises(AdapterError):
+        adapter.fetch_company_info(corp_code="00126380")
+
+
+def test_fetch_company_info_invalid_corp_code_raises() -> None:
+    """corp_code 8자리 numeric 아님 → AdapterError(입력 검증)."""
+    adapter = _adapter_with_response(_company_response())
+    with pytest.raises(AdapterError):
+        adapter.fetch_company_info(corp_code="123")

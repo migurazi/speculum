@@ -90,6 +90,24 @@
   한계 명시).
 - 배당 수집 배치(`dart_dividend` cycle) — 기존 `dart_daily` 배치 패턴. batch_id 발급.
 
+**구현 진화 (2026-06)**: 배당 출처가 DART `alotMatter` → **금융위 공공데이터
+GetStocDiviInfoService_V2**(ADR-0035 D3)로 변경. `FscDividendAdapter` 가 crno(법인
+등록번호)를 배당 조회 키로 받는다.
+
+**crno 매핑 인프라 — ✅ Slice 1 구현 완료 (2026-06-19)**:
+- `DartAdapter.fetch_company_info(corp_code)`(`app/adapters/dart_adapter.py`) +
+  `CompanyInfo` dataclass — DART `company.json` 의 `jurir_no`(=crno) fetch. 비숫자
+  제거 후 13자리 검증, 위반 시 빈 문자열(호출자 skip, §2.1). 기존 DART 키 사용.
+- `CrnoMapping`(`app/services/crno_mapping.py`) — 종목코드→crno 단방향 immutable.
+  **N:1 허용**(보통주·우선주 같은 법인 crno 공유 — CorpCodeMapping 1:1 과의 차이).
+- `CrnoBootstrap`(`batch/crno_bootstrap.py`) — CorpCodeMapping 의 corp_code 별
+  company.json 호출 → stock→crno dict + JSON 디스크 캐시(TTL 30일, crno 사실상
+  불변). per-stock AdapterError skip+카운트, AdapterRetryError re-raise(부분 캐시
+  방지). 캐시 format 위반 시 degrade 재빌드. test +26(adapter 8·mapping 7·boot 11).
+- oracle-medium SHIP(Critical 0). **잔여 Slice 2 = `dividend_daily.py` orchestrator**
+  (CrnoMapping + FscDividendAdapter + DividendRepository.save_dividends) + scheduler
+  "dividend" job 등록 + `all` 순서 합류.
+
 ### #3 TotalReturnAdjuster (세전, 별도 모듈 — D1)
 - 신규 `services/total_return_adjuster.py` — `_POLICY_MATRIX` **미접촉**(POLICY_CONTENT_HASH
   불변). adjusted 종가 + 배당락일 시점 배당 재투자 → 누적 비율(factor). 세전.
