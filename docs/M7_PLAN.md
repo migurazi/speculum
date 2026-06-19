@@ -214,9 +214,11 @@ client typecheck·lint·vitest·build·check:i18n) green.
 - [x] `SNAPSHOT_SCHEMA_VERSION="1.3"` + `dividend_batch_id`(source FSC) + `TOTAL_RETURN_POLICY_VERSION`/`total_return_policy_hash` — `snapshot_versions.py:108,162,183`
 - [x] v1.2 frozen run result_hash byte-불변 golden anchor + diff_versions `("",new)` fallback — `test_screen_run.py:249`
 
-### #6 client 표시 — ⚠ 3-변이 토글 미완
-- [~] 차트 변이 토글 — **현재 raw/adjusted 2-변이만**(`PriceChart.tsx`). 계획의 "원주가/권리락/권리락+배당재투자(Total Return)" 3-변이 중 **total-return 변이·데이터 바인딩 없음**
-- [x] 세전 disclosure — `StockDetail/PreTaxDisclosure.tsx` + i18n + `pretax-disclosure-gate.test.tsx`
+### #6 client 표시 — ✅ 3-변이 토글 완료 (2026-06-19 갱신)
+- [x] 차트 변이 토글 — **raw/adjusted/total-return 3-변이**(`PriceChart.tsx`). total-return 변이는 server `GET /api/stocks/{code}/total-return`(lazy fetch)로 데이터 바인딩. 위 #6 본문(line 147) "구현 완료" 참조
+- [x] 세전 disclosure — `StockDetail/PreTaxDisclosure.tsx` + i18n + `pretax-disclosure-gate.test.tsx`. total-return 모드 인라인 고지도 추가
 - [~] multi-ID(PackAttribution) 신규 factor 출처 표시 — stock detail 전용 배선 미확인
 
-**요약(2026-06-18)**: #1·#3·#5 완료. **실 갭 3건**: (1) #2 DART alotMatter 대신 FSC 로 선회 + **배치 미배선**(실 배당 적재 경로 부재), (2) #4 `close_price_total_return` field 미존재(`total_return_trailing_1y` 로 대체), (3) #6 차트 total-return 3-변이 토글 미구현. **M7 은 메모리상 "완료" 였으나 실제로는 #2 배치·#6 토글이 미완** — 가장 큰 doc↔code 괴리.
+**요약(2026-06-18 감사)**: #1·#3·#5 완료. 실 갭 3건: (1) #2 FSC 선회 + 배치 미배선, (2) #4 `close_price_total_return` field 미존재(`total_return_trailing_1y` 로 대체), (3) #6 차트 total-return 토글 미구현.
+
+**갱신(2026-06-19)**: 갭 (3) #6 토글 **구현 완료**(위 #6 본문). 갭 (1) #2 배당 배치는 **crno 매핑 인프라(Slice 1) 구현 완료**(위 #2 본문) — 잔여 = `dividend_daily.py` orchestrator(Slice 2). 갭 (2) #4 명칭 차이는 설계 의도(스칼라 derived)로 확정. **잔여 코드 갭 = #2 Slice 2(배당 배치 배선)뿐**.
