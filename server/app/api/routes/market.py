@@ -91,10 +91,12 @@ _MACRO_INDICATORS: Final[tuple[tuple[str, str], ...]] = (
     ("722Y001/0101000", "한국은행 기준금리"),
     ("901Y009/0", "소비자물가지수"),
     # KOSIS — 통계청 고유 지표 (ECOS 미보유, M9 #2, ADR-0036 D5/D6)
-    # ⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL 최종 확정 필요 (잠정 itmId)
-    ("kosis/101/DT_1DA7107S/T10", "실업률"),
-    ("kosis/101/DT_1DA7001S/T20", "고용률"),
-    ("kosis/101/DT_1IN0001/T10", "전산업생산지수"),
+    # tblId/itmId 라이브 실측 검증됨(2026-06-18). db_field_provider _RESOLUTIONS 와
+    # 동일 id 집합(test_macro_field_ids_match_market_overview_display 가 강제).
+    ("kosis/101/DT_1DA7001S/T80", "실업률"),
+    ("kosis/101/DT_1DA7001S/T90", "고용률"),
+    ("kosis/101/DT_1JH20201/T1", "전산업생산지수"),
+    ("kosis/101/DT_1C8015/T1", "경기선행지수"),
 )
 
 

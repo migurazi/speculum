@@ -324,32 +324,40 @@ _RESOLUTIONS: Final[dict[str, FieldResolution]] = {
     # macro_repo 미주입(None) 시 정식 N/A — ECOS 선례 동일.
     # 표시(_MACRO_INDICATORS in market.py) + factor field 둘 다 등록 (ADR-0007 D5 현 효력, ADR-0036 D6).
     #
-    # ⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL 최종 확정 필요:
-    #   statisticsData.do?method=getMeta 또는 실 응답으로 itmId·objL1 검증 후 교체.
-    #   현재 itmId는 잠정(provisional) 값 — field 등록 구조 목적, 실 데이터는 #4 배치/운영.
+    # indicator_id = "kosis/{orgId}/{tblId}/{itmId}" (objL1 은 id 에 미포함 — 배치
+    # _KOSIS_INDICATORS 의 obj_l 필드가 보유). 아래 tblId/itmId 는 **라이브 실측
+    # 검증됨(2026-06-18, Param/statisticsParameterData.do 로 실데이터 반환 확인)**:
+    #   실업률·고용률 = 경제활동인구조사 월별 표 DT_1DA7001S(itm T80/T90),
+    #   전산업생산 = 산업활동동향 DT_1JH20201(원지수 T1),
+    #   경기선행 = 경기종합지수 DT_1C8015(T1). (배치의 objL1 도 실측 검증.)
     "kosis_unemployment_rate": FieldResolution(
         field="kosis_unemployment_rate", kind="macro_indicator",
-        indicator_id="kosis/101/DT_1DA7107S/T10",
-        note="KOSIS 통계청 실업률 (tblId=DT_1DA7107S). "
+        indicator_id="kosis/101/DT_1DA7001S/T80",
+        note="KOSIS 통계청 실업률 (경제활동인구조사 DT_1DA7001S, itm=T80, objL1=0 성별 계). "
              "ECOS 미보유 통계청 고유 지표 — ECOS 1차 SoT(ADR-0036 D5). "
-             "macro_repo 미주입 시 정식 N/A. "
-             "⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL 최종 확정 필요",
+             "macro_repo 미주입 시 정식 N/A. 라이브 검증됨(2026-06-18).",
     ),
     "kosis_employment_rate": FieldResolution(
         field="kosis_employment_rate", kind="macro_indicator",
-        indicator_id="kosis/101/DT_1DA7001S/T20",
-        note="KOSIS 통계청 고용률 (tblId=DT_1DA7001S). "
+        indicator_id="kosis/101/DT_1DA7001S/T90",
+        note="KOSIS 통계청 고용률 (경제활동인구조사 DT_1DA7001S, itm=T90, objL1=0 성별 계). "
              "ECOS 미보유 통계청 고유 지표 — ECOS 1차 SoT(ADR-0036 D5). "
-             "macro_repo 미주입 시 정식 N/A. "
-             "⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL 최종 확정 필요",
+             "macro_repo 미주입 시 정식 N/A. 라이브 검증됨(2026-06-18).",
     ),
     "kosis_industrial_production": FieldResolution(
         field="kosis_industrial_production", kind="macro_indicator",
-        indicator_id="kosis/101/DT_1IN0001/T10",
-        note="KOSIS 통계청 전산업생산지수 (tblId=DT_1IN0001). "
+        indicator_id="kosis/101/DT_1JH20201/T1",
+        note="KOSIS 통계청 전산업생산지수 (산업활동동향 원지수 DT_1JH20201, itm=T1, "
+             "objL1=0 농림어업 제외). ECOS 미보유 통계청 고유 지표 — ECOS 1차 SoT(ADR-0036 D5). "
+             "macro_repo 미주입 시 정식 N/A. 라이브 검증됨(2026-06-18).",
+    ),
+    "kosis_leading_index": FieldResolution(
+        field="kosis_leading_index", kind="macro_indicator",
+        indicator_id="kosis/101/DT_1C8015/T1",
+        note="KOSIS 통계청 경기선행지수 (경기종합지수 DT_1C8015, itm=T1, objL1=A00 선행종합지수). "
              "ECOS 미보유 통계청 고유 지표 — ECOS 1차 SoT(ADR-0036 D5). "
-             "macro_repo 미주입 시 정식 N/A. "
-             "⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL 최종 확정 필요",
+             "M9_PLAN §3 #2 의 '경기선행/동행지수' 중 선행. macro_repo 미주입 시 정식 N/A. "
+             "라이브 검증됨(2026-06-18).",
     ),
     # ----- 주당배당 trailing-annual (corporate_actions cash_dividend 집계, M7 #4) -----
     # DividendRepository.fetch_dividends (이중 PIT — announced<=as_of AND

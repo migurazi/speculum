@@ -19,12 +19,17 @@
 KOSIS 지표 목록 (_KOSIS_INDICATORS):
     dart_daily 의 "종목 loop" 에 대응하는 "지표 loop". 각 항목은
     (org_id, tbl_id, itm_id, obj_l, prd_se, label) 5-tuple.
-    현재 3 지표 — 실업률(DT_1DA7107S/T10), 고용률(DT_1DA7001S/T20),
-    전산업생산지수(DT_1IN0001/T10).
+    현재 4 지표 (전부 라이브 실측 검증 2026-06-18) —
+      · 실업률    DT_1DA7001S / T80 / objL1=0  (경제활동인구조사, 월별)
+      · 고용률    DT_1DA7001S / T90 / objL1=0  (동일 표)
+      · 전산업생산 DT_1JH20201 / T1  / objL1=0  (산업활동동향 원지수, 농림어업 제외)
+      · 경기선행  DT_1C8015   / T1  / objL1=A00 (경기종합지수, 선행종합지수 2020=100)
 
-    ⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL1 최종 확정 필요:
-        statisticsData.do?method=getMeta 또는 실 응답으로 itmId·objL1 검증 후
-        아래 상수 교체. 현재 itmId/objL1 은 잠정(provisional) 값.
+    ⚠ 과거 모든 KOSIS getList 가 `err=20 필수요청변수 누락` 으로 실패했는데, 원인은
+      계정/키가 아니라 **adapter 의 endpoint 오류**였다(키는 유효). 데이터 조회 정본은
+      `Param/statisticsParameterData.do` 이며, `statisticsData.do?method=getList` 는
+      동일 파라미터로도 err=20 을 낸다(getMeta 만 그 경로 동작). kosis_adapter.py
+      `_KOSIS_API_ENDPOINT` 에서 수정 완료. 키 형식은 raw base64 그대로(디코딩 시 err=11).
 
 설계 결정:
 1. **sync orchestration** — codebase 일관 (DartDailyBatch 동일).
@@ -91,32 +96,45 @@ class _KosisIndicator(NamedTuple):
 # 통계청 기관 ID — 공통.
 _ORG_ID_STATISTICS_KOREA: Final[str] = "101"
 
-# KOSIS 지표 loop 대상. db_field_provider.py _RESOLUTIONS 의 KOSIS 3종과 동일.
-# ⚠ 운영 KOSIS_API_KEY 메타로 itmId/objL1 최종 확정 필요 (provisional).
+# KOSIS 지표 loop 대상. db_field_provider.py _RESOLUTIONS 의 KOSIS 4종과 동일
+# (test_kosis_batch_indicator_ids_match_field_resolutions 가 id 일치 강제).
+# tbl_id/itm_id/obj_l 전부 라이브 실측 검증됨(2026-06-18, Param/statisticsParameterData.do
+# 로 실데이터 반환 확인). 실업률·고용률은 경제활동인구조사 월별 단일 표(DT_1DA7001S)에
+# 공존(itm T80/T90), 성별 축 objL1="0"(계). 전산업생산=산업활동동향 DT_1JH20201(원지수
+# T1, 산업별 축 objL1="0" 농림어업 제외). 경기선행=경기종합지수 DT_1C8015(T1, 지수별
+# 축 objL1="A00" 선행종합지수). 전부 prdSe="M".
 _KOSIS_INDICATORS: Final[tuple[_KosisIndicator, ...]] = (
     _KosisIndicator(
         org_id=_ORG_ID_STATISTICS_KOREA,
-        tbl_id="DT_1DA7107S",
-        itm_id="T10",
-        obj_l="ALL",   # ⚠ provisional — 운영 메타 확인 필요
+        tbl_id="DT_1DA7001S",   # 경제활동인구조사 (월별)
+        itm_id="T80",           # 실업률
+        obj_l="0",              # 성별 = 계
         prd_se="M",
         label="kosis_unemployment_rate",
     ),
     _KosisIndicator(
         org_id=_ORG_ID_STATISTICS_KOREA,
-        tbl_id="DT_1DA7001S",
-        itm_id="T20",
-        obj_l="ALL",   # ⚠ provisional — 운영 메타 확인 필요
+        tbl_id="DT_1DA7001S",   # 동일 표 — 고용률 항목
+        itm_id="T90",           # 고용률
+        obj_l="0",              # 성별 = 계
         prd_se="M",
         label="kosis_employment_rate",
     ),
     _KosisIndicator(
         org_id=_ORG_ID_STATISTICS_KOREA,
-        tbl_id="DT_1IN0001",
-        itm_id="T10",
-        obj_l="ALL",   # ⚠ provisional — 운영 메타 확인 필요
+        tbl_id="DT_1JH20201",   # 산업활동동향 전산업생산지수(원지수)
+        itm_id="T1",            # 원지수
+        obj_l="0",              # 산업별 = 전산업생산지수(농림어업 제외)
         prd_se="M",
         label="kosis_industrial_production",
+    ),
+    _KosisIndicator(
+        org_id=_ORG_ID_STATISTICS_KOREA,
+        tbl_id="DT_1C8015",     # 경기종합지수
+        itm_id="T1",            # 경기종합지수
+        obj_l="A00",            # 지수별 = 선행종합지수(2020=100)
+        prd_se="M",
+        label="kosis_leading_index",
     ),
 )
 
@@ -321,7 +339,7 @@ class KosisDailyBatch:
         """배치 종료 시 batch_runs row finalize (UPDATE).
 
         failure_count>0 이면 status='partial', 아니면 'success'. KOSIS 는 지표
-        3개라 1개 실패 = 의미있는 부분실패 — 운영 alerting 필요. partial 도
+        수가 적어(현재 4개) 1개 실패도 의미있는 부분실패 — 운영 alerting 필요. partial 도
         성공분의 실 데이터를 commit 했으므로 freeze 후보·freshness 자격은
         success 와 동일 (collect_batch_versions / latest_successful 가 둘 다
         수용) — 라벨만 운영 가시성 위해 분리 (dart_daily 동일 패턴).

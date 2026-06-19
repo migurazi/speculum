@@ -5,14 +5,14 @@ skip. 본 smoke 의 목적은 **KOSIS 응답 schema 회귀 방어** — mock 단
 잡지 못하는 실 API 형식 변화를 nightly 가 포착한다.
 
 테스트 매트릭스 (smoke):
-    1. fetch_statistic — 통계청 실업률 (DT_1DA7107S/T10, 월별) 호출 성공.
+    1. fetch_statistic — 통계청 실업률 (경제활동인구조사 DT_1DA7001S/T80, 월별,
+       성별 계 objL1=0) 호출 + 실데이터 반환.
 
-⚠ provisional 주의 (kosis_daily.py 동일 경고):
-    _KOSIS_INDICATORS 의 itmId/objL 은 잠정값이다. 운영 KOSIS_API_KEY 메타로
-    최종 확정 전에는 실 호출이 성공(HTTP 200)해도 data 가 0 row 일 수 있다.
-    따라서 본 smoke 는 **호출이 AdapterError 없이 완료되는지**(엔드포인트 도달 +
-    인증 + 응답 파싱)까지만 강제하고, data 비어있음은 skip 으로 처리한다 — itmId/
-    objL 확정 후 data 검증을 강화하는 것이 후속 work-order.
+엔드포인트 주의: KOSIS 통계자료 조회 정본은 `Param/statisticsParameterData.do`
+(kosis_adapter `_KOSIS_API_ENDPOINT`). 과거 `statisticsData.do?method=getList`
+오용으로 모든 호출이 err=20 이었음 — 2026-06-18 실측으로 endpoint + tblId/itmId/
+objL1 전부 확정·검증 완료. 따라서 본 smoke 는 **데이터 반환까지 강제**한다(빈 결과·
+영구 AdapterError 는 fail). 일시적 네트워크 오류(AdapterRetryError)만 skip.
 """
 
 from __future__ import annotations
@@ -23,22 +23,22 @@ from uuid import uuid4
 
 import pytest
 
-from app.adapters.base import AdapterError
+from app.adapters.base import AdapterRetryError
 from app.adapters.kosis_adapter import KosisAdapter
 
 pytestmark = pytest.mark.integration
 
 
-# 통계청 실업률 — KOSIS 통계표/항목 코드 (월별). kosis_daily 배치
-# kosis_unemployment_rate 지표와 동일 (itmId/objL provisional).
+# 통계청 실업률 — 경제활동인구조사 월별 표 (라이브 검증 2026-06-18). kosis_daily
+# 배치 kosis_unemployment_rate 지표와 동일.
 _ORG_ID = "101"
-_TBL_ID = "DT_1DA7107S"
-_ITM_ID = "T10"
-_OBJ_L = "ALL"
+_TBL_ID = "DT_1DA7001S"
+_ITM_ID = "T80"
+_OBJ_L = "0"
 
 
 def test_fetch_unemployment_rate_smoke(kosis_api_key: str | None) -> None:
-    """실업률 최근 12 개월 fetch — 엔드포인트 도달 + 인증 + 파싱 성공."""
+    """실업률 최근 12 개월 fetch — 엔드포인트 도달 + 인증 + 파싱 + 실데이터."""
     if kosis_api_key is None:
         pytest.skip("KOSIS_API_KEY env 미설정 — secret 미주입 환경")
 
@@ -60,26 +60,19 @@ def test_fetch_unemployment_rate_smoke(kosis_api_key: str | None) -> None:
                 batch_id=uuid4(),
                 observed_date=today,
             )
-        except AdapterError as exc:
-            # ⚠ provisional itmId/objL 단계 — objL 불일치가 KOSIS err 로 올 수
-            # 있어 (인증/형식 포함) 관대하게 전부 skip. itmId/objL 확정 후에는
-            # ECOS smoke 처럼 `except AdapterRetryError` 로 좁혀 인증/형식 오류를
-            # fail 로 강화하는 것이 후속 work-order (kosis_daily.py 경고 참조).
-            pytest.skip(f"KOSIS fetch_statistic 비가용 ({start}~{end}): {exc}")
+        except AdapterRetryError as exc:
+            # 일시적 장애(HTTP 5xx/timeout/connect)만 관대 skip — 영구 AdapterError
+            # (인증/형식/통계표 오류)는 config 가 검증됐으므로 fail 로 전파한다.
+            pytest.skip(f"KOSIS 일시 비가용 ({start}~{end}): {exc}")
 
-        # ⚠ provisional itmId/objL — data 0 row 가능. 호출 성공(여기 도달) 자체가
-        # 엔드포인트 도달 + 인증의 1차 검증. data 비면 schema 검증 skip.
-        if not result.data:
-            pytest.skip(
-                f"KOSIS 실업률 빈 결과 ({start}~{end}) — itmId/objL provisional "
-                f"또는 윈도우 이슈 (kosis_daily.py 경고 참조)"
-            )
-
-        # data 있으면 MacroIndicatorRow schema 회귀 검증 (ECOS smoke 대칭).
+        # config 검증 완료 — 실데이터 반환을 강제(빈 결과 = 회귀).
+        assert result.data, f"KOSIS 실업률 빈 결과 ({start}~{end}) — 회귀 의심"
         assert len(result.citations) >= 1
+
+        # MacroIndicatorRow schema 회귀 검증 (ECOS smoke 대칭).
         row = result.data[0]
         # KOSIS indicator_id 규약: f"kosis/{org_id}/{tbl_id}/{itm_id}"
-        # (kosis_adapter.py L37, MacroIndicatorRecord.indicator_id 와 1:1).
+        # (kosis_adapter.py, MacroIndicatorRecord.indicator_id 와 1:1).
         assert row.indicator_id == f"kosis/{_ORG_ID}/{_TBL_ID}/{_ITM_ID}"
         assert isinstance(row.value, Decimal)
         assert row.vintage_date == today

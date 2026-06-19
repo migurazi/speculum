@@ -1616,10 +1616,11 @@ def test_ecos_macro_request_scoped_caching() -> None:
 # 25-27. KOSIS 매크로 지표 해소 — M9 #2 (ADR-0036 D5/D6)
 # =============================================================================
 
-# KOSIS indicator_id 상수 — _RESOLUTIONS 의 매핑과 일치.
-_KOSIS_UNEMPLOYMENT_ID = "kosis/101/DT_1DA7107S/T10"
-_KOSIS_EMPLOYMENT_ID = "kosis/101/DT_1DA7001S/T20"
-_KOSIS_INDUSTRIAL_ID = "kosis/101/DT_1IN0001/T10"
+# KOSIS indicator_id 상수 — _RESOLUTIONS 의 매핑과 일치 (라이브 검증 2026-06-18).
+_KOSIS_UNEMPLOYMENT_ID = "kosis/101/DT_1DA7001S/T80"
+_KOSIS_EMPLOYMENT_ID = "kosis/101/DT_1DA7001S/T90"
+_KOSIS_INDUSTRIAL_ID = "kosis/101/DT_1JH20201/T1"
+_KOSIS_LEADING_ID = "kosis/101/DT_1C8015/T1"
 
 
 def test_kosis_unemployment_rate_resolves_to_value() -> None:
@@ -1658,12 +1659,25 @@ def test_kosis_industrial_production_resolves_to_value() -> None:
     assert provider.get_scalar("kosis_industrial_production") == Decimal("108.3")
 
 
+def test_kosis_leading_index_resolves_to_value() -> None:
+    """kosis_leading_index → FakeMacroIndicatorRepository.fetch_latest.value (M9 #2)."""
+    record = _macro(
+        indicator_id=_KOSIS_LEADING_ID,
+        reference_date=date(2024, 1, 1),
+        vintage_date=date(2024, 4, 5),
+        value="101.2",
+    )
+    provider = _provider(as_of=date(2024, 5, 1), macro_records=[record])
+    assert provider.get_scalar("kosis_leading_index") == Decimal("101.2")
+
+
 def test_kosis_macro_na_when_repo_none() -> None:
     """macro_repo 미주입(None) → KOSIS field 정식 N/A — ECOS 선례 동일."""
     provider = _provider(as_of=date(2024, 5, 1))
     assert provider.get_scalar("kosis_unemployment_rate") is None
     assert provider.get_scalar("kosis_employment_rate") is None
     assert provider.get_scalar("kosis_industrial_production") is None
+    assert provider.get_scalar("kosis_leading_index") is None
 
 
 def test_kosis_macro_na_when_no_data() -> None:
@@ -1700,6 +1714,62 @@ def test_kosis_resolve_macro_indicator_unchanged() -> None:
     provider = _provider(as_of=date(2024, 5, 1), macro_records=[ecos_rec, kosis_rec])
     assert provider.get_scalar("ecos_base_rate") == Decimal("3.50")
     assert provider.get_scalar("kosis_unemployment_rate") == Decimal("2.8")
+
+
+# =============================================================================
+# macro indicator_id 교차검증 — 3개 수기 리스트 drift 방지 (code-review #1)
+# =============================================================================
+# macro 지표 identity 는 3곳에 수기 중복된다: _RESOLUTIONS(factor 해소 경로)·
+# market._MACRO_INDICATORS(표시 경로)·batch._KOSIS_INDICATORS(적재 경로). 일치를
+# 강제하는 코드가 없어 한 곳의 id 오타가 나면 배치는 한 id 로 적재하는데 표시/factor
+# 는 다른 id 로 조회 → 런타임 에러 없이 조용히 half-wired. 아래 두 테스트가 그 drift
+# 를 fail-loud 로 잡는다 (ADR-0036 D6 — 표시 + factor field 동일 집합 불변식).
+
+
+def test_macro_field_ids_match_market_overview_display() -> None:
+    """모든 macro_indicator factor field 의 indicator_id 집합 == 표시 목록 id 집합.
+
+    한 곳의 id 가 오타로 갈라지면 display 에는 값이 보이는데 factor 평가는 N/A
+    (또는 반대)로 어긋난다. ADR-0036 D6: 매크로는 표시 + factor field 둘 다 등록 →
+    두 집합이 동일해야 한다. 의도적 단일경로 추가 시 본 테스트를 함께 갱신(문서화).
+    """
+    from app.api.routes.market import _MACRO_INDICATORS
+
+    factor_macro_ids = {
+        r.indicator_id
+        for r in FIELD_RESOLUTIONS.values()
+        if r.kind == "macro_indicator"
+    }
+    display_ids = {indicator_id for indicator_id, _ in _MACRO_INDICATORS}
+    assert factor_macro_ids == display_ids, (
+        f"macro factor id 집합과 표시 id 집합 불일치 — "
+        f"factor만: {sorted(factor_macro_ids - display_ids)}, "
+        f"표시만: {sorted(display_ids - factor_macro_ids)}"
+    )
+
+
+def test_kosis_batch_indicator_ids_match_field_resolutions() -> None:
+    """배치 _KOSIS_INDICATORS 가 생성하는 indicator_id 가 KOSIS factor field 와 일치.
+
+    배치가 적재하는 id 와 field/표시가 조회하는 id 가 달라지면 적재된 row 를 영영
+    찾지 못한다(silent half-wire). id 규약은 kosis_adapter.py:425
+    `f"kosis/{org_id}/{tbl_id}/{itm_id}"` — 여기서도 동일 규약으로 재구성해 대조.
+    """
+    from batch.kosis_daily import _KOSIS_INDICATORS
+
+    batch_ids = {
+        f"kosis/{ind.org_id}/{ind.tbl_id}/{ind.itm_id}" for ind in _KOSIS_INDICATORS
+    }
+    kosis_factor_ids = {
+        r.indicator_id
+        for r in FIELD_RESOLUTIONS.values()
+        if r.kind == "macro_indicator" and r.indicator_id.startswith("kosis/")
+    }
+    assert batch_ids == kosis_factor_ids, (
+        f"배치 KOSIS id 와 factor field KOSIS id 불일치 — "
+        f"배치만: {sorted(batch_ids - kosis_factor_ids)}, "
+        f"field만: {sorted(kosis_factor_ids - batch_ids)}"
+    )
 
 
 def test_registry_covers_all_builtin_pack_inputs() -> None:

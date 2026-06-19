@@ -11,9 +11,10 @@ MacroIndicatorRow 를 canonical Row 로 반환; DB 영속화(MacroIndicatorRecor
    (env), `_get_http_client`, `_call_kosis`(err 분기/에러 분류),
    `_make_citation`, FetchResult[tuple[MacroIndicatorRow, ...]] 반환.
 
-2. **Query param 기반 API** — KOSIS statisticsData.do 는 path segment 아닌
-   query parameter 에 인자를 포함. `?method=getList&apiKey=...&orgId=...` 형태.
-   ECOS URL path 방식과 다른 핵심 차이.
+2. **Query param 기반 API** — KOSIS 통계자료 조회는 `Param/statisticsParameterData.do`
+   에 path segment 아닌 query parameter 로 인자를 포함. `?method=getList&apiKey=...&
+   orgId=...` 형태. ECOS URL path 방식과 다른 핵심 차이. (주의: 평범한
+   `statisticsData.do?method=getList` 는 동일 파라미터로도 err=20 — 메타 전용 경로.)
 
 3. **vintage_date = 관측 시점 근사** — KOSIS API 는 공표일/개정일 필드를 별도
    제공하지 않는다(LST_CHN_DE=최종수정일이나 vintage 의미로 부적합). 따라서
@@ -71,10 +72,15 @@ __all__ = ["KosisAdapter"]
 
 logger = logging.getLogger(__name__)
 
-# KOSIS statisticsData.do API endpoint.
+# KOSIS 통계자료(getList) API endpoint — **Param/statisticsParameterData.do**.
 # Query param 기반 — path segment 아닌 query parameter 에 인자 포함.
+# ⚠ 주의(2026-06-18 라이브 실측): orgId/tblId/itmId/objL1/prdSe 조합의 데이터
+# 조회는 이 `Param/statisticsParameterData.do` 가 정본이다. 평범한
+# `statisticsData.do?method=getList` 는 동일 파라미터로도 **err=20(필수요청변수
+# 누락)** 을 반환한다(메타 getMeta 만 그 경로에서 동작) — 과거 이 경로를 써서
+# 모든 KOSIS getList 가 실패했다.
 _KOSIS_API_ENDPOINT: Final[str] = (
-    "https://kosis.kr/openapi/statisticsData.do"
+    "https://kosis.kr/openapi/Param/statisticsParameterData.do"
 )
 
 # KOSIS JSON err 코드(10/13/20/30 등)는 전부 영구 설정·요청 오류 → AdapterError.
