@@ -144,12 +144,27 @@ GetStocDiviInfoService_V2**(ADR-0035 D3)로 변경. `FscDividendAdapter` 가 crn
   byte-동일**임을 anchor로 못박는다(active pack 교체가 과거 run을 깨지 않음 증명).
 - 단, byte-불변은 §1 known-limit("배당 정정 미발생 가정 하")로 한정 — 무조건 보장 아님.
 
-### #6 client 표시 (UI 토글 + 세전 disclosure)
+### #6 client 표시 (UI 토글 + 세전 disclosure) — ✅ 구현 완료 (2026-06-19)
 - 가격 차트/시계열에 **변이 토글**: "원주가 / 권리락 보정 / 권리락+배당재투자(Total
   Return)". grayscale 중립.
 - **세전 disclosure**(§2.1/§2.7): "세전 기준 — 배당소득세·양도세 미반영, 실제 수익과
   상이" 중립 고지. i18n 한국어.
 - multi-ID 표시(`price-return:total-annual` 정의 노출, M4 PackAttribution 패턴). 권위·순위 0.
+
+**구현(2026-06-19)**:
+- server `GET /api/stocks/{code}/total-return`(`app/api/routes/stocks.py`) — PriceAdjuster
+  (as_of 보정) → TotalReturnAdjuster.compute(배당 재투자) → 첫 거래일 보정 종가 rebase
+  한 line point(`value=base_close×TRI`, `index=TRI`) + §2.1 warnings. fail-soft(보정
+  invariant 위반 → points=[]+warning, 502 아님). `db_field_provider._resolve_total_return_
+  trailing_1y` 와 동일 산출 경로(factor 값·차트 라인 같은 PIT 보정 basis). schema
+  `StockTotalReturnOut`/`StockTotalReturnPointOut`. test_total_return_endpoint 11건.
+- client `PriceChart.tsx` 3변이 토글(raw/adjusted/total-return) — total-return lazy fetch
+  (`lib/api/totalReturn.ts`), 중립 violet 라인색(`TOTAL_RETURN_LINE_COLOR`, 서구 녹색=좋음
+  회피·visual gate 회귀), total-return 모드 시 세전 disclosure 인라인 고지(PreTaxDisclosure
+  중립 스타일 재사용), i18n `chart.totalReturnMode`. PriceChart 테스트 +5·visual gate +2.
+- **basis caveat**: `/prices` 의 close_adjusted 는 repo 저장값(T20 보정 일배치 미적용 →
+  현재 raw 동일)이라, corporate action 있는 종목에서 본 endpoint(read-time PIT 보정)와
+  basis 가 다를 수 있다(total-return 이 더 정확). 배당·CA 0 종목은 세 라인 수치 일치.
 
 ## §4 리스크
 

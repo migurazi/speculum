@@ -19,6 +19,7 @@ dividend / trading_value_20d_avg) 는 evaluator 가 정식 N/A (`missing_input:*
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from typing import Final
 
 from fastapi import APIRouter, HTTPException, Path, Query
@@ -69,6 +70,8 @@ from app.schemas.stocks import (
     StockPricesOut,
     StockSearchPageOut,
     StockSummaryOut,
+    StockTotalReturnOut,
+    StockTotalReturnPointOut,
 )
 from app.services.db_field_provider import DbFieldProvider
 from app.services.disclosure_fact_extraction import (
@@ -77,6 +80,10 @@ from app.services.disclosure_fact_extraction import (
 )
 from app.services.factor_evaluator import FactorEvaluator
 from app.services.factor_pack import LoadedPack
+from app.services.price_adjuster import (
+    _DECIMAL_PRECISION,
+    AdjusterError,
+)
 from app.services.total_return_adjuster import TotalReturnAdjuster
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
@@ -382,6 +389,133 @@ async def get_stock_prices(
     )
     return StockPricesOut(
         code=normalized, as_of=as_of.value, bars=bars, actions=actions,
+    )
+
+
+@router.get("/{code}/total-return", response_model=StockTotalReturnOut)
+async def get_stock_total_return(
+    as_of: NormalizedAsOfDep,
+    price_repo: PriceRepoDep,
+    corporate_action_repo: CorporateActionRepoDep,
+    dividend_repo: DividendRepoDep,
+    code: str = Path(pattern=_CODE_PATH_REGEX),
+    days: int = Query(_PRICES_DEFAULT_DAYS, ge=1, le=3650),
+) -> StockTotalReturnOut:
+    """세전 Total Return 시계열 — 가격 차트 "배당재투자(Total Return)" 토글 backend.
+
+    `[as_of - days, as_of]` 범위의 raw 종가를 PriceAdjuster 로 as_of 보정한 뒤
+    TotalReturnAdjuster 로 배당 재투자를 누적한 total return index(TRI)를 산출,
+    첫 거래일 보정 종가 기준으로 rebase 한 표시용 line point 를 반환한다.
+    `db_field_provider._resolve_total_return_trailing_1y` 와 **동일 산출 경로**
+    (PriceAdjuster.adjust → TotalReturnAdjuster.compute). 본 endpoint 는 live
+    observation(`/prices` 동형) 으로 reproduce 진입점이 아니라 `batch_cutoff` 를
+    쓰지 않는다 — live serving(둘 다 cutoff None) 에서 factor 카드
+    (`price-return:total-annual`) 와 차트 라인이 같은 보정 basis 를 공유한다(frozen
+    run reproduce 는 본 endpoint 경로 밖이라 비대칭 무관).
+
+    `/prices` 와의 basis 차이(주의):
+        `/prices` 의 close_adjusted 는 repo 저장값(T20 보정 일배치 미적용 → 현재
+        raw 동일)이라 본 endpoint 의 read-time PIT 보정 종가와 다를 수 있다(분할
+        이력 종목). 본 endpoint 는 PIT 정합 보정을 쓰므로 corporate action 이 있는
+        종목에서 더 정확하다. 배당·corporate action 이 모두 없는 종목은 세 값이
+        수치적으로 일치(value == close_adjusted == raw).
+
+    PIT (§2.4):
+        PriceRepository(effective_date <= as_of) + CorporateActionRepository
+        (announced_date <= as_of active chain) + DividendRepository(이중 PIT:
+        announced<=as_of AND effective<=as_of) 가 강제. look-ahead 0.
+
+    데이터 없음(빈 prices) → points=() (200) — 차트가 "데이터 없음" 표시.
+    보정 invariant 위반(미지원 action_type, close_adjusted/close_raw 0 division 등
+        AdjusterError 계열) → points=() + warnings 1줄(fail-soft — 페이지 보존,
+        factor N/A 처리와 동일 의미론). 외부 출처 장애가 아니라 데이터 결함이므로
+        502 아님.
+
+    세전 (ADR-0035 D7): 배당소득세·양도세 미반영. 응답엔 disclosure 텍스트 없음 —
+        client PreTaxDisclosure 가 total-return 모드에서 중립 고지.
+    """
+    normalized = _normalize_single_code(code)
+    start = as_of.value - timedelta(days=days)
+    prices = price_repo.fetch_prices(normalized, as_of=as_of.value, start=start)
+    if not prices:
+        # 가격 결손 — 빈 시계열 (200). 차트가 "데이터 없음" overlay.
+        return StockTotalReturnOut(
+            code=normalized, as_of=as_of.value, points=(), warnings=(),
+        )
+
+    # 가격 보정용 corporate action (split/bonus/rights_issue 등) + 재투자 배당.
+    # cash_dividend 는 actions 에 포함돼도 PriceAdjuster 에서 ignore(가격 미보정)
+    # 이고, 재투자는 오직 dividends 리스트만 소비 — 이중 계산 없음
+    # (db_field_provider._resolve_total_return_trailing_1y 동형).
+    actions = tuple(
+        corporate_action_repo.fetch_actions(normalized, as_of=as_of.value)
+    )
+    dividends = tuple(
+        dividend_repo.fetch_dividends(normalized, as_of=as_of.value)
+    )
+
+    adjuster = TotalReturnAdjuster()
+    try:
+        series = adjuster.adjust(
+            prices, actions, dividends, as_of=as_of.value,
+        )
+    except AdjusterError as exc:
+        # 보정 / total return invariant 위반 — PIT 정합 산출 불가, fail-soft.
+        # §2.1: 조용히 빈 결과로 숨기지 않고 사유를 warning 으로 노출.
+        return StockTotalReturnOut(
+            code=normalized,
+            as_of=as_of.value,
+            points=(),
+            warnings=(
+                f"total return 산출 실패 — 가격 보정 invariant 위반: {exc}",
+            ),
+        )
+
+    if not series.series:
+        return StockTotalReturnOut(
+            code=normalized,
+            as_of=as_of.value,
+            points=(),
+            warnings=series.warnings,
+        )
+
+    # rebase — 첫 거래일 보정 종가 기준 누적 수준(won). TRI[0]==1.0 이라
+    # value[0] == base_close. 엔진과 동일 Decimal 상수(prec=28, ROUND_HALF_EVEN)로
+    # 결정적 산출(§2.10 — 같은 입력 두 번이면 byte-동일 wire str).
+    base_close = series.series[0].close_adjusted
+    # base_close == 0 이면 모든 value 가 0 으로 flatten — 상장 종목 보정 종가가 0 이
+    # 될 수는 없으나(compute 의 0-division guard 가 ≥2 record 면 먼저 raise) 단일
+    # record edge 까지 §2.1 조용한 손실 금지: 0 으로 평탄화하지 않고 사유 고지.
+    if base_close == 0:
+        return StockTotalReturnOut(
+            code=normalized,
+            as_of=as_of.value,
+            points=(),
+            warnings=(
+                *series.warnings,
+                f"base close_adjusted 가 0 ({series.series[0].date.isoformat()}) — "
+                f"total return rebase 불가",
+            ),
+        )
+    points: list[StockTotalReturnPointOut] = []
+    with localcontext() as ctx:
+        ctx.prec = _DECIMAL_PRECISION
+        ctx.rounding = ROUND_HALF_EVEN
+        for rec in series.series:
+            value: Decimal = base_close * rec.total_return_index
+            points.append(
+                StockTotalReturnPointOut(
+                    date=rec.date,
+                    value=str(value),
+                    index=str(rec.total_return_index),
+                )
+            )
+
+    return StockTotalReturnOut(
+        code=normalized,
+        as_of=as_of.value,
+        points=tuple(points),
+        warnings=series.warnings,
     )
 
 

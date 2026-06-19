@@ -290,6 +290,145 @@ describe("PriceChart", () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // M7 #6 — total-return(배당재투자) 토글
+  // ---------------------------------------------------------------------------
+
+  /** /prices 응답 JSON (str wire). */
+  function pricesBody(): unknown {
+    return {
+      code: SAMPLE_BARS.code,
+      as_of: SAMPLE_BARS.asOf,
+      bars: SAMPLE_BARS.bars.map((b) => ({
+        date: b.date,
+        open: String(b.open),
+        high: String(b.high),
+        low: String(b.low),
+        close: String(b.close),
+        close_adjusted: String(b.closeAdjusted),
+        volume: b.volume,
+      })),
+      actions: [],
+    };
+  }
+
+  /** /total-return 응답 JSON (str wire). */
+  function totalReturnBody(
+    points: Array<{ date: string; value: string; index: string }>,
+    warnings: Array<string> = [],
+  ): unknown {
+    return {
+      code: SAMPLE_BARS.code,
+      as_of: SAMPLE_BARS.asOf,
+      points,
+      warnings,
+    };
+  }
+
+  /**
+   * fetch 를 URL 로 라우팅 — /total-return 과 /prices 를 구분해 응답.
+   * total-return 쿼리는 모드 진입 시에만 호출되므로 enabled 게이팅도 함께 검증된다.
+   */
+  function routeFetch(
+    trPoints: Array<{ date: string; value: string; index: string }>,
+    trWarnings: Array<string> = [],
+  ): void {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input: RequestInfo | URL) => {
+      const url = input.toString();
+      const body = url.includes("/total-return")
+        ? totalReturnBody(trPoints, trWarnings)
+        : pricesBody();
+      return Promise.resolve(
+        new Response(JSON.stringify(body), { status: 200 }),
+      );
+    });
+  }
+
+  it("데이터 있음 — 배당재투자 토글 버튼이 렌더된다", async () => {
+    routeFetch([]);
+
+    renderChart(<PriceChart code="005930" asOf="2024-09-30" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("원본 종가")).toBeInTheDocument();
+      expect(screen.getByText("수정 종가")).toBeInTheDocument();
+      expect(screen.getByText("배당재투자")).toBeInTheDocument();
+    });
+    // 기본 raw 선택 — total-return 미선택.
+    expect(screen.getByText("배당재투자")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("배당재투자 버튼 클릭 시 aria-pressed 전환 + 세전 disclosure 표시", async () => {
+    const user = userEvent.setup();
+    routeFetch([
+      { date: "2024-09-02", value: "72100", index: "1" },
+      { date: "2024-09-03", value: "72500", index: "1.0055" },
+    ]);
+
+    renderChart(<PriceChart code="005930" asOf="2024-09-30" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("배당재투자")).toBeInTheDocument();
+    });
+    // 진입 전 — 세전 disclosure 미표시.
+    expect(screen.queryByText(/세전 기준/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("배당재투자"));
+
+    expect(screen.getByText("배당재투자")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("원본 종가")).toHaveAttribute("aria-pressed", "false");
+    // total-return 모드 — 세전 disclosure 인라인 고지.
+    await waitFor(() => {
+      expect(screen.getByText(/세전 기준/)).toBeInTheDocument();
+    });
+  });
+
+  it("total-return points 가 LineSeries 로 렌더된다", async () => {
+    const user = userEvent.setup();
+    routeFetch([
+      { date: "2024-09-02", value: "72100", index: "1" },
+      { date: "2024-09-03", value: "72500", index: "1.0055" },
+    ]);
+
+    renderChart(<PriceChart code="005930" asOf="2024-09-30" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("배당재투자")).toBeInTheDocument();
+    });
+
+    const lc = await import("lightweight-charts");
+    await user.click(screen.getByText("배당재투자"));
+
+    await waitFor(() => {
+      // total-return 모드 — LineSeries(value) 가 setData 로 채워짐.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const addSeries = (lc.createChart as any).mock.results[0]?.value
+        .addSeries as ReturnType<typeof vi.fn>;
+      expect(addSeries).toHaveBeenCalledWith(lc.LineSeries, expect.anything());
+    });
+  });
+
+  it("total-return points 가 비면 데이터 없음 안내를 표시한다", async () => {
+    const user = userEvent.setup();
+    routeFetch([]); // 빈 points (배당·가격 결손 또는 보정 실패).
+
+    renderChart(<PriceChart code="005930" asOf="2024-09-30" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("배당재투자")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByText("배당재투자"));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("해당 기간 가격 데이터 없음"),
+      ).toBeInTheDocument();
+    });
+    // 빈 상태 — 세전 disclosure 는 노이즈이므로 미표시.
+    expect(screen.queryByText(/세전 기준/)).not.toBeInTheDocument();
+  });
+
   it("actions 가 빈 배열이면 createSeriesMarkers 를 호출하지 않는다", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(

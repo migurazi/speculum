@@ -26,6 +26,7 @@ import { COMPARE_COLORS } from "@/components/Compare/CompareChart";
 import {
   CANDLE_DOWN_COLOR,
   CANDLE_UP_COLOR,
+  TOTAL_RETURN_LINE_COLOR,
 } from "@/components/StockDetail/PriceChart";
 
 /**
@@ -58,6 +59,22 @@ describe("차트 시각요소 gate (T59)", () => {
     const forbidden = FORBIDDEN_WESTERN_UP_GREENS.map((c) => c.toLowerCase());
     expect(forbidden).not.toContain(CANDLE_UP_COLOR.toLowerCase());
     expect(forbidden).not.toContain(CANDLE_DOWN_COLOR.toLowerCase());
+  });
+
+  it("Total Return 라인색이 서구 녹색(성과=좋음) 상승색이 아니다 (No Advice)", () => {
+    // 배당 재투자 라인에 "상승=좋음" 의미 녹색을 쓰면 성과 우열 암시 (§2.2 위반).
+    const forbidden = FORBIDDEN_WESTERN_UP_GREENS.map((c) => c.toLowerCase());
+    expect(forbidden).not.toContain(TOTAL_RETURN_LINE_COLOR.toLowerCase());
+  });
+
+  it("Total Return 라인색이 캔들 등락색과 구분된다 (중립 별도 hue)", () => {
+    // 등락 의미 빨강/파랑과 겹치지 않아 total-return 을 별개 시계열로 인지.
+    expect(TOTAL_RETURN_LINE_COLOR.toLowerCase()).not.toBe(
+      CANDLE_UP_COLOR.toLowerCase(),
+    );
+    expect(TOTAL_RETURN_LINE_COLOR.toLowerCase()).not.toBe(
+      CANDLE_DOWN_COLOR.toLowerCase(),
+    );
   });
 
   it("Compare 오버레이 팔레트에 등락 의미 녹색이 없다 (중립 구분색)", () => {

@@ -25,6 +25,7 @@
     "title": "가격 차트",
     "rawMode": "원본 종가",
     "adjustedMode": "수정 종가",
+    "totalReturnMode": "배당재투자",
     "loadingAriaLabel": "가격 차트 로딩 중",
     "loadError": "가격 데이터 로드 실패: {message}",
     "empty": "해당 기간 가격 데이터 없음"

@@ -285,6 +285,56 @@ class StockPricesOut(BaseModel):
     actions: tuple[CorporateActionOut, ...]
 
 
+class StockTotalReturnPointOut(BaseModel):
+    """Total Return 차트의 단일 일자 — `/api/stocks/{code}/total-return` element.
+
+    세전 total return index (TRI) 를 표시용 won 수준으로 rebase 한 line point.
+    Decimal → str wire (StockPriceBarOut 동일 원칙 — JSON number drift 회피).
+
+    value: 표시용 누적 수준 = `base_close_adjusted × TRI`. base_close_adjusted 는
+        조회 window 첫 거래일의 PIT 보정 종가(PriceAdjuster, read-time as_of 보정).
+        TRI[첫 거래일] == 1.0 이므로 value[0] == base_close_adjusted. 배당이 없으면
+        TRI[t] == close_adj[t] / close_adj[0] 라 value[t] == close_adj[t] (배당 0 →
+        total-return 라인 == 보정 종가 라인, Decimal 정밀도 내). 배당이 있으면
+        배당락일 재투자분만큼 위로 발산.
+    index: TRI 그대로(첫 거래일 1.0 기준 누적). 투명성·검증용 노출.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    date: date
+    value: str   # base_close_adjusted × TRI — Decimal → str
+    index: str   # TRI (첫 거래일=1.0 기준) — Decimal → str
+
+
+class StockTotalReturnOut(BaseModel):
+    """Total Return 시계열 응답 — `[start, as_of]` 범위 세전 TRI (date asc).
+
+    M7 #6 — 가격 차트의 "권리락+배당재투자(Total Return)" 토글 backend.
+
+    산출 (ADR-0035 D1/D6/D7):
+        PriceRepository.fetch_prices(raw) → PriceAdjuster.adjust(as_of 보정) →
+        TotalReturnAdjuster.compute(배당 재투자). 보정 종가 basis 는 read-time
+        PIT 보정(factor `total_return_trailing_1y` 와 동일 경로) — `/prices` 의
+        repo 저장 close_adjusted(T20 미적용으로 현재 raw 동일) 와 별개 basis.
+
+    세전 (D7): 배당소득세·양도세 미반영 — 응답 자체엔 disclosure 텍스트 없음
+        (client PreTaxDisclosure 가 고지). points 비면 데이터 없음(200).
+
+    warnings: §2.1 조용한 손실 금지 — 배당락일이 가격 시계열에 부재하거나 첫
+        거래일 배당(직전 종가 부재로 재투자 불가) 등으로 누락된 배당 사유.
+        보정 invariant 위반(미지원 action_type / 0 division) 시에도 사유 1줄.
+        비면 모든 배당이 정상 재투자됨.
+    """
+
+    model_config = _STRICT_MODEL_CONFIG
+
+    code: str
+    as_of: date
+    points: tuple[StockTotalReturnPointOut, ...]
+    warnings: tuple[str, ...]
+
+
 class FinancialSeriesItemOut(BaseModel):
     """재무 시계열 표의 단일 account 행.
 

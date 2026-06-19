@@ -5,10 +5,13 @@
  *
  * 기능:
  *   - useQuery 로 fetchStockPrices 호출, staleTime=5분.
- *   - 원본 종가(raw) / 수정 종가(adjusted) 토글.
+ *   - 원본 종가(raw) / 수정 종가(adjusted) / 배당재투자(total-return) 토글.
  *     · raw: 정규 OHLC 캔들스틱.
  *     · adjusted: close_adjusted 기반 라인 시리즈 (open/high/low/close 대체 불가,
  *       수정 종가 라인으로 표시 — ADR-0001 D6 토글 의도).
+ *     · total-return: 세전 total return index(배당 재투자 포함)를 첫 거래일 보정
+ *       종가 기준 rebase 한 라인 (M7 #6, ADR-0035). lazy fetch — 이 모드 선택 시에만
+ *       fetchStockTotalReturn 호출. 세전 disclosure 를 차트 하단에 인라인 고지.
  *   - 로딩: 스켈레톤 플레이스홀더.
  *   - 에러: 에러 메시지 박스.
  *   - 빈 bars: "해당 기간 가격 데이터 없음" 안내.
@@ -42,10 +45,17 @@ import { useEffect, useRef, useState } from "react";
 
 import type { CorporateAction, StockPricesResponse } from "@/lib/api/prices";
 import { fetchStockPrices } from "@/lib/api/prices";
+import type { StockTotalReturnResponse } from "@/lib/api/totalReturn";
+import { fetchStockTotalReturn } from "@/lib/api/totalReturn";
 import { cn } from "@/lib/utils";
 
-/** 표시 모드: 원본 종가 캔들스틱 또는 수정 종가 라인. */
-type PriceMode = "raw" | "adjusted";
+import {
+  PRE_TAX_DISCLOSURE_CONTAINER,
+  PRE_TAX_DISCLOSURE_TEXT,
+} from "./PreTaxDisclosure";
+
+/** 표시 모드: 원본 종가 캔들스틱 / 수정 종가 라인 / 배당재투자 total-return 라인. */
+type PriceMode = "raw" | "adjusted" | "total-return";
 
 interface PriceChartProps {
   /** KRX 종목코드. */
@@ -80,6 +90,21 @@ export const CANDLE_DOWN_COLOR = "#2563eb"; // 파랑 — 음봉(하락)
  * 마커는 일자(사실)와 action_type 한국어 명칭만 표시.
  */
 const CA_MARKER_COLOR = "#737373"; // neutral-500
+
+/**
+ * 수정 종가 라인 색 — 파랑(중립). 하락 캔들색과 동일하나 모드 배타적이라 혼동 없음.
+ */
+export const ADJUSTED_LINE_COLOR = "#2563eb"; // 파랑 (neutral line)
+
+/**
+ * Total Return 라인 색 — 중립 보라(violet-600). raw/adjusted 와 구분되는 별도
+ * hue 이되 **판단색이 아님** — 등락 의미 빨강/파랑·성과 의미 녹색(서구 "상승=좋음")을
+ * 피한다 (No Advice §2.2). total-return 모드는 배타적이라 다른 라인과 동시 표시되지
+ * 않으나 시각 구분을 위해 별도 색 부여.
+ *
+ * 회귀 방지: `chart-visual-gate.test.tsx` 가 본 상수가 서구 녹색 상승색이 아님을 검증.
+ */
+export const TOTAL_RETURN_LINE_COLOR = "#7c3aed"; // violet-600 (중립 구분색)
 
 /**
  * action_type → 한국어 표시명 매핑.
@@ -141,6 +166,20 @@ export function PriceChart({
     enabled: code.length > 0,
   });
 
+  // Total Return — total-return 모드 선택 시에만 lazy fetch (배당 재투자 계산은
+  // 서버에서 PriceAdjuster + TotalReturnAdjuster 를 돌리므로 불필요 호출 회피).
+  const {
+    data: trData,
+    isLoading: trLoading,
+    isError: trIsError,
+    error: trError,
+  } = useQuery<StockTotalReturnResponse, Error>({
+    queryKey: ["total-return", code, asOf] as const,
+    queryFn: ({ signal }) => fetchStockTotalReturn(code, asOf, signal),
+    staleTime: 5 * 60 * 1000, // 5분
+    enabled: code.length > 0 && mode === "total-return",
+  });
+
   // 차트 컨테이너 div ref.
   const containerRef = useRef<HTMLDivElement>(null);
   // chart instance ref — cleanup 과 series 갱신에 사용.
@@ -193,10 +232,31 @@ export function PriceChart({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // bars 또는 mode 변경 시 series 재설정.
+  // bars / trData / mode 변경 시 series 재설정.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+
+    // total-return 모드 — rebase 한 TRI 라인 (배당 재투자 포함). 별도 시계열이라
+    // bars(가격)와 독립. points 미도착/빈 경우 그리지 않음 (overlay 가 상태 표시).
+    if (mode === "total-return") {
+      const points = trData?.points;
+      if (!points || points.length === 0) return;
+      const series = chart.addSeries(LineSeries, {
+        color: TOTAL_RETURN_LINE_COLOR,
+        lineWidth: 2,
+      });
+      series.setData(
+        points.map((p) => ({
+          time: p.date as `${number}-${number}-${number}`,
+          value: p.value,
+        })),
+      );
+      chart.timeScale().fitContent();
+      return () => {
+        chart.removeSeries(series);
+      };
+    }
 
     const bars = data?.bars;
     if (!bars || bars.length === 0) return;
@@ -239,8 +299,9 @@ export function PriceChart({
         chart.removeSeries(series);
       };
     } else {
+      // adjusted 모드 — 수정 종가 라인.
       const series = chart.addSeries(LineSeries, {
-        color: "#2563eb",
+        color: ADJUSTED_LINE_COLOR,
         lineWidth: 2,
       });
       series.setData(
@@ -255,17 +316,29 @@ export function PriceChart({
         chart.removeSeries(series);
       };
     }
-  }, [data, mode]);
+  }, [data, trData, mode]);
 
   const bars = data?.bars ?? [];
-  // 빈 = 로딩·에러 아니면서 bar 0 개.
-  const isEmpty = !isLoading && !isError && bars.length === 0;
-  // 토글은 실제 데이터가 있을 때만.
+  const inTotalReturn = mode === "total-return";
+  // 토글은 가격 데이터가 있을 때만 노출 (total-return 진입점도 가격 차트 존재 전제).
   const hasData = !isLoading && !isError && bars.length > 0;
+  // 모드별 effective 로딩/에러/빈 상태 — total-return 모드면 TR 쿼리 상태가 우선.
+  const showLoading = isLoading || (inTotalReturn && trLoading);
+  const showError = isError || (inTotalReturn && trIsError);
+  // 에러 메시지 — 가격 에러 우선, 아니면 total-return 에러.
+  const errorMessage = isError
+    ? (error?.message ?? "")
+    : (trError?.message ?? "");
+  const isEmpty =
+    !showLoading &&
+    !showError &&
+    (inTotalReturn
+      ? (trData?.points.length ?? 0) === 0
+      : bars.length === 0);
 
   return (
     <div className={cn("rounded-lg border border-neutral-200 bg-white p-4", className)}>
-      {/* 헤더: 제목 + raw/adjusted 토글 */}
+      {/* 헤더: 제목 + raw/adjusted/total-return 토글 */}
       <div className="mb-3 flex items-center justify-between">
         <span className="text-sm font-medium text-neutral-700">{t("chart.title")}</span>
         {hasData && (
@@ -296,6 +369,19 @@ export function PriceChart({
             >
               {t("chart.adjustedMode")}
             </button>
+            <button
+              type="button"
+              onClick={() => setMode("total-return")}
+              className={cn(
+                "border-l border-neutral-200 px-3 py-1 transition-colors",
+                mode === "total-return"
+                  ? "bg-neutral-900 text-white"
+                  : "bg-white text-neutral-600 hover:bg-neutral-50",
+              )}
+              aria-pressed={mode === "total-return"}
+            >
+              {t("chart.totalReturnMode")}
+            </button>
           </div>
         )}
       </div>
@@ -306,15 +392,15 @@ export function PriceChart({
           로딩/에러/빈 상태는 overlay 로 표시. */}
       <div className="relative" style={{ height: CHART_HEIGHT }}>
         <div ref={containerRef} style={{ height: CHART_HEIGHT }} />
-        {isLoading && (
+        {showLoading && (
           <div
             className="absolute inset-0 animate-pulse rounded bg-neutral-100"
             aria-label={t("chart.loadingAriaLabel")}
           />
         )}
-        {isError && (
+        {showError && (
           <div className="absolute inset-0 flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 text-center text-sm text-red-800">
-            {t("chart.loadError", { message: error.message })}
+            {t("chart.loadError", { message: errorMessage })}
           </div>
         )}
         {isEmpty && (
@@ -323,6 +409,19 @@ export function PriceChart({
           </div>
         )}
       </div>
+
+      {/* 세전 disclosure — total-return 라인이 실제 표시될 때만 인라인 고지
+          (ADR-0035 D7 / §2.1·§2.7). 로딩/에러/빈 상태에서는 표시할 total-return
+          데이터가 없어 disclosure 가 UI 노이즈이므로 제외. 배당 재투자 수익이
+          세전(배당소득세·양도세 미반영)임을 중립 사실로 고지. PreTaxDisclosure 의
+          gate-검증 중립 스타일 상수·메시지 키 재사용. */}
+      {inTotalReturn && !showLoading && !showError && !isEmpty && (
+        <p className={PRE_TAX_DISCLOSURE_CONTAINER}>
+          <span className={PRE_TAX_DISCLOSURE_TEXT}>
+            {t("metricsPreTaxDisclosure")}
+          </span>
+        </p>
+      )}
     </div>
   );
 }
