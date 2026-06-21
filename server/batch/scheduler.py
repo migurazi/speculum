@@ -51,22 +51,27 @@ from app.adapters.dart_adapter import (
 )
 from app.adapters.ecos_adapter import EcosAdapter
 from app.adapters.fdr_adapter import FdrAdapter
+from app.adapters.fsc_dividend_adapter import FscDividendAdapter
 from app.adapters.kosis_adapter import KosisAdapter
 from app.adapters.pykrx_adapter import PykrxAdapter
 from app.core.config import get_database_url
 from app.db.session import create_engine_from_url, create_sessionmaker
 from app.repositories.citation_repository import SqlCitationRepository
 from app.repositories.sql_repositories import (
+    SqlDividendRepository,
     SqlFinancialRepository,
     SqlMarketCapRepository,
     SqlPriceRepository,
     SqlTreasurySharesRepository,
 )
 from app.services.corp_code_mapping import CorpCodeMapping
+from app.services.crno_mapping import CrnoMapping
 from app.services.krx_calendar import DEFAULT_CALENDAR, TradingCalendar
 from batch.alerts import BatchAlertHandler, LoggingAlertHandler
 from batch.corp_code_bootstrap import CorpCodeBootstrap
+from batch.crno_bootstrap import CrnoBootstrap
 from batch.dart_daily import DartBatchSummary, DartDailyBatch
+from batch.dividend_daily import DividendBatchSummary, DividendDailyBatch
 from batch.ecos_daily import EcosBatchSummary, EcosDailyBatch
 from batch.kosis_daily import KosisBatchSummary, KosisDailyBatch
 from batch.krx_daily import BatchSummary as KrxBatchSummary
@@ -80,6 +85,7 @@ __all__ = [
     "recent_completed_quarter",
     "run_corp_code_job",
     "run_dart_job",
+    "run_dividend_job",
     "run_ecos_job",
     "run_kosis_job",
     "run_krx_job",
@@ -88,14 +94,21 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# CLI --job 선택지. "all" 은 corp_code → krx → ecos → kosis → dart → snapshot 순차.
-# krx 는 raw 배치 중 가장 먼저 — 가격/시총은 KRX (pykrx/FDR) 출처라 API 키 불필요
-# (재무·거시는 키 필요)이며 factor 평가의 기반 데이터다. snapshot 은 모든 raw
-# 데이터 (krx/ecos/kosis/dart) 적재 **후** 실행돼야 data_versions 의 batch_id 가
+# CLI --job 선택지. "all" 은 corp_code → krx → ecos → kosis → dart → dividend →
+# snapshot 순차. krx 는 raw 배치 중 가장 먼저 — 가격/시총은 KRX (pykrx/FDR) 출처라
+# API 키 불필요 (재무·거시·배당은 키 필요)이며 factor 평가의 기반 데이터다.
+# dividend (M7 #2) 는 dart 뒤 — crno 매핑이 corp_code 매핑(dart 선행 로드) 위에
+# 구축되고, 배당은 total-return factor 의 입력이다. snapshot 은 모든 raw 데이터
+# (krx/ecos/kosis/dart/dividend) 적재 **후** 실행돼야 data_versions 의 batch_id 가
 # 당일 최신으로 freeze + factor 평가가 갓 적재된 데이터를 반영한다 (ⓓ).
 VALID_JOBS: Final[tuple[str, ...]] = (
-    "all", "corp-code", "krx", "ecos", "kosis", "dart", "snapshot",
+    "all", "corp-code", "krx", "ecos", "kosis", "dart", "dividend", "snapshot",
 )
+
+# 배당 조회 기간 lookback (년) — observed_date 기준 직전 N 년의 배당기준일을 조회.
+# 배당은 종목당 연 ~4 건으로 희소해 넓은 window 가 안전(dedup 이 재실행 중복 방지).
+# 첫 적재 시 과거 배당 history 를 충분히 포괄.
+_DIVIDEND_LOOKBACK_YEARS: Final[int] = 5
 
 # =============================================================================
 # fiscal 추정 helper
@@ -176,6 +189,7 @@ def run_krx_job(
     codes: Sequence[str] | None = None,
     throttle_seconds: float = 1.5,
     alert_handler: BatchAlertHandler | None = None,
+    dry_run: bool = False,
 ) -> list[KrxBatchSummary]:
     """KRX 가격·시총 일배치 실행 — 시장별 (KOSPI/KOSDAQ) 순차, session 단위 트랜잭션.
 
@@ -227,7 +241,9 @@ def run_krx_job(
     )
     summaries: list[KrxBatchSummary] = []
     for market in markets:
-        summary = batch.run(as_of=as_of, market=market, codes=codes)
+        summary = batch.run(
+            as_of=as_of, market=market, codes=codes, dry_run=dry_run,
+        )
         logger.info(
             "KRX 배치 완료 — market=%s universe=%d success=%d failure=%d "
             "conflicts=%d skipped=%s",
@@ -314,6 +330,7 @@ def run_dart_job(
     fiscal_year: int,
     fiscal_quarter: int,
     throttle_seconds: float = 6.0,
+    dry_run: bool = False,
 ) -> DartBatchSummary:
     """DART 재무·자사주 일배치 실행 — session 단위 트랜잭션.
 
@@ -346,13 +363,72 @@ def run_dart_job(
         stock_codes=codes,
         fiscal_year=fiscal_year,
         fiscal_quarter=fiscal_quarter,
+        dry_run=dry_run,
     )
     logger.info(
-        "DART 배치 완료 — target=%d success=%d failure=%d skipped=%d rows=%d "
+        "DART 배치 완료%s — target=%d success=%d failure=%d skipped=%d rows=%d "
         "(%dQ%d)",
+        " [dry-run]" if dry_run else "",
         summary.target_count, summary.success_count, summary.failure_count,
         summary.skipped_count, summary.total_rows_saved,
         fiscal_year, fiscal_quarter,
+    )
+    return summary
+
+
+def run_dividend_job(
+    *,
+    session: Session,
+    adapter: FscDividendAdapter,
+    crno_mapping: CrnoMapping,
+    trading_calendar: TradingCalendar,
+    stock_codes: Sequence[str],
+    begin_bas_dt: str,
+    end_bas_dt: str,
+    throttle_seconds: float = 1.0,
+    dry_run: bool = False,
+) -> DividendBatchSummary:
+    """배당(현금) 일배치 실행 — session 단위 트랜잭션 (M7 #2 Slice 2).
+
+    Args:
+        session: SQLAlchemy session.
+        adapter: FscDividendAdapter (금융위 배당 API).
+        crno_mapping: 종목코드 → crno 매핑 (CrnoBootstrap.load 결과).
+        trading_calendar: 배당락일 산출용 거래일 캘린더 (adapter 주입).
+        stock_codes: 처리 대상 종목코드. 빈 list 면 crno_mapping 전체 종목.
+        begin_bas_dt / end_bas_dt: 배당기준일 조회 기간 (YYYYMMDD).
+        throttle_seconds: 종목 fetch 간 sleep (공공데이터 rate limit, default 1.0).
+
+    Returns:
+        DividendBatchSummary.
+    """
+    codes = (
+        list(stock_codes)
+        if stock_codes
+        else sorted(crno_mapping.stock_to_crno.keys())
+    )
+    batch = DividendDailyBatch(
+        adapter=adapter,
+        crno_mapping=crno_mapping,
+        citation_repo=SqlCitationRepository(session),
+        dividend_repo=SqlDividendRepository(session),
+        trading_calendar=trading_calendar,
+        session=session,
+        throttle_seconds=throttle_seconds,
+    )
+    summary = batch.run(
+        stock_codes=codes,
+        begin_bas_dt=begin_bas_dt,
+        end_bas_dt=end_bas_dt,
+        dry_run=dry_run,
+    )
+    logger.info(
+        "배당 배치 완료%s — target=%d success=%d failure=%d skipped=%d "
+        "saved=%d dedup_skipped=%d data_gap=%d (%s~%s)",
+        " [dry-run]" if dry_run else "",
+        summary.target_count, summary.success_count, summary.failure_count,
+        summary.skipped_count, summary.dividends_saved, summary.dedup_skipped,
+        summary.data_gap_count, begin_bas_dt, end_bas_dt,
     )
     return summary
 
@@ -413,8 +489,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="all",
         help=(
             "실행할 배치 (default: all = "
-            "corp-code→krx→ecos→kosis→dart→snapshot). "
-            "krx (가격/시총) 는 API 키 불필요 — 키 미발급 시 단독 실행 가능."
+            "corp-code→krx→ecos→kosis→dart→dividend→snapshot). "
+            "krx (가격/시총) 는 API 키 불필요 — 키 미발급 시 단독 실행 가능. "
+            "dividend (배당) 는 corp-code→crno 매핑 선행 + FSC 키 필요."
         ),
     )
     parser.add_argument(
@@ -450,6 +527,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force-refresh-corp-code", action="store_true",
         help="corpCode.xml 캐시 무시 재fetch.",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help=(
+            "DB write 없이 fetch + 매핑 + 변환만 검증 (운영 적재 전 sanity check). "
+            "corp-code/crno 매핑 해소·adapter 도달성·변환 오류를 실 적재 없이 사전 "
+            "확인. **dart/dividend/krx 만 지원** — ecos/kosis/snapshot 은 dry_run "
+            "미지원이라 --dry-run 시 DB write 회피를 위해 건너뜀(WARNING 로그). "
+            "주의: corp-code/crno bootstrap 은 캐시 미스 시 DART API 를 fetch 한다 "
+            "(crno 는 전 종목 company.json 순차 호출로 수십 분 소요 가능; 캐시 있으면 "
+            "read-only). DB write 는 없음."
+        ),
     )
     return parser
 
@@ -494,21 +583,45 @@ def main(argv: Sequence[str] | None = None) -> int:
         fiscal_year, fiscal_quarter = recent_completed_quarter(observed_date)
 
     job = args.job
+    dry_run = args.dry_run
     failures: list[str] = []
 
-    # DB write job (ecos/kosis/dart) 이 하나라도 있으면 engine·sessionmaker 를
-    # 1 회만 구성해 전 job 이 공유 (oracle C-3 — job 마다 engine 생성 시 pool 누수).
+    # dry-run 미지원 배치(ecos/kosis/snapshot)는 --dry-run 시 DB write 를 회피하기
+    # 위해 **건너뛴다**(footgun 방지 — dry-run 인데 일부 job 이 실제 write 하면 거짓
+    # 안전 신호). dart/dividend/krx 만 batch.run(dry_run=) 을 지원해 실 적재 없이
+    # fetch+매핑+변환을 검증한다. corp-code/crno bootstrap 은 read-only(디스크 캐시)
+    # 라 dry-run 에서도 수행되어 매핑 해소를 검증한다.
+    def _skip_if_dry_run(name: str) -> bool:
+        """이 job 을 dry-run 때문에 건너뛰어야 하면 True (그때만 WARNING 로그).
+
+        계약: 반환값 == dry_run (dry-run 미지원 ecos/kosis/snapshot 호출부에서만
+        사용). dispatch 는 `job in (...) and not _skip_if_dry_run(name)` 패턴 —
+        dry_run=True → True 반환 → not True → job skip. dry_run=False → False
+        반환(로그 없음) → 정상 실행.
+        """
+        if dry_run:
+            logger.warning(
+                "--dry-run: %s 는 dry_run 미지원 — 건너뜀 (DB write 회피). "
+                "dry-run 검증 대상은 dart/dividend/krx.", name,
+            )
+        return dry_run
+
+    # DB write job (ecos/kosis/dart/dividend) 이 하나라도 있으면 engine·sessionmaker
+    # 를 1 회만 구성해 전 job 이 공유 (oracle C-3 — job 마다 engine 생성 시 pool 누수).
     # corp-code only job 은 DB 불필요 → engine 미생성.
-    needs_db = job in ("all", "krx", "ecos", "kosis", "dart", "snapshot")
+    needs_db = job in (
+        "all", "krx", "ecos", "kosis", "dart", "dividend", "snapshot",
+    )
     engine: Engine | None = None
     maker: sessionmaker[Session] | None = None
     if needs_db:
         engine, maker = _build_engine_and_maker()
 
     try:
-        # corp_code 매핑 — dart/all 에 선행 필요. 한 번 로드해 재사용.
+        # corp_code 매핑 — dart/dividend/all 에 선행 필요. 한 번 로드해 재사용.
+        # dividend 는 crno 매핑이 corp_code 매핑 위에 구축되므로 corp_code 가 선행.
         corp_mapping: CorpCodeMapping | None = None
-        if job in ("all", "corp-code", "dart"):
+        if job in ("all", "corp-code", "dart", "dividend"):
             bootstrap = CorpCodeBootstrap()
             try:
                 corp_mapping = run_corp_code_job(
@@ -519,9 +632,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # oracle C-2 — load 실패해도 bootstrap.close() 보장 (httpx 누수 방지).
                 logger.error("corp-code job 실패: %s", exc)
                 failures.append("corp-code")
-                # dart 는 매핑 없으면 진행 불가 — corp-code 실패 시 dart skip.
+                # dart/dividend 는 매핑 없으면 진행 불가 — corp-code 실패 시 skip.
             finally:
                 bootstrap.close()
+
+        # crno 매핑 — dividend/all 에 선행 필요. corp_mapping 위에 corp_code 별
+        # DART company.json(jurir_no=crno)으로 구축 (CrnoBootstrap, 디스크 캐시).
+        # corp_mapping 부재(corp-code 실패) 시 미구축 → dividend skip.
+        crno_mapping: CrnoMapping | None = None
+        if job in ("all", "dividend") and corp_mapping is not None:
+            crno_bootstrap = CrnoBootstrap(corp_mapping=corp_mapping)
+            try:
+                crno_mapping = crno_bootstrap.load()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("crno 매핑 구축 실패: %s", exc)
+                failures.append("crno-mapping")
+                # dividend 는 crno 없으면 진행 불가 — skip.
+            finally:
+                crno_bootstrap.close()
 
         # krx 는 raw 배치 중 가장 먼저 — 가격/시총 (pykrx/FDR, API 키 불필요) 이
         # factor 평가의 기반. corp_code 매핑과 독립 (가격은 종목코드만 사용).
@@ -537,18 +665,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             _run_guarded(
                 "krx", failures,
                 lambda: _do_krx(
-                    db_maker, observed_date, krx_codes, krx_markets,
+                    db_maker, observed_date, krx_codes, krx_markets, dry_run,
                 ),
             )
 
-        if job in ("all", "ecos"):
+        if job in ("all", "ecos") and not _skip_if_dry_run("ecos"):
             assert maker is not None  # needs_db 보장.
             db_maker = maker
             _run_guarded(
                 "ecos", failures, lambda: _do_ecos(db_maker, observed_date),
             )
 
-        if job in ("all", "kosis"):
+        if job in ("all", "kosis") and not _skip_if_dry_run("kosis"):
             assert maker is not None
             db_maker = maker
             _run_guarded(
@@ -567,13 +695,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "dart", failures,
                     lambda: _do_dart(
                         db_maker, mapping, args.codes or [],
-                        fiscal_year, fiscal_quarter,
+                        fiscal_year, fiscal_quarter, dry_run,
                     ),
                 )
 
-        # snapshot 은 마지막 — 위 raw 배치(ecos/kosis/dart)가 당일 데이터를 적재한
-        # 뒤 실행돼야 data_versions batch_id freeze + factor 평가가 최신 반영(ⓓ).
-        if job in ("all", "snapshot"):
+        # dividend 는 dart 뒤 — crno 매핑(corp_code 위)이 필요하고, 배당은
+        # total-return factor 입력이다 (M7 #2 Slice 2). crno_mapping 부재(corp-code
+        # 또는 crno 구축 실패) 시 skip. 조회 기간은 observed_date 기준 직전 N 년.
+        if job in ("all", "dividend"):
+            if crno_mapping is None:
+                logger.error("dividend job skip — crno 매핑 부재.")
+                failures.append("dividend")
+            else:
+                assert maker is not None
+                db_maker = maker
+                mapping = crno_mapping
+                begin_bas_dt = date(
+                    observed_date.year - _DIVIDEND_LOOKBACK_YEARS, 1, 1,
+                ).strftime("%Y%m%d")
+                end_bas_dt = observed_date.strftime("%Y%m%d")
+                _run_guarded(
+                    "dividend", failures,
+                    lambda: _do_dividend(
+                        db_maker, mapping, args.codes or [],
+                        begin_bas_dt, end_bas_dt, dry_run,
+                    ),
+                )
+
+        # snapshot 은 마지막 — 위 raw 배치(ecos/kosis/dart/dividend)가 당일 데이터를
+        # 적재한 뒤 실행돼야 data_versions batch_id freeze + factor 평가가 최신 반영(ⓓ).
+        # dry-run 미지원(UPSERT precompute) → --dry-run 시 skip.
+        if job in ("all", "snapshot") and not _skip_if_dry_run("snapshot"):
             assert maker is not None
             db_maker = maker
             _run_guarded(
@@ -616,6 +768,7 @@ def _do_krx(
     observed_date: date,
     codes: Sequence[str] | None = None,
     markets: Sequence[str] = KRX_MARKETS,
+    dry_run: bool = False,
 ) -> None:
     """KRX job — session scope 안에서 실행 (pykrx primary + FDR cross-check).
 
@@ -643,6 +796,7 @@ def _do_krx(
             markets=markets,
             codes=codes,
             alert_handler=LoggingAlertHandler(),
+            dry_run=dry_run,
         )
 
 
@@ -676,6 +830,7 @@ def _do_dart(
     codes: Sequence[str],
     fiscal_year: int,
     fiscal_quarter: int,
+    dry_run: bool = False,
 ) -> None:
     """DART job — session scope 안에서 실행."""
     adapter = DartAdapter()
@@ -688,6 +843,33 @@ def _do_dart(
                 stock_codes=codes,
                 fiscal_year=fiscal_year,
                 fiscal_quarter=fiscal_quarter,
+                dry_run=dry_run,
+            )
+    finally:
+        adapter.close()
+
+
+def _do_dividend(
+    maker: sessionmaker[Session],
+    crno_mapping: CrnoMapping,
+    codes: Sequence[str],
+    begin_bas_dt: str,
+    end_bas_dt: str,
+    dry_run: bool = False,
+) -> None:
+    """배당 job — session scope 안에서 실행 (M7 #2 Slice 2)."""
+    adapter = FscDividendAdapter()
+    try:
+        with _session_scope(maker) as session:
+            run_dividend_job(
+                session=session,
+                adapter=adapter,
+                crno_mapping=crno_mapping,
+                trading_calendar=DEFAULT_CALENDAR,
+                stock_codes=codes,
+                begin_bas_dt=begin_bas_dt,
+                end_bas_dt=end_bas_dt,
+                dry_run=dry_run,
             )
     finally:
         adapter.close()

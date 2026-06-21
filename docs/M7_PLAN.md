@@ -104,9 +104,24 @@ GetStocDiviInfoService_V2**(ADR-0035 D3)로 변경. `FscDividendAdapter` 가 crn
   company.json 호출 → stock→crno dict + JSON 디스크 캐시(TTL 30일, crno 사실상
   불변). per-stock AdapterError skip+카운트, AdapterRetryError re-raise(부분 캐시
   방지). 캐시 format 위반 시 degrade 재빌드. test +26(adapter 8·mapping 7·boot 11).
-- oracle-medium SHIP(Critical 0). **잔여 Slice 2 = `dividend_daily.py` orchestrator**
-  (CrnoMapping + FscDividendAdapter + DividendRepository.save_dividends) + scheduler
-  "dividend" job 등록 + `all` 순서 합류.
+- oracle-medium SHIP(Critical 0).
+
+**배당 배치 orchestrator — ✅ Slice 2 구현 완료 (2026-06-19)**:
+- `DividendDailyBatch`(`batch/dividend_daily.py`) — 종목별 FscDividendAdapter 수집 →
+  **재실행 멱등 dedup** → DividendRepository.save_dividends. DartDailyBatch 패턴 미러
+  (회사별 SAVEPOINT 격리·batch_runs 영속화·alert). **멱등성 핵심**: corporate_actions
+  는 자연키 UNIQUE 없고 record.id=uuid4 라 순진 insert 시 중복→total-return 이중계산.
+  insert 전 `fetch_all_dividends_bulk` 로 기존 배당 조회 → 자연키
+  `(effective_date, 배당종류)` first-wins skip(cash_dividend 만 비교 — oracle M2,
+  split cross-action_type 충돌 방지). per_share 미포함=정정 시 first-wins(§1
+  known-limit). source="FSC" → snapshot dividend_batch_id freeze 연결.
+- scheduler: `run_dividend_job`+`_do_dividend`+VALID_JOBS "dividend"+`all` 순서
+  (dart→dividend→snapshot). main() 이 corp_mapping 위에 CrnoBootstrap 으로
+  crno_mapping 빌드(corp-code 실패 시 dividend skip). 조회 기간 = observed_date 직전
+  5년. data_gap warning=WARNING 로그+카운트(종목 failure 아님 — oracle M1).
+- oracle-medium SHIP(Critical 0, M1/M2/L1 반영). test +15(batch 13·scheduler +2).
+- **M7 #2 완전 종결** — 종목코드만으로 실 배당 적재 경로 완성(키 발급 후
+  `python -m batch.scheduler --job dividend` 실행 가능). 잔여=배당 정정 chain(후속).
 
 ### #3 TotalReturnAdjuster (세전, 별도 모듈 — D1)
 - 신규 `services/total_return_adjuster.py` — `_POLICY_MATRIX` **미접촉**(POLICY_CONTENT_HASH
@@ -221,4 +236,4 @@ client typecheck·lint·vitest·build·check:i18n) green.
 
 **요약(2026-06-18 감사)**: #1·#3·#5 완료. 실 갭 3건: (1) #2 FSC 선회 + 배치 미배선, (2) #4 `close_price_total_return` field 미존재(`total_return_trailing_1y` 로 대체), (3) #6 차트 total-return 토글 미구현.
 
-**갱신(2026-06-19)**: 갭 (3) #6 토글 **구현 완료**(위 #6 본문). 갭 (1) #2 배당 배치는 **crno 매핑 인프라(Slice 1) 구현 완료**(위 #2 본문) — 잔여 = `dividend_daily.py` orchestrator(Slice 2). 갭 (2) #4 명칭 차이는 설계 의도(스칼라 derived)로 확정. **잔여 코드 갭 = #2 Slice 2(배당 배치 배선)뿐**.
+**갱신(2026-06-19)**: 갭 (3) #6 토글 **구현 완료**(위 #6 본문). 갭 (1) #2 배당 배치 **완전 종결** — Slice 1(crno 매핑 인프라) + Slice 2(`dividend_daily.py` orchestrator + scheduler "dividend" job) 모두 구현(위 #2 본문). 갭 (2) #4 명칭 차이는 설계 의도(스칼라 derived)로 확정. **M7 코드 갭 0 — 잔여는 운영(키 발급 후 실 배당 적재)·배당 정정 chain(후속 마일스톤)뿐**.

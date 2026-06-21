@@ -10,7 +10,7 @@ cd /d "%~dp0client"
 pnpm install
 if errorlevel 1 goto err
 echo.
-echo [setup] DONE. Next: run-demo.bat
+echo [setup] DONE. Next: setup-keys.bat -> load-real-data.bat -> run-real.bat
 pause
 goto end
 :err

@@ -610,13 +610,16 @@ def test_citation_dedup_idempotency(business_day: date) -> None:
 # C1 회귀 — fetch-then-save 순서가 orphan citation 차단
 # =============================================================================
 
-def test_no_orphan_citation_when_market_cap_fetch_fails(
+def test_market_cap_failure_degrades_but_keeps_prices(
     business_day: date,
 ) -> None:
-    """oracle 리뷰 C1 회귀 — OHLCV 성공 후 market_cap 실패 시 citation 저장 X.
+    """market_cap 아웃티지 → 가격은 적재, 시총만 N/A 강등 (종목 success).
 
-    fetch-then-save 정책: 모든 fetch 가 성공해야 citation 저장 시작. 종목
-    실패 시 어떤 citation 도 영구화 안 됨.
+    회복력 변경(이전엔 종목 실패로 가격까지 폐기): market_cap 엔드포인트가
+    OHLCV 와 독립적으로 env-down 될 수 있으므로(KRX MDCSTAT), 시총 fetch 실패가
+    가격 적재를 막지 않는다. 종목은 success 로 집계되고 시총만 N/A(시총 row 0,
+    market_cap_degraded_count++). OHLCV citation + price 는 저장(price 가 참조 →
+    orphan 아님), 시총 citation 은 미저장(저장할 시총 row 가 없어 orphan 차단).
     """
     pykrx_mock = MagicMock()
     pykrx_mock.get_market_ticker_list = MagicMock(return_value=["005930"])
@@ -629,23 +632,75 @@ def test_no_orphan_citation_when_market_cap_fetch_fails(
     )
 
     citation_repo = FakeCitationRepository()
+    price_repo = FakePriceRepository(records=())
     batch = KrxDailyBatch(
         primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
         verify_adapter=None,
         conflict_detector=None,
         calendar=DEFAULT_CALENDAR,
         citation_repo=citation_repo,
-        price_repo=FakePriceRepository(records=()),
+        price_repo=price_repo,
         throttle_seconds=0,
     )
     summary = batch.run(as_of=business_day, market="KOSPI")
-    # 종목 처리 실패.
-    assert summary.failure_count == 1
-    # universe citation 만 있고 종목별 citation 은 없음 (fetch-then-save 효과).
+    # 종목 success — 가격 적재됨(실패 아님), 시총만 강등.
+    assert summary.failure_count == 0
+    assert summary.success_count == 1
+    assert summary.market_cap_degraded_count == 1
+    # 시총 row 0 (강등).
+    assert summary.market_cap_rows == ()
+    # 가격은 실 적재.
+    prices = price_repo.fetch_prices(
+        "005930", as_of=business_day, start=business_day,
+    )
+    assert len(prices) >= 1
+    # citation: universe + OHLCV 는 저장(price 가 OHLCV citation 참조 → orphan
+    # 아님). 시총 citation 은 미저장 — orphan 0.
     cited = citation_repo.fetch_by_batch(summary.batch_id)
-    # universe fetch 1 개만 영구화 — OHLCV / market_cap 둘 다 in-memory 였다가 폐기.
-    assert len(cited) == 1
-    assert cited[0].identifier.startswith("universe|")
+    idents = [c.identifier for c in cited]
+    assert any(i.startswith("universe|") for i in idents)
+    # 시총 출처 citation(시총 row 가 참조했어야 할)이 저장되지 않음 — orphan 차단.
+    assert not any("market_cap" in i or "marketcap" in i for i in idents)
+
+
+def test_market_cap_degrade_under_dry_run_no_writes(
+    business_day: date,
+) -> None:
+    """dry_run + market_cap 강등 — degraded 카운트는 집계되나 DB write 0 (oracle M).
+
+    dry_run 은 citation/price save 를 skip 하지만 강등 카운트 집계는 fetch 단계라
+    유지된다(운영 검증 의도 보존). 가격/citation 모두 미저장.
+    """
+    pykrx_mock = MagicMock()
+    pykrx_mock.get_market_ticker_list = MagicMock(return_value=["005930"])
+    pykrx_mock.get_market_ohlcv = MagicMock(
+        return_value=_ohlcv_df(day=business_day, close=70000.0),
+    )
+    pykrx_mock.get_market_cap_by_date = MagicMock(
+        side_effect=ConnectionError("market_cap down"),
+    )
+
+    citation_repo = FakeCitationRepository()
+    price_repo = FakePriceRepository(records=())
+    batch = KrxDailyBatch(
+        primary_adapter=PykrxAdapter(pykrx_module=pykrx_mock),
+        verify_adapter=None,
+        conflict_detector=None,
+        calendar=DEFAULT_CALENDAR,
+        citation_repo=citation_repo,
+        price_repo=price_repo,
+        throttle_seconds=0,
+    )
+    summary = batch.run(as_of=business_day, market="KOSPI", dry_run=True)
+    # 강등 카운트는 집계(fetch 단계) + 종목 success.
+    assert summary.market_cap_degraded_count == 1
+    assert summary.failure_count == 0
+    assert summary.dry_run is True
+    # dry_run — DB write 0 (가격·citation 미저장).
+    assert price_repo.fetch_prices(
+        "005930", as_of=business_day, start=business_day,
+    ) == []
+    assert citation_repo.fetch_by_batch(summary.batch_id) == ()
 
 
 # =============================================================================

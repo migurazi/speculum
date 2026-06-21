@@ -102,6 +102,11 @@ class BatchSummary:
             시 빈 list.
         market_cap_rows: 수집된 시가총액 row (Phase B 의 DB write 대기). 호출자
             가 추후 save_market_caps (별도 cycle) 로 처리.
+        market_cap_degraded_count: market_cap 엔드포인트 아웃티지(env-down 등)로
+            시총 fetch 가 실패했으나 **가격(OHLCV)은 정상 적재**된 종목 수. 종목은
+            success 로 집계되고 시총 factor(PER/PBR/시총)만 N/A 로 강등된다(가격까지
+            막던 fetch-then-save 원자성을 시총에 한해 완화 — 가격 적재 우선). >0 이면
+            운영자가 KRX 시총 출처 점검 신호. 절대 silent 0 아님(WARNING 로그 동반).
         dry_run: True 면 본 batch 가 DB write skip — fetch + 검증만. 운영
             verification / staging 의 release 직전 sanity check 패턴.
         started_at: batch 시작 시각 (UTC).
@@ -121,6 +126,9 @@ class BatchSummary:
     dry_run: bool
     started_at: datetime
     ended_at: datetime
+    # 시총 아웃티지로 시총만 N/A 강등된 종목 수(가격은 적재). 기본 0(하위호환 —
+    # 기존 직접 생성/테스트 보존). _make_summary 가 실값을 채운다.
+    market_cap_degraded_count: int = 0
 
 
 class KrxDailyBatch:
@@ -324,6 +332,7 @@ class KrxDailyBatch:
         failures: list[tuple[str, str]] = []
         conflicts: list[ConflictDetectionResult] = []
         market_cap_rows: list[MarketCapRow] = []
+        market_cap_degraded_count = 0
 
         for code in universe:
             # oracle T18 M1 — 종목당 SAVEPOINT. session 있으면 begin_nested()
@@ -339,12 +348,15 @@ class KrxDailyBatch:
                 with savepoint:
                     (
                         price_rows, mc_rows, mc_records, conflict_result,
+                        mc_degraded,
                     ) = self._process_code(
                         code=code,
                         as_of=as_of,
                         batch_id=batch_id,
                         dry_run=dry_run,
                     )
+                    if mc_degraded:
+                        market_cap_degraded_count += 1
                     # Price 영구화 — dry_run 이면 skip. citation 은 _process_code
                     # 안에서 dry_run 분기 (fetch-then-save 순서 유지).
                     if price_rows and not dry_run:
@@ -401,6 +413,7 @@ class KrxDailyBatch:
             market_cap_rows=tuple(market_cap_rows),
             dry_run=dry_run,
             started_at=started_at,
+            market_cap_degraded_count=market_cap_degraded_count,
         )
         self._finalize_batch_run(summary)
         self._alert.on_complete(summary)
@@ -485,6 +498,7 @@ class KrxDailyBatch:
         Sequence[MarketCapRow],
         Sequence[MarketCapRecord],
         ConflictDetectionResult | None,
+        bool,
     ]:
         """단일 종목의 OHLCV + market_cap fetch + (옵션) FDR conflict 검출.
 
@@ -496,6 +510,13 @@ class KrxDailyBatch:
             3. price save 는 호출자 (run) 가 수행 — citation save 와 같은
                session 내 sequential.
 
+        **market_cap 회복력 (시총 아웃티지)**: market_cap 엔드포인트는 OHLCV 와
+        독립적으로 env-down(빈 응답/인증 요구) 될 수 있다(KRX MDCSTAT). 이때 시총
+        fetch 실패가 **가격(OHLCV) 적재까지 막으면** 안 되므로, market_cap fetch 만
+        AdapterError 를 잡아 None 강등 + WARNING 로그하고 가격은 정상 적재한다(FDR
+        verify 실패를 non-critical 로 처리하는 패턴과 동형). OHLCV fetch 실패는
+        여전히 종목 실패(raise) — 가격 없는 종목은 의미 없음.
+
         Args:
             dry_run: True 면 citation save skip (DB write 없음). PriceRecord
                 는 빌드되어 반환 (호출자가 dry_run 분기로 save_prices skip).
@@ -503,21 +524,35 @@ class KrxDailyBatch:
 
         Returns:
             (price_records, market_cap_rows, market_cap_records,
-             conflict_result_or_None). `market_cap_rows` 는 summary 의 raw 집계
-            (Phase A 호환), `market_cap_records` 는 citation_id FK 연결 완료된
-            영구화 대상 (`market_cap_repo` 가 있으면 호출자가 save).
+             conflict_result_or_None, market_cap_degraded). `market_cap_degraded`
+            가 True 면 시총 fetch 가 실패해 가격만 적재됨(mc_rows/mc_records 빈).
 
         Raises:
-            AdapterError: fetch 실패. 호출자가 failure 분류. 본 단계 raise
-                시 어떤 DB write 도 발생하지 않음 (in-memory 만).
+            AdapterError: **OHLCV** fetch 실패. 호출자가 failure 분류. 본 단계
+                raise 시 어떤 DB write 도 발생하지 않음 (in-memory 만). market_cap
+                fetch 실패는 raise 하지 않고 degrade.
         """
-        # 1. fetch all — DB write 전 in-memory 수집.
+        # 1. fetch all — DB write 전 in-memory 수집. OHLCV 는 필수(실패→raise).
         primary_ohlcv = self._primary.fetch_ohlcv_by_date_range(
             code, fromdate=as_of, todate=as_of, batch_id=batch_id,
         )
-        primary_mc = self._primary.fetch_market_cap_by_date_range(
-            code, fromdate=as_of, todate=as_of, batch_id=batch_id,
-        )
+        # market_cap 은 옵션 — 아웃티지 시 가격까지 막지 않도록 회복력 처리.
+        primary_mc: FetchResult[tuple[MarketCapRow, ...]] | None
+        market_cap_degraded = False
+        try:
+            primary_mc = self._primary.fetch_market_cap_by_date_range(
+                code, fromdate=as_of, todate=as_of, batch_id=batch_id,
+            )
+        except AdapterError as exc:
+            # 시총 엔드포인트 아웃티지 — 가격은 적재하고 시총만 N/A 강등.
+            # on_failure(종목 실패) 가 아니라 WARNING 로그 + degraded 카운트
+            # (종목은 success 로 집계 — dividend data_gap 처리와 동형).
+            primary_mc = None
+            market_cap_degraded = True
+            logger.warning(
+                "market_cap 강등 (가격만 적재, 시총 N/A) code=%s as_of=%s: %s",
+                code, as_of.isoformat(), exc,
+            )
 
         verify_ohlcv: FetchResult[tuple[OHLCVRow, ...]] | None = None
         if self._verify is not None and self._detector is not None:
@@ -536,7 +571,10 @@ class KrxDailyBatch:
         # save skip — 검증 의도만 보존.
         if not dry_run:
             self._save_citations(primary_ohlcv.citations)
-            self._save_citations(primary_mc.citations)
+            # 시총 강등 시 primary_mc None — 시총 citation 저장 skip(저장할 시총 row
+            # 도 없으므로 orphan citation 차단).
+            if primary_mc is not None:
+                self._save_citations(primary_mc.citations)
             if verify_ohlcv is not None:
                 self._save_citations(verify_ohlcv.citations)
 
@@ -551,17 +589,24 @@ class KrxDailyBatch:
             citation_id=primary_ohlcv.citations[0].id,
         )
 
-        # market_cap record 빌드 — citation_id FK 연결 (prices 와 동일 패턴).
-        # primary_mc.citations[0] guard — FetchResult invariant.
-        if not primary_mc.citations:
-            raise AdapterError(
-                f"primary market_cap fetch returned no citation for "
-                f"code={code} — FetchResult invariant violation"
+        # market_cap record 빌드 — 시총 강등(primary_mc None)이면 빈 결과(가격만 적재).
+        # 정상 시 citations[0] guard (FetchResult invariant).
+        market_cap_records: Sequence[MarketCapRecord]
+        market_cap_data: Sequence[MarketCapRow]
+        if primary_mc is None:
+            market_cap_records = ()
+            market_cap_data = ()
+        else:
+            if not primary_mc.citations:
+                raise AdapterError(
+                    f"primary market_cap fetch returned no citation for "
+                    f"code={code} — FetchResult invariant violation"
+                )
+            market_cap_records = self._build_market_cap_records(
+                market_cap_rows=primary_mc.data,
+                citation_id=primary_mc.citations[0].id,
             )
-        market_cap_records = self._build_market_cap_records(
-            market_cap_rows=primary_mc.data,
-            citation_id=primary_mc.citations[0].id,
-        )
+            market_cap_data = primary_mc.data
 
         # 4. Conflict detection — fetch 가 모두 성공한 경우만.
         conflict_result: ConflictDetectionResult | None = None
@@ -574,7 +619,8 @@ class KrxDailyBatch:
             )
 
         return (
-            price_records, primary_mc.data, market_cap_records, conflict_result,
+            price_records, market_cap_data, market_cap_records,
+            conflict_result, market_cap_degraded,
         )
 
     @staticmethod
@@ -682,6 +728,7 @@ class KrxDailyBatch:
         market_cap_rows: Sequence[MarketCapRow],
         dry_run: bool,
         started_at: datetime,
+        market_cap_degraded_count: int = 0,
     ) -> BatchSummary:
         return BatchSummary(
             batch_id=batch_id,
@@ -697,4 +744,5 @@ class KrxDailyBatch:
             dry_run=dry_run,
             started_at=started_at,
             ended_at=datetime.now(UTC),
+            market_cap_degraded_count=market_cap_degraded_count,
         )

@@ -74,11 +74,33 @@ seed 스크립트는 멱등합니다 (재실행 시 같은 종목 데이터를 �
 | **DART** (금융감독원 전자공시) | `DART_API_KEY` | 분기 재무제표 → PER·PBR·ROE·EPS·부채비율 등 + 종목↔corp_code 매핑 | <https://opendart.fss.or.kr> → 인증키 신청 | **재무 factor 의 필수 키.** 일 10,000 호출 한도 |
 | **ECOS** (한국은행 경제통계) | `ECOS_API_KEY` | 환율(USD/KRW)·기준금리·국고채 등 거시지표 | <https://ecos.bok.or.kr> → OpenAPI 인증키 | |
 | **KOSIS** (통계청 국가통계포털) | `KOSIS_API_KEY` | 고용률·실업률·산업생산지수 등 통계청 고유 거시지표 | <https://kosis.kr/openapi> → 활용신청 | |
-| **FSC** (금융위원회, data.go.kr) | `FSC_API_KEY` _(또는 `DATA_GO_KR_SERVICE_KEY`)_ | 배당 (Total Return 보정) | <https://www.data.go.kr> → 활용신청 | 둘 중 아무 이름이나 인식 |
+| **FSC** (금융위원회, data.go.kr) | `FSC_API_KEY` _(또는 `DATA_GO_KR_SERVICE_KEY`)_ | 배당 → 배당수익률·Total Return(배당 재투자) | <https://www.data.go.kr> → 활용신청 | 둘 중 아무 이름이나 인식. 배당 배치는 종목코드→crno 매핑(DART `company.json`)이 선행이라 **DART 키도 함께 필요** |
+
+### 0) Windows 간편 실행 (bat) — 권장
+
+레포 루트에 `keys.txt`(출처 라벨 + 발급키)를 두고 **4개 bat 을 순서대로** 실행:
+
+```
+setup.bat             :: 의존성 설치 (pip + pnpm), 최초 1회
+setup-keys.bat        :: keys.txt -> server\.env (DART/ECOS/KOSIS/FSC 키), 1회
+load-real-data.bat    :: 주요 KOSPI 종목 실데이터 적재 -> speculum_real.db, 1회
+                      ::   (스키마 + KRX 가격 + 1년 history + 종목명 + DART 재무)
+run-real.bat          :: 백엔드+프론트+브라우저 한 번에 실행 (이후엔 이것만)
+```
+
+처음 한 번 setup → setup-keys → load-real-data 를 돌리고 나면, 그 다음부터는
+**`run-real.bat` 하나만** 실행하면 됩니다.
+
+적재 종목의 **실 가격 차트·총수익률·재무제표**가 뜹니다. 단 일부 지표는 환경/데이터
+한계로 N/A 일 수 있습니다 — 시총·PER·PBR(KRX 시총 endpoint 가 일부 망에서 무응답;
+가격은 정상 적재), ROE/EPS(TTM 4분기 재무 필요), 배당수익률(배당은 `--job dividend`
+별도 적재 — crno 매핑 부트스트랩이 오래 걸림). bat 종료 메시지에 안내가 출력됩니다.
+
+아래 1)~3) 은 bat 없이 수동으로 같은 일을 하는 방법입니다.
 
 ### 1) 키 설정
 
-`server/.env` 파일을 만들거나 셸 환경변수로 주입합니다:
+`server/.env` 파일을 만들거나 셸 환경변수로 주입합니다 (또는 위 `setup-keys.bat`):
 
 ```bash
 # server/.env (예시 — 발급받은 실제 키로 교체)
@@ -92,7 +114,9 @@ SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db
 ### 2) 일배치 실행 — 통합 scheduler
 
 `batch.scheduler` 가 cron 호출용 통합 진입점입니다. 적재 순서는
-corp-code → krx → ecos → kosis → dart → snapshot (raw 적재 후 derived precompute).
+corp-code → krx → ecos → kosis → dart → dividend → snapshot (raw 적재 후 derived
+precompute). 배당(dividend)은 dart 뒤 — 종목코드→crno 매핑이 corp_code 매핑 위에
+구축되고, 배당은 Total Return factor 의 입력입니다.
 
 ```bash
 cd server
@@ -114,14 +138,28 @@ python -m batch.scheduler --job kosis --observed-date 2026-06-12
 # DART 재무 — 대상 종목/분기 지정 (소수 종목 빠른 적재)
 python -m batch.scheduler --job dart --codes 005930 000660 035420 --fiscal-year 2024 --fiscal-quarter 1
 
+# 배당 (FSC) — 종목코드→crno 매핑(DART company.json) 선행 후 현금배당 적재.
+# 조회 기간은 observed-date 기준 직전 5년. FSC 키 + DART 키 필요.
+python -m batch.scheduler --job dividend --codes 005930 000660 --observed-date 2026-06-12
+
 # corpCode.xml 캐시 강제 갱신
 python -m batch.scheduler --job corp-code --force-refresh-corp-code
+
+# --dry-run — 실 DB write 없이 fetch+매핑+변환만 검증 (운영 적재 전 sanity check).
+# 키·corp_code/crno 매핑·어댑터 도달성·변환 오류를 실 적재 없이 사전 확인.
+python -m batch.scheduler --job all --dry-run
 ```
 
 `--observed-date` 미지정 시 오늘, `--fiscal-year`/`--fiscal-quarter` 미지정 시 신고기한
-지난 최근 분기를 자동 추정합니다. `--codes` 는 KRX·DART 공통 — 미지정 시 KRX 는 시장 전체
-universe, DART 는 corp_code 전체 상장사가 대상입니다. `--market` (KOSPI|KOSDAQ) 은 KRX
-전용으로, 미지정 시 양 시장 모두 적재합니다.
+지난 최근 분기를 자동 추정합니다. `--codes` 는 KRX·DART·dividend 공통 — 미지정 시 KRX 는
+시장 전체 universe, DART/dividend 는 corp_code 전체 상장사가 대상입니다. `--market`
+(KOSPI|KOSDAQ) 은 KRX 전용으로, 미지정 시 양 시장 모두 적재합니다.
+
+**`--dry-run`** 은 운영 적재 전 검증용입니다 — dart/dividend/krx 는 DB write 없이
+fetch+매핑+변환만 수행하고, ecos/kosis/snapshot 은 dry_run 미지원이라 DB write 회피를
+위해 건너뜁니다(WARNING 로그). corp-code/crno 매핑 부트스트랩은 read-only(디스크 캐시,
+캐시 미스 시 DART fetch — crno 는 전 종목 `company.json` 순차 호출로 수십 분 소요 가능)라
+dry-run 에서도 수행되어 매핑 해소를 검증합니다.
 
 ### 3) 백엔드/프론트 기동
 

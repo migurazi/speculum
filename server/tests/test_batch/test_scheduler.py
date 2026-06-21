@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.corp_code_mapping import CorpCodeMapping
+from app.services.crno_mapping import CrnoMapping
 from batch import scheduler
 from batch.scheduler import (
     _disclosure_deadline,
@@ -156,6 +157,19 @@ class _StubBootstrap:
         pass
 
 
+class _StubCrnoBootstrap:
+    """CrnoBootstrap stub — load 가 고정 crno 매핑 반환 (DART company.json 호출 회피)."""
+
+    def __init__(self, *a: object, **kw: object) -> None:
+        pass
+
+    def load(self, *, force_refresh: bool = False) -> CrnoMapping:
+        return CrnoMapping.from_dict({"005930": "1301110006246"})
+
+    def close(self) -> None:
+        pass
+
+
 class _StubEngine:
     """engine stub — main 의 finally dispose() 호출 기록 (C-3 검증)."""
 
@@ -168,8 +182,10 @@ class _StubEngine:
 @pytest.fixture
 def _patched_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
     """_do_* / _build_engine_and_maker / CorpCodeBootstrap stub — 호출 기록 반환."""
+    # *_dry 리스트 — dry_run 플래그 전달 검증(기존 tuple 형태는 불변, 분리 기록).
     calls: dict[str, list] = {
-        "krx": [], "ecos": [], "kosis": [], "dart": [], "snapshot": [],
+        "krx": [], "ecos": [], "kosis": [], "dart": [], "dividend": [],
+        "snapshot": [], "krx_dry": [], "dart_dry": [], "dividend_dry": [],
     }
 
     _StubEngine.disposed = 0
@@ -178,15 +194,25 @@ def _patched_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
         lambda: (_StubEngine(), object()),
     )
     monkeypatch.setattr(scheduler, "CorpCodeBootstrap", _StubBootstrap)
+    monkeypatch.setattr(scheduler, "CrnoBootstrap", _StubCrnoBootstrap)
     _StubBootstrap.raise_on_load = False
 
-    monkeypatch.setattr(
-        scheduler, "_do_krx",
-        # _do_krx(maker, observed_date, codes, markets) — codes/markets 전달
-        # 검증 위해 함께 기록.
-        lambda maker, observed_date, codes=None, markets=scheduler.KRX_MARKETS:
-            calls["krx"].append((observed_date, codes, markets)),
-    )
+    def _stub_krx(
+        maker, observed_date, codes=None, markets=scheduler.KRX_MARKETS,
+        dry_run=False,
+    ):
+        calls["krx"].append((observed_date, codes, markets))
+        calls["krx_dry"].append(dry_run)
+
+    def _stub_dart(maker, mapping, codes, fy, fq, dry_run=False):
+        calls["dart"].append((fy, fq))
+        calls["dart_dry"].append(dry_run)
+
+    def _stub_dividend(maker, mapping, codes, begin, end, dry_run=False):
+        calls["dividend"].append((begin, end))
+        calls["dividend_dry"].append(dry_run)
+
+    monkeypatch.setattr(scheduler, "_do_krx", _stub_krx)
     monkeypatch.setattr(
         scheduler, "_do_ecos",
         lambda maker, observed_date: calls["ecos"].append(observed_date),
@@ -195,10 +221,8 @@ def _patched_jobs(monkeypatch: pytest.MonkeyPatch) -> dict[str, list]:
         scheduler, "_do_kosis",
         lambda maker, observed_date: calls["kosis"].append(observed_date),
     )
-    monkeypatch.setattr(
-        scheduler, "_do_dart",
-        lambda maker, mapping, codes, fy, fq: calls["dart"].append((fy, fq)),
-    )
+    monkeypatch.setattr(scheduler, "_do_dart", _stub_dart)
+    monkeypatch.setattr(scheduler, "_do_dividend", _stub_dividend)
     monkeypatch.setattr(
         scheduler, "_do_snapshot",
         lambda maker, observed_date: calls["snapshot"].append(observed_date),
@@ -263,7 +287,7 @@ def test_main_krx_market_limits_to_single(
 
 
 def test_main_all_runs_every_job(_patched_jobs: dict[str, list]) -> None:
-    """job=all → krx + ecos + kosis + dart + snapshot 모두 실행."""
+    """job=all → krx + ecos + kosis + dart + dividend + snapshot 모두 실행."""
     code = scheduler.main([
         "--job", "all", "--observed-date", "2024-06-15",
     ])
@@ -277,6 +301,9 @@ def test_main_all_runs_every_job(_patched_jobs: dict[str, list]) -> None:
     assert _patched_jobs["kosis"] == [date(2024, 6, 15)]
     # fiscal 자동 추정 — 2024-06-15 기준 (2024, 1).
     assert _patched_jobs["dart"] == [(2024, 1)]
+    # dividend 는 dart 뒤 — 조회 기간 = observed_date 기준 직전 5 년 (M7 #2 Slice 2).
+    # begin = 2019-01-01, end = observed_date.
+    assert _patched_jobs["dividend"] == [("20190101", "20240615")]
     # snapshot 은 raw 배치 후 마지막 실행(ⓓ).
     assert _patched_jobs["snapshot"] == [date(2024, 6, 15)]
 
@@ -288,9 +315,105 @@ def test_main_job_snapshot_only(_patched_jobs: dict[str, list]) -> None:
     ])
     assert code == 0
     assert _patched_jobs["snapshot"] == [date(2024, 6, 15)]
+
+
+def test_main_job_dividend_only(_patched_jobs: dict[str, list]) -> None:
+    """job=dividend → corp-code→crno 매핑 선행 후 dividend 만 실행, 나머지 0."""
+    code = scheduler.main([
+        "--job", "dividend", "--observed-date", "2024-06-15",
+    ])
+    assert code == 0
+    assert _patched_jobs["dividend"] == [("20190101", "20240615")]
+    assert _patched_jobs["dart"] == []
+    assert _patched_jobs["krx"] == []
+    assert _patched_jobs["snapshot"] == []
+
+
+def test_main_dividend_skipped_when_corp_code_fails(
+    _patched_jobs: dict[str, list],
+) -> None:
+    """corp-code 실패 → crno 매핑 불가 → dividend skip + exit 1."""
+    _StubBootstrap.raise_on_load = True
+    code = scheduler.main([
+        "--job", "dividend", "--observed-date", "2024-06-15",
+    ])
+    assert code == 1  # corp-code + dividend 실패.
+    # _do_dividend 미호출(crno 매핑 부재로 dispatch 전 skip).
+    assert _patched_jobs["dividend"] == []
     assert _patched_jobs["ecos"] == []
     assert _patched_jobs["kosis"] == []
     assert _patched_jobs["dart"] == []
+
+
+# =============================================================================
+# --dry-run 플래그 (운영 적재 전 sanity check)
+# =============================================================================
+
+def test_arg_parser_dry_run_default_false() -> None:
+    """--dry-run 미지정 → False, 지정 → True."""
+    assert build_arg_parser().parse_args(["--job", "dart"]).dry_run is False
+    assert (
+        build_arg_parser().parse_args(["--job", "dart", "--dry-run"]).dry_run
+        is True
+    )
+
+
+def test_main_dry_run_threads_to_dart_dividend_krx(
+    _patched_jobs: dict[str, list],
+) -> None:
+    """--dry-run --job all → dart/dividend/krx 에 dry_run=True 전달."""
+    code = scheduler.main([
+        "--job", "all", "--observed-date", "2024-06-15", "--dry-run",
+    ])
+    assert code == 0
+    # dry_run=True 가 세 배치에 전달됨.
+    assert _patched_jobs["krx_dry"] == [True]
+    assert _patched_jobs["dart_dry"] == [True]
+    assert _patched_jobs["dividend_dry"] == [True]
+    # 실제 호출도 됨(skip 아님).
+    assert len(_patched_jobs["krx"]) == 1
+    assert len(_patched_jobs["dart"]) == 1
+    assert len(_patched_jobs["dividend"]) == 1
+
+
+def test_main_dry_run_skips_ecos_kosis_snapshot(
+    _patched_jobs: dict[str, list],
+) -> None:
+    """--dry-run --job all → ecos/kosis/snapshot 은 DB write 회피 위해 건너뜀."""
+    code = scheduler.main([
+        "--job", "all", "--observed-date", "2024-06-15", "--dry-run",
+    ])
+    assert code == 0
+    # dry_run 미지원 배치는 호출 0(skip).
+    assert _patched_jobs["ecos"] == []
+    assert _patched_jobs["kosis"] == []
+    assert _patched_jobs["snapshot"] == []
+
+
+def test_main_dry_run_ecos_only_skips(_patched_jobs: dict[str, list]) -> None:
+    """--dry-run --job ecos → ecos skip(미지원), exit 0(실패 아님)."""
+    code = scheduler.main([
+        "--job", "ecos", "--observed-date", "2024-06-15", "--dry-run",
+    ])
+    assert code == 0
+    assert _patched_jobs["ecos"] == []
+
+
+def test_main_no_dry_run_runs_all_normally(
+    _patched_jobs: dict[str, list],
+) -> None:
+    """--dry-run 미지정 → 전 job 정상 실행 + dry_run=False 전달(회귀 가드)."""
+    code = scheduler.main([
+        "--job", "all", "--observed-date", "2024-06-15",
+    ])
+    assert code == 0
+    assert _patched_jobs["krx_dry"] == [False]
+    assert _patched_jobs["dart_dry"] == [False]
+    assert _patched_jobs["dividend_dry"] == [False]
+    # ecos/kosis/snapshot 정상 실행(skip 아님).
+    assert _patched_jobs["ecos"] == [date(2024, 6, 15)]
+    assert _patched_jobs["kosis"] == [date(2024, 6, 15)]
+    assert _patched_jobs["snapshot"] == [date(2024, 6, 15)]
 
 
 def test_main_corp_code_failure_skips_dart(_patched_jobs: dict[str, list]) -> None:
@@ -378,6 +501,8 @@ class _StubKrxBatch:
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
         self.runs: list[tuple[date, str, object]] = []
+        # dry_run 전파 검증 — 기존 runs tuple 형태 보존 위해 분리 기록.
+        self.dry_runs: list[bool] = []
         _StubKrxBatch.instances.append(self)
 
     def run(
@@ -389,6 +514,7 @@ class _StubKrxBatch:
         codes: object = None,
     ) -> SimpleNamespace:
         self.runs.append((as_of, market, codes))
+        self.dry_runs.append(dry_run)
         # run_krx_job 의 logging 이 접근하는 속성만 채운 가짜 summary.
         return SimpleNamespace(
             universe_size=2,
@@ -469,3 +595,26 @@ def test_run_krx_job_forwards_codes_to_each_market(
         (date(2024, 6, 28), "KOSPI", ["005930", "000660"]),
         (date(2024, 6, 28), "KOSDAQ", ["005930", "000660"]),
     ]
+
+
+def test_run_krx_job_forwards_dry_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dry_run 이 KrxDailyBatch.run 까지 시장별로 전파 (oracle M-1 — batch-level 가드).
+
+    _do_krx stub 레벨이 아닌 run_krx_job → batch.run(dry_run=) 전파를 직접 검증해,
+    누군가 batch.run(dry_run=dry_run) 전달을 누락해도 회귀가 잡히도록 한다.
+    """
+    _StubKrxBatch.instances = []
+    monkeypatch.setattr(scheduler, "KrxDailyBatch", _StubKrxBatch)
+
+    run_krx_job(
+        session=object(),  # type: ignore[arg-type]
+        primary_adapter=object(),  # type: ignore[arg-type]
+        verify_adapter=None,
+        calendar=object(),  # type: ignore[arg-type]
+        as_of=date(2024, 6, 28),
+        dry_run=True,
+    )
+    # 두 시장 모두 dry_run=True 전달.
+    assert _StubKrxBatch.instances[0].dry_runs == [True, True]

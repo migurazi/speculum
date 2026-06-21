@@ -105,7 +105,7 @@ below are present.
 | **DART** (Financial Supervisory Service) | `DART_API_KEY` | Quarterly financial statements → PER, PBR, ROE, EPS, debt ratio, etc. + ticker↔corp_code mapping | <https://opendart.fss.or.kr> → request auth key | **Required for financial factors.** 10,000 calls/day limit |
 | **ECOS** (Bank of Korea) | `ECOS_API_KEY` | FX (USD/KRW), base rate, treasury yields, macro series | <https://ecos.bok.or.kr> → OpenAPI auth key | |
 | **KOSIS** (Statistics Korea) | `KOSIS_API_KEY` | Employment rate, unemployment, industrial production — Statistics-Korea-only macro | <https://kosis.kr/openapi> → apply for use | |
-| **FSC** (Financial Services Commission, data.go.kr) | `FSC_API_KEY` _(or `DATA_GO_KR_SERVICE_KEY`)_ | Dividends (Total Return adjustment) | <https://www.data.go.kr> → apply for use | Either env name is recognized |
+| **FSC** (Financial Services Commission, data.go.kr) | `FSC_API_KEY` _(or `DATA_GO_KR_SERVICE_KEY`)_ | Dividends → dividend yield, Total Return (dividend reinvestment) | <https://www.data.go.kr> → apply for use | Either env name is recognized. The dividend batch resolves ticker→crno via DART `company.json` first, so **a DART key is also required** |
 
 ### 1) Configure keys
 
@@ -123,7 +123,9 @@ SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db
 ### 2) Run the batches — unified scheduler
 
 `batch.scheduler` is the unified entry point (meant for cron). Ingest order is
-corp-code → krx → ecos → kosis → dart → snapshot (raw first, then derived precompute).
+corp-code → krx → ecos → kosis → dart → dividend → snapshot (raw first, then derived
+precompute). Dividend runs after dart — the ticker→crno mapping is built on top of the
+corp_code mapping, and dividends feed the Total Return factor.
 
 ```bash
 cd server
@@ -145,15 +147,29 @@ python -m batch.scheduler --job kosis --observed-date 2026-06-12
 # DART financials — specific tickers / quarter (fast partial ingest)
 python -m batch.scheduler --job dart --codes 005930 000660 035420 --fiscal-year 2024 --fiscal-quarter 1
 
+# Dividends (FSC) — resolves ticker→crno (DART company.json) first, then ingests cash
+# dividends. Lookback window is the 5 years before observed-date. Needs FSC + DART keys.
+python -m batch.scheduler --job dividend --codes 005930 000660 --observed-date 2026-06-12
+
 # Force-refresh the corpCode.xml cache
 python -m batch.scheduler --job corp-code --force-refresh-corp-code
+
+# --dry-run — validate fetch + mapping + conversion WITHOUT any DB write (pre-load sanity
+# check). Confirms keys, corp_code/crno mapping, adapter reachability, conversion errors.
+python -m batch.scheduler --job all --dry-run
 ```
 
 `--observed-date` defaults to today; `--fiscal-year`/`--fiscal-quarter` default to
-the most recent quarter past its filing deadline. `--codes` is shared by KRX and
-DART — when omitted, KRX ingests the full market universe and DART covers all
+the most recent quarter past its filing deadline. `--codes` is shared by KRX, DART, and
+dividend — when omitted, KRX ingests the full market universe and DART/dividend cover all
 companies in corp_code. `--market` (KOSPI|KOSDAQ) is KRX-only and ingests both
 markets when omitted.
+
+**`--dry-run`** is for pre-load validation: dart/dividend/krx run fetch+mapping+conversion
+with no DB write, while ecos/kosis/snapshot are skipped (dry_run unsupported) to avoid DB
+writes (logged as WARNING). The corp-code/crno mapping bootstrap is read-only (disk cache;
+on a cache miss it fetches from DART — crno can take tens of minutes via per-ticker
+`company.json` calls), so it still runs under dry-run to validate mapping resolution.
 
 ### 3) Start backend / frontend
 

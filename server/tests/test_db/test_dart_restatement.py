@@ -28,6 +28,7 @@ SQLite 세션(citation JOIN 으로 rcept_no 도출, SAVEPOINT/flush)으로 검�
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -368,6 +369,17 @@ def test_cutoff_reproduce_serves_pre_restatement_value(
     cfs = [_row(amount="100", rcept_no="20240501000001")]
     handler = _handler_for(cfs_rows=cfs, ofs_rows=[])
     s_a = _run(_make_batch(db_session, handler, ifrs_types=_cfs_only()))
+    # 결정성 가드(flaky 수정): Windows 등 coarse clock(~15ms tick)에서 두 배치가
+    # 같은 tick 안에 실행되면 batch A·B 의 started_at 이 동일해진다(연속
+    # datetime.now 가 같은 값). 그러면 cutoff 의 (started_at, id) lexicographic
+    # 비교가 uuid4 id tiebreaker 에 의존하는데, uuid4 는 무작위라 batch B.id < A.id
+    # 일 때(~50%) 정정 batch B 가 cutoff(≤ A)를 통과해 정정값(150)이 새어 아래
+    # 단언이 비결정적으로 실패한다(pytest-randomly 순서에서 간헐 실패 관측). 운영은
+    # 배치 간 시간차가 커 collision 이 없으나, 본 테스트는 두 배치를 연속 실행하므로
+    # clock 이 A.started_at 을 지나도록 보장해 B.started_at > A.started_at 을
+    # 결정화한다(coarse clock 1 tick 만 대기).
+    while datetime.now(UTC) <= s_a.started_at:
+        time.sleep(0.001)
     cfs[:] = [_row(amount="150", rcept_no="20240815000009")]
     _run(_make_batch(db_session, handler, ifrs_types=_cfs_only()))
 
