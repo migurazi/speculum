@@ -30,8 +30,7 @@ Create Date: 2026-06-01
     않는다**(system-owned 유지). 재귀속(첫 실유저)=의미 오염·비결정, 폐기=§2.10
     freeze 위반. sentinel row 1 건의 INSERT 만으로 기존 row 의 FK 를 충족 —
     이것이 UPDATE 0건의 가장 보수적 해석(ADR-0021 Rationale). 본 정책은
-    **운영 DB 한정**: dev/CI 는 fresh schema, seed_demo 는 fact 만 심고
-    run/watchlist 미생성이라 마이그레이션 대상 자체가 없다.
+    **운영 DB 한정**: dev/CI 는 fresh schema 이라 마이그레이션 대상 자체가 없다.
 
 **재현성 불변식 (ADR-0021 D3 함정 C / D5)**:
     재현(reproduce) 불변식 = `result_hash`/`data_versions`/`as_of`/`result_codes`

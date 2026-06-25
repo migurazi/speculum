@@ -265,6 +265,13 @@ class CachingPriceRepository:
             )
         }
 
+    def fetch_latest_trade_date(self) -> date | None:
+        """전역 MAX — 캐시와 무관하므로 inner 에 위임. inner 미지원 시 None."""
+        fn = getattr(self._inner, "fetch_latest_trade_date", None)
+        if fn is not None:
+            return fn()
+        return None
+
     def save_prices(self, records: Sequence[PriceRecord]) -> None:
         """write 경로는 캐싱 무관 — inner 위임(Protocol 완전성)."""
         self._inner.save_prices(records)

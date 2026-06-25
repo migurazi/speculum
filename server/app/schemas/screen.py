@@ -184,6 +184,15 @@ class ScreenResultOut(BaseModel):
         실질적 race 위험 0. T18 합류 후 외부 source (DART/KRX batch_id) 가
         data_versions 에 추가되면 본 한계 재검토 (body.data_versions 전달 또는
         token 패턴).
+
+    투명성 필드 (S3, §2.1 Fidelity — additive, default 0 으로 하위호환):
+        universe_size: 자산군 사전 필터(ADR-0023 D7) 후 실제 평가 대상 모집단 크기.
+            "0건 매칭"이 "모집단 0" vs "조건 불충족" 인지 구별 가능.
+        na_excluded_count: factor NA(데이터 부재)로 탈락한 종목 수. 임계 비교 실패
+            (데이터 있으나 조건 불충족) 종목은 미포함 — "데이터 부재로 전부 제외"
+            상황을 명시 (§2.1 Fidelity 위반 해소).
+
+    **ScreenRunSnapshotOut 은 절대 변경 금지** — result_hash 격리 (H7).
     """
 
     model_config = _STRICT_MODEL_CONFIG
@@ -191,6 +200,9 @@ class ScreenResultOut(BaseModel):
     result_codes: tuple[str, ...]
     total: int
     data_versions: dict[str, str]
+    # S3 투명성 필드 — additive, default 0 으로 기존 클라이언트 하위호환 (H7).
+    universe_size: int = 0
+    na_excluded_count: int = 0
 
 
 class ScreenRunSnapshotOut(BaseModel):

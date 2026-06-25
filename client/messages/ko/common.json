@@ -40,5 +40,11 @@
     "signIn": "Google 로그인",
     "signOut": "로그아웃",
     "loading": "..."
+  },
+  "search": {
+    "loading": "검색 중…",
+    "empty": "결과 없음",
+    "error": "검색 실패",
+    "resultsAriaLabel": "종목 검색 결과"
   }
 }

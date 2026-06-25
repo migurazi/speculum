@@ -24,6 +24,7 @@ import { SaveRunButton } from "@/components/SaveRunButton";
 import { ConditionBuilder, FACTORS_QUERY_KEY } from "@/components/Screener/ConditionBuilder";
 import { ResultsTable } from "@/components/Screener/ResultsTable";
 import { SecurityTypeSelector } from "@/components/Screener/SecurityTypeSelector";
+import { extractApiErrorCode, extractApiErrorDetail } from "@/lib/api/client";
 import { fetchFactors } from "@/lib/api/factors";
 import {
   DEFAULT_SECURITY_TYPES,
@@ -217,18 +218,41 @@ export default function ScreenerPage(): JSX.Element {
         <h2 className="text-base font-semibold text-neutral-900">{t("resultsHeading")}</h2>
         {mutation.isError ? (
           <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">
-            {t("runError", { message: (mutation.error as Error).message })}
+            {/* S4: 서버 에러 detail 을 그대로 표시. AS_OF_OUT_OF_RANGE 코드는 별도 안내. */}
+            {extractApiErrorCode(mutation.error) === "AS_OF_OUT_OF_RANGE"
+              ? t("runErrorAsOfOutOfRange")
+              : t("runError", { message: extractApiErrorDetail(mutation.error) })}
           </p>
         ) : null}
         {executedSnapshot ? (
           <div className="mt-2 space-y-3">
-            <p className="text-xs text-neutral-600">
-              {t("resultsSummary", {
-                total: executedSnapshot.result.total,
-                asOf: executedSnapshot.asOf,
-              })}
-            </p>
-            <ResultsTable codes={executedSnapshot.result.result_codes} />
+            {executedSnapshot.result.total > 0 ? (
+              /* 정상 결과 — 기존대로 summary + 테이블 */
+              <>
+                <p className="text-xs text-neutral-600">
+                  {t("resultsSummary", {
+                    total: executedSnapshot.result.total,
+                    asOf: executedSnapshot.asOf,
+                  })}
+                </p>
+                <ResultsTable codes={executedSnapshot.result.result_codes} />
+              </>
+            ) : (
+              /* S4: 0건 분기 — 데이터 부재 vs 진짜 조건 불충족 구별 표시 */
+              <p className="text-sm text-amber-800 rounded-md border border-amber-300 bg-amber-50 px-3 py-2">
+                {(executedSnapshot.result.universe_size ?? 0) === 0
+                  ? /* universe 자체가 0 — 해당 자산군 데이터 미적재 */
+                    t("resultsZeroNoUniverse")
+                  : (executedSnapshot.result.na_excluded_count ?? 0) > 0
+                    ? /* universe 있으나 na_excluded 로 인해 평가 모집단 소진 */
+                      t("resultsZeroNaExcluded", {
+                        universeSize: executedSnapshot.result.universe_size ?? 0,
+                        naExcludedCount: executedSnapshot.result.na_excluded_count ?? 0,
+                      })
+                    : /* universe 있고 na_excluded 없음 — 진짜 조건 불충족 */
+                      t("resultsZeroCondition")}
+              </p>
+            )}
             {/* Save Run — execute 시점 캡처본만 사용 (oracle T40 C1/C2). 사용자가
                 conditions/asOf 변경해도 SaveRunButton 은 "방금 본 결과" 를 저장. */}
             <SaveRunButton

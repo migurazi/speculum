@@ -36,6 +36,7 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.adapters.dart_adapter import DartAdapter
+from app.adapters.pykrx_adapter import PykrxAdapter
 from app.repositories.batch_run_repository import (
     BatchRunRepository,
     FakeBatchRunRepository,
@@ -392,6 +393,25 @@ def get_dart_adapter(request: Request) -> DartAdapter:
     return DartAdapter()
 
 
+def get_pykrx_adapter_optional(request: Request) -> PykrxAdapter | None:
+    """주가 lazy fetch 용 pykrx adapter — 명시 설정 시에만 활성(테스트 안전).
+
+    종목 상세 차트 endpoint(`/{code}/prices`)가 DB 갭을 KRX 에서 즉석 충전할 때
+    사용. **기본은 None** — `app.state.pykrx_adapter` 가 설정된 운영 app
+    (`main.app`)에서만 활성화되고, 테스트의 `create_app()` 직접 사용 경로는
+    미설정이라 lazy fetch 를 타지 않는다(실 네트워크 호출 0, 회귀 0).
+
+    우선순위:
+        1. 테스트/운영 명시 주입 (`app.state.pykrx_adapter_override`).
+        2. 운영 app 의 module-level 설정 (`app.state.pykrx_adapter`).
+        3. 그 외 → None (lazy fetch 미발동 — DB 에 있는 것만 반환).
+    """
+    override = getattr(request.app.state, "pykrx_adapter_override", None)
+    if override is not None:
+        return override
+    return getattr(request.app.state, "pykrx_adapter", None)
+
+
 def get_fact_extractor(request: Request) -> LlmFactExtractor | None:
     """공시 사실추출기(LlmFactExtractor) — on-demand 주입 (ADR-0031 D6).
 
@@ -675,6 +695,11 @@ ActivePackDep = Annotated[LoadedPack, Depends(get_active_pack)]
 
 DartAdapterDep = Annotated[DartAdapter, Depends(get_dart_adapter)]
 """ADR-0026 — 공시목록 on-demand fetch adapter."""
+
+PykrxAdapterOptionalDep = Annotated[
+    "PykrxAdapter | None", Depends(get_pykrx_adapter_optional),
+]
+"""주가 차트 lazy fetch 용 pykrx adapter (미설정=None → lazy 미발동, 테스트 안전)."""
 
 CorpCodeMappingDep = Annotated[
     CorpCodeMapping, Depends(get_corp_code_mapping),

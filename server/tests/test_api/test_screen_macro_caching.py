@@ -92,7 +92,7 @@ def test_screen_shares_single_macro_cache_across_stocks(monkeypatch) -> None:
     )
 
     # 3 종목 모두 통과(조건 0개) → result 3개.
-    assert len(result) == 3
+    assert len(result.result_codes) == 3
     # 종목마다 _build_provider 호출 = 3회.
     assert len(captured) == 3
     # 전달된 macro_repo 가 모두 CachingMacroIndicatorRepository.

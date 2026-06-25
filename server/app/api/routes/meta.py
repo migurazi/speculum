@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 
 from app.api.dependencies import NormalizedAsOfDep
-from app.api.dependencies.repositories import ActivePackDep, BatchRunRepoDep
+from app.api.dependencies.repositories import ActivePackDep, BatchRunRepoDep, PriceRepoDep
 from app.schemas.data_freshness import DataFreshnessOut
 from app.services.data_freshness import assess_data_freshness
 from app.services.krx_calendar import DEFAULT_CALENDAR
@@ -91,6 +91,30 @@ async def get_factors(pack: ActivePackDep) -> dict:
         "pack_slug": pack.pack_slug,
         "pack_version": pack.version,
         "factors": factors,
+    }
+
+
+@router.get("/calendar")
+async def get_calendar(price_repo: PriceRepoDep) -> dict:
+    """검증된 KRX 캘린더 coverage + 적재된 최신 거래일 — Frontend as_of 클램프 source.
+
+    클라이언트가 picker/store 의 as_of 를 본 범위로 자동 보정해 범위 밖
+    400(AS_OF_OUT_OF_RANGE)을 사전 차단한다. earliest/latest_business_day 는
+    경계 휴장일(2024-01-01 신정·2024-12-31 연말 휴장)을 snap 한 영업일이라,
+    클라이언트가 이 값으로 클램프하면 server normalize 가 추가 snap·400 없이 통과.
+    latest_data_date 는 실제 적재된 최신 거래일(실데이터 단일 경로) — 클램프
+    상한의 우선 목표(데이터 없는 미래/공백일 회피). 데이터 부재 시 null.
+    """
+    cal = DEFAULT_CALENDAR
+    latest_data = price_repo.fetch_latest_trade_date()
+    return {
+        "min_date": cal.min_date.isoformat(),
+        "max_date": cal.max_date.isoformat(),
+        "earliest_business_day": cal.snap_to_next(cal.min_date).isoformat(),
+        "latest_business_day": cal.snap_to_previous(cal.max_date).isoformat(),
+        "latest_data_date": latest_data.isoformat() if latest_data is not None else None,
+        "version": cal.version,
+        "content_hash": cal.content_hash,
     }
 
 

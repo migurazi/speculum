@@ -408,6 +408,7 @@ def reproduce_run(
     # 3. cutoff 주입 재실행 — circular import 회피 위해 함수 내 import.
     from app.api.routes.screen import screen_active_codes
 
+    # ScreenCodesResult 반환 — .result_codes 로 unwrap (reproduce 는 result_codes 만 필요).
     result_codes = screen_active_codes(
         as_of=snapshot.as_of,
         conditions=conditions,
@@ -433,7 +434,7 @@ def reproduce_run(
         security_types=snapshot.query.security_types,
         krx_batch_cutoff=krx_cutoff,
         dart_batch_cutoff=dart_cutoff,
-    )
+    ).result_codes
 
     # 4. byte-동일 검증 — 양쪽 모두 normalize_stock_codes 정규화 (6 자리·정렬·
     #    dedup). snapshot.result_codes 는 build 시 정규화됐으나, 비교의 대칭성을

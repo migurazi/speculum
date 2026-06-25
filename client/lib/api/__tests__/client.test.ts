@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, fetchJson } from "../client";
+import { ApiError, extractApiErrorCode, extractApiErrorDetail, fetchJson } from "../client";
 
 describe("fetchJson", () => {
   const originalFetch = globalThis.fetch;
@@ -126,5 +126,69 @@ describe("fetchJson", () => {
     ) as unknown as typeof fetch;
 
     await expect(fetchJson("/api/screen")).rejects.toThrow(/JSON parse/);
+  });
+});
+
+describe("extractApiErrorDetail", () => {
+  it("ApiError body 에서 string detail 추출", () => {
+    const err = new ApiError(400, "API 400 Bad Request", JSON.stringify({ detail: "기준일 범위 초과" }));
+    expect(extractApiErrorDetail(err)).toBe("기준일 범위 초과");
+  });
+
+  it("422 ValidationError: detail 배열의 msg 들을 '; ' 로 join", () => {
+    const body = JSON.stringify({
+      detail: [
+        { loc: ["body", "conditions"], msg: "field required", type: "missing" },
+        { loc: ["body", "selected_factors"], msg: "value is not a valid list", type: "type_error" },
+      ],
+    });
+    const err = new ApiError(422, "API 422 Unprocessable Entity", body);
+    expect(extractApiErrorDetail(err)).toBe("field required; value is not a valid list");
+  });
+
+  it("body 가 JSON 이 아닌 경우 err.message fallback", () => {
+    const err = new ApiError(500, "API 500 Internal Server Error", "plain text body");
+    expect(extractApiErrorDetail(err)).toBe("API 500 Internal Server Error");
+  });
+
+  it("detail 배열에 msg 없는 entry 는 건너뜀", () => {
+    const body = JSON.stringify({ detail: [{ loc: ["x"] }] });
+    const err = new ApiError(422, "API 422", body);
+    // msg 없는 entry 만 있으면 배열 분기 실패 → message fallback.
+    expect(extractApiErrorDetail(err)).toBe("API 422");
+  });
+
+  it("ApiError 가 아닌 Error — message 반환", () => {
+    const err = new Error("네트워크 오류");
+    expect(extractApiErrorDetail(err)).toBe("네트워크 오류");
+  });
+
+  it("ApiError 가 아닌 문자열 — string 변환 반환", () => {
+    expect(extractApiErrorDetail("unexpected string error")).toBe("unexpected string error");
+  });
+});
+
+describe("extractApiErrorCode", () => {
+  it("body 에 code 필드가 있으면 반환", () => {
+    const body = JSON.stringify({ detail: "범위 초과", code: "AS_OF_OUT_OF_RANGE" });
+    const err = new ApiError(400, "API 400 Bad Request", body);
+    expect(extractApiErrorCode(err)).toBe("AS_OF_OUT_OF_RANGE");
+  });
+
+  it("body 에 code 필드 없으면 null", () => {
+    const body = JSON.stringify({ detail: "some error" });
+    const err = new ApiError(400, "API 400 Bad Request", body);
+    expect(extractApiErrorCode(err)).toBeNull();
+  });
+
+  it("body 가 JSON 이 아니면 null", () => {
+    const err = new ApiError(500, "Internal Server Error", "not json");
+    expect(extractApiErrorCode(err)).toBeNull();
+  });
+
+  it("ApiError 가 아닌 경우 null", () => {
+    expect(extractApiErrorCode(new Error("오류"))).toBeNull();
+    expect(extractApiErrorCode("string error")).toBeNull();
+    expect(extractApiErrorCode(null)).toBeNull();
   });
 });

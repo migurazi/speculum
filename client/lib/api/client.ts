@@ -46,6 +46,74 @@ export class ApiError extends Error {
 }
 
 /**
+ * 에러에서 FastAPI `detail` 문자열 추출.
+ *
+ * 처리 순서:
+ *   1. ApiError 인 경우 body 를 JSON 파싱해 `detail` 추출.
+ *      - HTTPException: `{detail: "문자열"}` → 그대로 반환.
+ *      - ValidationError (422): `{detail: [{loc, msg, type}, ...]}` → msg 들 join.
+ *   2. ApiError 이나 body 파싱 실패 → `err.message` fallback.
+ *   3. ApiError 가 아닌 경우 → `(err as Error).message` fallback.
+ *
+ * 주요 용도: 서버가 주는 에러 detail 을 그대로 UI 에 표시.
+ */
+export function extractApiErrorDetail(err: unknown): string {
+  if (err instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(err.body) as { detail?: unknown };
+      if (typeof parsed.detail === "string") {
+        return parsed.detail;
+      }
+      if (Array.isArray(parsed.detail)) {
+        // FastAPI 422 ValidationError: detail 이 [{loc, msg, type}] 배열.
+        const msgs = parsed.detail
+          .map((entry: unknown) => {
+            if (
+              typeof entry === "object"
+              && entry !== null
+              && "msg" in entry
+              && typeof (entry as { msg: unknown }).msg === "string"
+            ) {
+              return (entry as { msg: string }).msg;
+            }
+            return null;
+          })
+          .filter((m): m is string => m !== null);
+        if (msgs.length > 0) {
+          return msgs.join("; ");
+        }
+      }
+    } catch {
+      // body 가 JSON 이 아닌 경우 — message fallback.
+    }
+    return err.message;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * 에러에서 FastAPI 에러 응답의 `code` 필드 추출.
+ *
+ * backend 가 `{detail: "...", code: "AS_OF_OUT_OF_RANGE"}` 형태로 응답할 때
+ * 클라이언트가 에러 종류별 맞춤 안내 메시지를 표시하는 데 사용.
+ *
+ * ApiError 가 아니거나 body 에 `code` 필드가 없으면 `null` 반환.
+ */
+export function extractApiErrorCode(err: unknown): string | null {
+  if (err instanceof ApiError) {
+    try {
+      const parsed = JSON.parse(err.body) as { code?: unknown };
+      if (typeof parsed.code === "string") {
+        return parsed.code;
+      }
+    } catch {
+      // 파싱 실패 → null.
+    }
+  }
+  return null;
+}
+
+/**
  * 현재 HS256 JWS 액세스 토큰.
  *
  * module-level 변수 — SessionProvider 하위의 AuthTokenSync 컴포넌트가

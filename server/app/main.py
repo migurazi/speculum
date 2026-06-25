@@ -32,6 +32,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.adapters.dart_adapter import DartAdapter
+from app.adapters.pykrx_adapter import PykrxAdapter
 from app.api.exception_handlers import register_exception_handlers
 from app.api.routes.backtest import router as backtest_router
 from app.api.routes.custom_packs import router as custom_packs_router
@@ -127,7 +128,6 @@ _EXTERNAL_QUOTE_EXCLUDE_KEYS: Final[frozenset[str]] = frozenset({
 
 def create_app(
     *,
-    include_demo_routes: bool = False,
     stocks_repository: StocksMasterRepository | None = None,
     price_repository: PriceRepository | None = None,
     financial_repository: FinancialRepository | None = None,
@@ -153,10 +153,6 @@ def create_app(
     """FastAPI app 팩토리.
 
     Args:
-        include_demo_routes: True 면 `_demo_*` middleware 테스트용 endpoint 등록.
-            **운영에서는 False (default)** — production binary 에 demo 가 살아
-            있을 위험 차단 (oracle 자문 결정 7). 테스트 fixture 가 명시적
-            True 주입.
         stocks_repository: 종목 마스터 Repository 주입. None 이면 (1) SQL
             wiring 활성 시 SqlStocksMasterRepository, (2) 비활성 시 빈 Fake.
             테스트가 fixture 로 채운 Fake 를 주입 가능.
@@ -395,43 +391,13 @@ def create_app(
         """헬스체크 — middleware skip 대상."""
         return {"status": "ok"}
 
-    if include_demo_routes:
-        _register_demo_routes(app)
-
     return app
-
-
-def _register_demo_routes(app: FastAPI) -> None:
-    """ForbiddenWordsGuardMiddleware 단위 테스트용 demo endpoint.
-
-    `create_app(include_demo_routes=True)` 일 때만 호출. 운영 코드 경로에서는
-    실행 X — production binary 에 demo 가 살아 있을 위험 차단.
-    """
-
-    @app.get("/api/_demo/clean")
-    async def demo_clean() -> dict[str, object]:
-        return {
-            "title": "조건에 부합하는 종목",
-            "items": [{"code": "005930", "name_label": "Samsung Electronics"}],
-        }
-
-    @app.get("/api/_demo/dirty")
-    async def demo_dirty() -> dict[str, object]:
-        """의도적 금지 어휘 — middleware 가 정책별로 처리 검증용."""
-        return {
-            "title": "오늘의 추천 종목",
-            "message": "Buy now",
-        }
-
-    @app.get("/api/_demo/excluded_field")
-    async def demo_excluded() -> dict[str, object]:
-        """`stock_name` 필드에 금지 어휘 substring — exclude_paths 설정 시 통과."""
-        return {
-            "title": "Stock Detail",
-            "stock_name": "이베스트투자증권",
-            "value": 12.3,
-        }
 
 
 # uvicorn 등 ASGI runner 가 import 할 진입점.
 app = create_app()
+# 운영 serving 의 주가 on-demand lazy fetch (keyless pykrx). 종목 상세 가격 차트가
+# DB 갭을 KRX 에서 즉석 충전·캐시하기 위함 — get_pykrx_adapter_optional 이 본
+# state 를 읽어 활성화한다. 테스트는 create_app() 을 직접 사용해 미설정 상태이므로
+# lazy fetch 를 타지 않는다(실 네트워크 호출 0).
+app.state.pykrx_adapter = PykrxAdapter()

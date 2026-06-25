@@ -79,7 +79,7 @@ def test_screen_single_ca_cache_across_stocks(monkeypatch) -> None:
     inner_ca = FakeCorporateActionRepository(records=[])
     result, cap_ca = _run_screen(monkeypatch, corporate_action_repo=inner_ca)
 
-    assert len(result) == 3  # 조건 0개 → 전 종목 통과.
+    assert len(result.result_codes) == 3  # 조건 0개 → 전 종목 통과.
     assert len(cap_ca) == 3
     assert all(isinstance(c, CachingCorporateActionRepository) for c in cap_ca)
     # 핵심 — 3종목이 동일 캐시 인스턴스 공유(루프 전 1회 prime).

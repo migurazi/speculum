@@ -779,11 +779,11 @@ def test_reproduce_run_end_to_end_byte_identical() -> None:
         as_of=_REPRO_AS_OF, conditions=cond, dart_batch_cutoff=cutoff1, **common,
     )
     # 원 EPS=4000 > 3999 → 005930 포함.
-    assert frozen_codes == ("005930",)
+    assert frozen_codes.result_codes == ("005930",)
 
     # 라이브 (cutoff 없음) — 정정 EPS = 1000*3 + 100 = 3100 < 3999 → 탈락.
     live_codes = screen_active_codes(as_of=_REPRO_AS_OF, conditions=cond, **common)
-    assert live_codes == ()
+    assert live_codes.result_codes == ()
 
     # snapshot 저장 — data_versions 에 dart_batch1 (frozen).
     data_versions = {"dart_batch_id": str(dart_batch1), "krx_batch_id": ""}
@@ -792,7 +792,7 @@ def test_reproduce_run_end_to_end_byte_identical() -> None:
         conditions=[{"factor": _EPS_FACTOR_ID, "op": ">", "value": "3999"}],
         selected_factors=[_EPS_FACTOR_ID],
         as_of=_REPRO_AS_OF,
-        result_codes=frozen_codes,
+        result_codes=frozen_codes.result_codes,
         data_versions=data_versions,
     )
 
@@ -832,7 +832,7 @@ def test_reproduce_run_end_to_end_byte_identical() -> None:
         conditions=[{"factor": _EPS_FACTOR_ID, "op": ">", "value": "3999"}],
         selected_factors=[_EPS_FACTOR_ID],
         as_of=_REPRO_AS_OF,
-        result_codes=frozen_codes,
+        result_codes=frozen_codes.result_codes,
         data_versions=data_versions,
     )
     # 다른 실유저가 동일 query/as_of/result_codes/data_versions 로 저장한 run.
@@ -843,7 +843,7 @@ def test_reproduce_run_end_to_end_byte_identical() -> None:
         conditions=[{"factor": _EPS_FACTOR_ID, "op": ">", "value": "3999"}],
         selected_factors=[_EPS_FACTOR_ID],
         as_of=_REPRO_AS_OF,
-        result_codes=frozen_codes,
+        result_codes=frozen_codes.result_codes,
         data_versions=data_versions,
     )
     # ① result_hash byte 동일 — user_id 무관.

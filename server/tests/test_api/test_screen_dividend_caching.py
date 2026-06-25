@@ -89,7 +89,7 @@ def test_screen_single_dividend_cache_across_stocks(monkeypatch) -> None:
     inner_div = FakeDividendRepository(records=[])
     result, cap_div, cap_adj = _run_screen(monkeypatch, dividend_repo=inner_div)
 
-    assert len(result) == 3  # 조건 0개 → 전 종목 통과.
+    assert len(result.result_codes) == 3  # 조건 0개 → 전 종목 통과.
     assert len(cap_div) == 3
     assert all(isinstance(c, CachingDividendRepository) for c in cap_div)
     # 핵심 — 3종목이 동일 캐시 인스턴스 공유(루프 전 1회 prime).

@@ -23,13 +23,15 @@ M1 (조건 매칭):
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from enum import Enum
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies import BrowseAsOfDep
 from app.api.dependencies.repositories import (
     ActivePackDep,
     CorporateActionRepoDep,
@@ -92,7 +94,7 @@ _DIVIDEND_DEPENDENT_INPUTS: frozenset[str] = frozenset({
 
 @router.post("/screen", response_model=ScreenResultOut)
 async def execute_screen(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     stocks_repo: StocksRepoDep,
     session: SessionOrNoneDep,
     evaluator: FactorEvaluatorDep,
@@ -143,7 +145,7 @@ async def execute_screen(
 
     # 1. 조건 매칭 — screen 과 Save Run (runs.py) 의 단일 경로. universe 의 각
     #    종목을 자산군 필터 + conditions 로 AND 필터링한 결정적 종목코드.
-    result_codes = screen_active_codes(
+    result = screen_active_codes(
         as_of=as_of.value,
         conditions=body.conditions,
         stocks_repo=stocks_repo,
@@ -169,8 +171,10 @@ async def execute_screen(
     data_versions = dict(collect_run_data_versions(as_of.value, session))
 
     return ScreenResultOut(
-        result_codes=result_codes,
-        total=len(result_codes),
+        result_codes=result.result_codes,
+        total=len(result.result_codes),
+        universe_size=result.universe_size,
+        na_excluded_count=result.na_excluded_count,
         data_versions=data_versions,
     )
 
@@ -198,6 +202,45 @@ def _canonical_security_types(
 # =============================================================================
 # Condition 평가 — testable pure helpers
 # =============================================================================
+
+# =============================================================================
+# 3-state 종목 평가 결과 — 투명성 집계용 (S3, §2.1 Fidelity)
+# =============================================================================
+
+class _ConditionOutcome(Enum):
+    """한 종목의 조건 평가 결과 — 3-state (투명성 집계용, S3).
+
+    스크리너가 "0건 매칭"과 "데이터 부재로 전부 제외"를 구별하지 못하던 §2.1
+    Fidelity 위반을 해소하기 위해 도입. result_codes/result_hash 는 PASS 집합만
+    으로 이전과 동일하게 계산(§2.10 byte-동일 불변) — Outcome 은 additive 집계용.
+
+    값:
+        PASS         — 전 조건 통과 → result_codes 에 포함.
+        EXCLUDED_NA  — 첫 실패 조건이 NA(데이터 부재) → na_excluded_count += 1.
+        EXCLUDED_FAIL — 첫 실패 조건이 임계 비교 실패(데이터 있으나 미충족).
+    """
+
+    PASS = "pass"
+    EXCLUDED_NA = "na"
+    EXCLUDED_FAIL = "fail"
+
+
+@dataclass(frozen=True)
+class ScreenCodesResult:
+    """screen_active_codes 반환값 — 결정적 종목코드 + 투명성 집계.
+
+    Attributes:
+        result_codes: normalize_stock_codes 적용 결정적 종목코드 tuple.
+            **§2.10 byte-동일 불변** — 이 값만으로 result_hash 계산.
+        universe_size: 자산군 사전 필터(ADR-0023 D7) 후 실제 평가 대상 모집단 크기.
+        na_excluded_count: factor NA(데이터 부재)로 탈락한 종목 수.
+            임계 비교 실패(데이터 있으나 조건 불충족) 종목은 **미포함**.
+    """
+
+    result_codes: tuple[str, ...]
+    universe_size: int
+    na_excluded_count: int
+
 
 # OpEnum → Decimal 비교 연산자 매핑. float 금지 (Decimal 결정성 — evaluator /
 # price_adjuster 와 동일 의미론). `=` / `!=` 도 Decimal 동치 비교.
@@ -306,28 +349,30 @@ def _passes_all_conditions(
     evaluator: FactorEvaluator,
     *,
     as_of: date,
-) -> bool:
-    """한 종목 (provider) 이 모든 condition 을 통과하는지 (AND 결합).
+) -> _ConditionOutcome:
+    """한 종목 (provider) 이 모든 condition 을 통과하는지 — 3-state 반환.
 
-    각 condition 의 factor 를 evaluator 로 산출:
-    - N/A (is_na) → 해당 조건 불충족 (값 없는 종목이 조건을 만족한다고 주장하지
-      않음 — Fidelity §2.1). 즉시 False (AND 단축 평가).
-    - 값 있으면 op 별 Decimal 비교. 한 condition 이라도 불충족이면 False.
+    AND 단축 평가: 첫 실패 조건이 결과를 결정한다.
+    - N/A (is_na or value None) → EXCLUDED_NA (데이터 부재, §2.1 Fidelity).
+    - 임계 비교 실패 (데이터 있으나 조건 불충족) → EXCLUDED_FAIL.
+    - 전 조건 통과 → PASS.
 
-    모든 condition 통과 시만 True. conditions 는 schema 상 1~32 개 (비어있지
-    않음) 이라 빈 list 로 인한 vacuous-true 미발생.
+    EXCLUDED_NA 집계로 "0건 매칭" vs "데이터 부재로 전부 제외"를 클라이언트가
+    구별 가능 (S3 투명성, §2.1 위반 해소). result_codes 는 PASS 집합만으로
+    이전과 byte-동일하게 유지 (§2.10 불변).
     """
     for cond in compiled:
         result: EvaluationResult = evaluator.evaluate(
             cond.factor, provider, as_of=as_of,
         )
         if result.is_na or result.value is None:
-            # 값 없는 종목 — 해당 조건 불충족 → 제외.
-            return False
+            # 데이터 부재 — 투명성 집계를 위해 NA 탈락으로 구분.
+            return _ConditionOutcome.EXCLUDED_NA
         comparator = _OP_COMPARATORS[cond.op]
         if not comparator(result.value, cond.threshold):
-            return False
-    return True
+            # 데이터는 있으나 임계값 불충족.
+            return _ConditionOutcome.EXCLUDED_FAIL
+    return _ConditionOutcome.PASS
 
 
 def _conditions_serve_eligible(compiled: list[_CompiledCondition]) -> bool:
@@ -362,14 +407,17 @@ def _conditions_serve_eligible(compiled: list[_CompiledCondition]) -> bool:
 def _passes_all_conditions_from_snapshot(
     compiled: list[_CompiledCondition],
     served: Mapping[UUID, Decimal | None],
-) -> bool:
-    """serve 된 snapshot value 로 한 종목이 모든 condition 을 통과하는지 (AND).
+) -> _ConditionOutcome:
+    """serve 된 snapshot value 로 한 종목의 condition 평가 — 3-state 반환.
 
     live `_passes_all_conditions` 와 **동일 비교·동일 AND short-circuit** — 차이는
     `evaluator.evaluate` 대신 precompute snapshot value 를 쓴다는 점뿐. snapshot
     value None(미산정)은 live 의 `is_na`(invariant: is_na ⟺ value None)와 동일하게
-    조건 불충족 → False. 값 있으면 `_OP_COMPARATORS` Decimal 비교(snapshot 은
-    str(Decimal) 무손실 round-trip 이라 live Decimal 과 byte-동일 비교 결과).
+    EXCLUDED_NA. 값 있으면 `_OP_COMPARATORS` Decimal 비교(snapshot 은 str(Decimal)
+    무손실 round-trip 이라 live Decimal 과 byte-동일 비교 결과).
+
+    3-state 의미는 live `_passes_all_conditions` 와 동일 — EXCLUDED_NA/EXCLUDED_FAIL
+    구분으로 투명성 집계(S3, §2.1). result_codes 는 PASS 집합만이라 byte-동일 불변.
 
     전제: `served` 는 `try_serve_snapshot_values` 결과(전 조건 factor uuid hit) —
     호출자가 serve 가능(not None)을 확인한 뒤 호출하므로 각 cond.factor_uuid 가
@@ -378,12 +426,12 @@ def _passes_all_conditions_from_snapshot(
     for cond in compiled:
         value = served.get(cond.factor_uuid)
         if value is None:
-            # 미산정(live is_na 와 동일 의미) → 해당 조건 불충족 → 제외.
-            return False
+            # 미산정(live is_na 와 동일 의미) → NA 탈락으로 구분.
+            return _ConditionOutcome.EXCLUDED_NA
         comparator = _OP_COMPARATORS[cond.op]
         if not comparator(value, cond.threshold):
-            return False
-    return True
+            return _ConditionOutcome.EXCLUDED_FAIL
+    return _ConditionOutcome.PASS
 
 
 def _build_provider(
@@ -459,13 +507,20 @@ def screen_active_codes(
     dart_batch_cutoff: BatchCutoff | None = None,
     snapshot_repo: StockSnapshotRepository | None = None,
     current_data_versions: Mapping[str, str] | None = None,
-) -> tuple[str, ...]:
-    """active universe 를 자산군 사전 필터 + conditions 로 AND 필터링한 결정적 종목코드.
+) -> ScreenCodesResult:
+    """active universe 를 자산군 사전 필터 + conditions 로 AND 필터링 — ScreenCodesResult 반환.
 
     POST /api/screen 과 POST /api/runs (Save Run) 의 **단일 조건 매칭 경로** —
     두 endpoint 가 동일 결과를 산출해야 Reproducibility (저장된 run = 스크린 결과,
     §2.10) 가 성립. 종목별 `DbFieldProvider` 로 factor 실평가, N/A 종목 제외,
     `normalize_stock_codes` 로 결정적 순서 (6 자리·정렬·dedup).
+
+    반환 `ScreenCodesResult`:
+    - `result_codes`: 조건 통과 결정적 종목코드 (§2.10 byte-동일 보존 — 호출자가
+      result_hash 입력으로 사용, .result_codes 로 unwrap).
+    - `universe_size`: 자산군 사전 필터 후 실평가 모집단 크기 (투명성 S3).
+    - `na_excluded_count`: factor NA(데이터 부재)로 탈락한 종목 수 — 임계 비교 실패
+      종목 제외, "0건 매칭" vs "데이터 부재로 전부 제외" 구별 가능 (§2.1 Fidelity).
 
     `security_types` (ADR-0023 D7 — universe 자산군 사전 필터): None (default) 이면
     `("common",)` — 보통주만 (universe 확장이 기본 동작 불변, D4/D7). active
@@ -624,6 +679,7 @@ def screen_active_codes(
     )
 
     matched: list[str] = []
+    na_count = 0  # factor NA(데이터 부재)로 탈락한 종목 수 (투명성 S3, §2.1).
     for record in universe_records:
         code = record.current_code
         if serve_active:
@@ -637,8 +693,11 @@ def screen_active_codes(
                 current_data_versions=current_data_versions,
             )
             if served is not None:
-                if _passes_all_conditions_from_snapshot(compiled, served):
+                outcome = _passes_all_conditions_from_snapshot(compiled, served)
+                if outcome is _ConditionOutcome.PASS:
                     matched.append(code)
+                elif outcome is _ConditionOutcome.EXCLUDED_NA:
+                    na_count += 1
                 continue  # serve 성공 — live 경로 skip.
             # served None(miss/stale) → 아래 live 평가 fallback.
         provider = _build_provider(
@@ -656,6 +715,13 @@ def screen_active_codes(
             krx_batch_cutoff=krx_batch_cutoff,
             dart_batch_cutoff=dart_batch_cutoff,
         )
-        if _passes_all_conditions(provider, compiled, evaluator, as_of=as_of):
+        outcome = _passes_all_conditions(provider, compiled, evaluator, as_of=as_of)
+        if outcome is _ConditionOutcome.PASS:
             matched.append(code)
-    return normalize_stock_codes(matched)
+        elif outcome is _ConditionOutcome.EXCLUDED_NA:
+            na_count += 1
+    return ScreenCodesResult(
+        result_codes=normalize_stock_codes(matched),
+        universe_size=len(universe_records),
+        na_excluded_count=na_count,
+    )

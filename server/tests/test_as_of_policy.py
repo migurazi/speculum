@@ -197,3 +197,66 @@ def test_normalize_uses_real_kst_today_by_default() -> None:
     # 본 테스트는 운영 entry 가 kst_today 를 사용한다는 contract 만 확인.
     with pytest.raises(AsOfOutOfRangeError):
         AsOfPolicy.normalize(None)  # today 미주입, kst_today 자동 사용
+
+
+# =============================================================================
+# 9. browse degrade 모드 (ROADMAP_v2 §2.3 — 가용성 우선)
+# =============================================================================
+
+def test_previous_weekday_snaps_weekend_to_friday() -> None:
+    """_previous_weekday: 토→금, 일→금, 평일→그대로."""
+    from app.services.as_of_policy import _previous_weekday
+    assert _previous_weekday(date(2026, 6, 20)) == date(2026, 6, 19)  # 토→금
+    assert _previous_weekday(date(2026, 6, 21)) == date(2026, 6, 19)  # 일→금
+    assert _previous_weekday(date(2026, 6, 19)) == date(2026, 6, 19)  # 금(평일)→그대로
+
+
+def test_browse_none_out_of_range_degrades_not_raises() -> None:
+    """browse: today(2026)가 2024 캘린더 밖 → AsOfOutOfRangeError 대신 weekday degrade."""
+    from app.services.as_of_policy import _previous_weekday
+    today = date(2026, 6, 25)  # 목, 2024 캘린더 밖
+    result = AsOfPolicy._normalize_with_today(None, today=today, mode="browse")
+    assert result.value == _previous_weekday(today)  # == 2026-06-25 (목)
+    assert result.was_degraded is True
+    assert result.was_defaulted is True
+
+
+def test_browse_input_out_of_range_degrades() -> None:
+    """browse: 명시 입력이 캘린더 밖 → weekday 근사 degrade(범위 밖 입력)."""
+    from app.services.as_of_policy import _previous_weekday
+    out_of_range = date(2026, 6, 21)  # 일, 2024 캘린더 밖
+    result = AsOfPolicy._normalize_with_today(
+        out_of_range, today=date(2026, 6, 25), mode="browse",
+    )
+    assert result.value == _previous_weekday(out_of_range)  # 일→금 2026-06-19
+    assert result.was_degraded is True
+    assert result.original_input == out_of_range
+
+
+def test_browse_in_range_no_degrade() -> None:
+    """browse: 범위 내 정상 입력은 strict 와 동일(degrade X, 정확 캘린더 사용)."""
+    result = AsOfPolicy._normalize_with_today(
+        date(2024, 5, 7), today=date(2026, 6, 25), mode="browse",
+    )
+    assert result.value == date(2024, 5, 7)
+    assert result.was_degraded is False
+
+
+def test_browse_future_still_rejected() -> None:
+    """browse 도 미래는 거부 — degrade 는 가용성이지 미래 허용 아님."""
+    with pytest.raises(AsOfInFutureError):
+        AsOfPolicy._normalize_with_today(
+            date(2026, 6, 26), today=date(2026, 6, 25), mode="browse",
+        )
+
+
+def test_strict_out_of_range_still_raises() -> None:
+    """strict(기본) 는 범위 밖이면 여전히 AsOfOutOfRangeError — frozen 경로 보호."""
+    with pytest.raises(AsOfOutOfRangeError):
+        AsOfPolicy._normalize_with_today(
+            None, today=date(2026, 6, 25), mode="strict",
+        )
+    with pytest.raises(AsOfOutOfRangeError):
+        AsOfPolicy._normalize_with_today(
+            date(2026, 6, 19), today=date(2026, 6, 25), mode="strict",
+        )

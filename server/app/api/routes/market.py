@@ -33,7 +33,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 
-from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies import BrowseAsOfDep
 from app.api.dependencies.repositories import (
     ActivePackDep,
     CorporateActionRepoDep,
@@ -102,7 +102,7 @@ _MACRO_INDICATORS: Final[tuple[tuple[str, str], ...]] = (
 
 @router.get("/market-overview", response_model=MarketOverviewOut)
 async def get_market_overview(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     stocks_repo: StocksRepoDep,
     pack: ActivePackDep,
     evaluator: FactorEvaluatorDep,

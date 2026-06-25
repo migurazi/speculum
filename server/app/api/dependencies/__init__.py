@@ -5,13 +5,20 @@
 패키지에 추가.
 """
 
-from app.api.dependencies.as_of import NormalizedAsOfDep, get_normalized_as_of
+from app.api.dependencies.as_of import (
+    BrowseAsOfDep,
+    NormalizedAsOfDep,
+    get_browse_as_of,
+    get_normalized_as_of,
+)
 from app.api.dependencies.auth import CurrentUserDep, UserContext, get_current_user
 
 __all__ = [
+    "BrowseAsOfDep",
     "CurrentUserDep",
     "NormalizedAsOfDep",
     "UserContext",
+    "get_browse_as_of",
     "get_current_user",
     "get_normalized_as_of",
 ]

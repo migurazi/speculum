@@ -93,7 +93,7 @@ def test_screen_shares_single_price_cache_across_stocks(monkeypatch) -> None:
         monkeypatch, price_repo=inner_price, market_cap_repo=inner_mc,
     )
 
-    assert len(result) == 3  # 조건 0개 → 전 종목 통과(가격 없어도 screen 은 무관).
+    assert len(result.result_codes) == 3  # 조건 0개 → 전 종목 통과(가격 없어도 screen 은 무관).
     assert len(cap_price) == 3
     # 전달된 price/market_cap 가 모두 캐싱 래퍼.
     assert all(isinstance(p, CachingPriceRepository) for p in cap_price)

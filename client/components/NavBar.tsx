@@ -26,6 +26,7 @@ import { usePathname } from "next/navigation";
 
 import { AsOfDatePicker } from "@/components/AsOfDatePicker";
 import { AuthButton } from "@/components/AuthButton";
+import { StockSearch } from "@/components/StockSearch";
 import { cn } from "@/lib/utils";
 
 // 라벨은 i18n 키로 분리 — href 는 라우팅 상수이므로 코드에 유지.
@@ -81,15 +82,8 @@ export function NavBar({ className }: NavBarProps): JSX.Element {
           {t("appName")}
         </Link>
         <div className="flex-1">
-          {/* 종목 검색 placeholder — T36/T37 의 lookup 합류 시 실 input. */}
-          <input
-            type="search"
-            placeholder={t("searchPlaceholder")}
-            aria-label={t("searchAriaLabel")}
-            readOnly
-            aria-disabled="true"
-            className="w-full max-w-md rounded-md border border-neutral-300 px-3 py-1.5 text-sm placeholder:text-neutral-400 cursor-not-allowed bg-neutral-50"
-          />
+          {/* 종목 검색 — StockSearch combobox (T36/T37). */}
+          <StockSearch />
         </div>
         <AsOfDatePicker />
         <AuthButton />

@@ -104,11 +104,9 @@ _DEFAULT_EXCLUDES: Final[tuple[str, ...]] = (
     "**/__tests__/**",
     # Alembic migration tools — `upgrade()` / `downgrade()` 가 method 이름.
     "server/alembic/**",
-    # Demo route 안의 의도된 위반 ("Buy now" 등) — middleware 테스트용. 운영
-    # `include_demo_routes=False` default 라 production binary 에 미포함.
-    # oracle 리뷰 M-2 [TODO M0 출하 전]: demo route 를 `server/app/api/_demo.py`
-    # 별도 모듈로 분리 + 본 exclude 제거. 그 동안 main.py 의 신규 운영
-    # endpoint 가 CI 검사 누락될 위험 인지.
+    # main.py docstring/주석에서 No Advice 정책·거래 side 어휘를 정당 인용
+    # ("buy"/"sell"/"추천" 등 — 정책 설명 재귀 false positive). 운영 응답
+    # 검사는 런타임 ForbiddenWordsGuardMiddleware 가 담당.
     "server/app/main.py",
     # =========================================================================
     # M3 conformance hardening (2026-06-04) — 검증된 factual/정책-설명 파일.
@@ -152,7 +150,6 @@ _DEFAULT_EXCLUDES: Final[tuple[str, ...]] = (
     "server/app/schemas/stocks.py",
     "server/app/adapters/dart_adapter.py",
     "server/app/adapters/ecos_adapter.py",
-    "server/scripts/seed_demo.py",
     "client/lib/api/factor-packs.ts",
     "client/lib/api/financials.ts",
     "client/lib/api/market.ts",

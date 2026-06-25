@@ -88,8 +88,53 @@ def get_normalized_as_of(
     return normalized
 
 
+def get_browse_as_of(
+    response: Response,
+    as_of: Annotated[
+        date | None,
+        Query(
+            description=(
+                "PIT 기준 일자 (YYYY-MM-DD, KST) — browse 경로. 누락 시 오늘. "
+                "verified 캘린더 범위 밖이면 weekday 근사로 graceful degrade "
+                "(X-AsOf-Degraded). 미래는 400. (ROADMAP_v2 §2.3 — 가용성 우선)"
+            ),
+            examples=["2024-10-01"],
+        ),
+    ] = None,
+) -> NormalizedAsOf:
+    """browse(읽기) 경로 전용 정규화 — verified 범위 밖을 degrade(가용성 우선).
+
+    `get_normalized_as_of`(strict) 와 달리 `mode="browse"` 로 호출 — 캘린더 범위
+    밖 as_of(예: 2026 vs 2024 캘린더)를 `AsOfOutOfRangeError` 대신 weekday 근사로
+    보정해 **오늘 날짜에도 200** 을 보장한다(ROADMAP_v2 §2.3 R3). 미래는 여전히
+    `AsOfInFutureError`(400). **종목 상세·시장·비교 등 read-only 거울 경로 전용 —
+    frozen/재현(runs·backtest)에는 절대 미사용**(정확 휴장일 필수).
+
+    Headers: strict 와 동일 + `X-AsOf-Degraded: true`(범위 밖 근사 시).
+    """
+    normalized = AsOfPolicy.normalize(as_of, mode="browse")
+
+    response.headers["X-AsOf"] = normalized.value.isoformat()
+    if normalized.was_defaulted:
+        response.headers["X-AsOf-Defaulted"] = "true"
+    if normalized.was_snapped:
+        response.headers["X-AsOf-Snapped"] = "true"
+        if normalized.original_input is not None:
+            response.headers["X-AsOf-Original"] = normalized.original_input.isoformat()
+    if normalized.was_degraded:
+        # verified 캘린더 밖 weekday 근사 — 휴장일 미반영 고지(Fidelity: 정확성이
+        # 아닌 가용성 degrade 임을 헤더로 노출).
+        response.headers["X-AsOf-Degraded"] = "true"
+        if normalized.original_input is not None:
+            response.headers["X-AsOf-Original"] = normalized.original_input.isoformat()
+
+    return normalized
+
+
 # Annotated alias — endpoint signature boilerplate 압축 (oracle 결정 5 패턴).
 NormalizedAsOfDep = Annotated[NormalizedAsOf, Depends(get_normalized_as_of)]
+BrowseAsOfDep = Annotated[NormalizedAsOf, Depends(get_browse_as_of)]
+"""browse(읽기) 경로 전용 — verified 범위 밖 degrade. frozen 경로엔 NormalizedAsOfDep."""
 """Endpoint 의 type-level dependency hint. 사용 예:
 
     @app.get("/api/screen")

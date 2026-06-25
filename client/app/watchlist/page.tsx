@@ -29,7 +29,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { FolderSidebar } from "@/components/Watchlist/FolderSidebar";
 import { ItemList } from "@/components/Watchlist/ItemList";
-import { ApiError } from "@/lib/api/client";
+import { extractApiErrorDetail } from "@/lib/api/client";
 import { searchStocks } from "@/lib/api/stocks";
 import {
   addItem,
@@ -162,11 +162,8 @@ export default function WatchlistPage(): JSX.Element {
       });
     },
     onError: (err) => {
-      const msg =
-        err instanceof ApiError
-          ? extractApiErrorMessage(err)
-          : (err as Error).message;
-      setAddError(msg);
+      // extractApiErrorDetail: ApiError body 의 FastAPI detail 추출, fallback → message.
+      setAddError(extractApiErrorDetail(err));
     },
   });
 
@@ -284,40 +281,3 @@ export default function WatchlistPage(): JSX.Element {
   );
 }
 
-/**
- * ApiError body 의 FastAPI detail 추출.
- *
- * detail 형태 (oracle T39 M4):
- *   - HTTPException: `{detail: "메시지"}` — 문자열 그대로 반환.
- *   - 422 ValidationError: `{detail: [{loc, msg, type}, ...]}` — `msg` 들 join.
- *   - 그 외: `err.message` fallback.
- */
-function extractApiErrorMessage(err: ApiError): string {
-  try {
-    const parsed = JSON.parse(err.body) as { detail?: unknown };
-    if (typeof parsed.detail === "string") {
-      return parsed.detail;
-    }
-    if (Array.isArray(parsed.detail)) {
-      const msgs = parsed.detail
-        .map((entry: unknown) => {
-          if (
-            typeof entry === "object"
-            && entry !== null
-            && "msg" in entry
-            && typeof (entry as { msg: unknown }).msg === "string"
-          ) {
-            return (entry as { msg: string }).msg;
-          }
-          return null;
-        })
-        .filter((m): m is string => m !== null);
-      if (msgs.length > 0) {
-        return msgs.join("; ");
-      }
-    }
-  } catch {
-    // body 가 JSON 아닌 경우 — message 그대로.
-  }
-  return err.message;
-}

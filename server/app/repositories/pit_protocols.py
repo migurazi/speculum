@@ -415,6 +415,10 @@ class PriceRepository(Protocol):
         """
         ...
 
+    def fetch_latest_trade_date(self) -> date | None:
+        """적재된 최신 거래일(MAX effective_date). 데이터 없으면 None."""
+        ...
+
     def save_prices(self, records: Sequence[PriceRecord]) -> None:
         """가격 row bulk insert — T18 KRX 일배치 합류.
 

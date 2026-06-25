@@ -36,6 +36,7 @@ from app.adapters.base import (
 )
 from app.adapters.dart_account_mapper import (
     UNMAPPED_PREFIX,
+    is_no_standard_code,
     is_unmapped,
     map_ifrs_account,
 )
@@ -311,6 +312,56 @@ def test_multi_statement_dedup_and_sce_excluded() -> None:
     # net_income 은 IS 1건만 (CIS/CF/SCE 중복 제거).
     assert by_acc["net_income"] == Decimal("10")
     assert accounts.count("net_income") == 1
+
+
+# =============================================================================
+# 1-b. S1 — 표준계정코드 없음 sentinel 파싱 제외
+# =============================================================================
+
+def test_is_no_standard_code_detects_sentinels() -> None:
+    """빈 account_id 와 "-표준계정코드 미사용-" 은 sentinel(True), 정상 ID 는 False."""
+    assert is_no_standard_code("") is True
+    assert is_no_standard_code("   ") is True  # 공백만 → strip 후 빈 문자열
+    assert is_no_standard_code("-표준계정코드 미사용-") is True
+    assert is_no_standard_code(" -표준계정코드 미사용- ") is True  # 주변 공백 허용
+    assert is_no_standard_code("ifrs-full_Assets") is False
+    assert is_no_standard_code(None) is True  # 비-str(schema drift) → 안전 제외
+
+
+def test_no_standard_code_sentinel_rows_excluded_no_corruption() -> None:
+    """S1 회귀 가드 — 같은 statement 에 표준계정코드 없음 sentinel 행이 2건+ 있어도
+    PITDataCorruptionError 없이 적재되고, sentinel 행은 제외·정상 행만 보존된다.
+
+    실측 버그(2023 반기보고서): DART 가 표준계정코드 없는 line item 의 account_id 를
+    문자 그대로 "-표준계정코드 미사용-" 로 주는데, 같은 재무제표에 이런 행이 2건+ 면
+    전부 동일 `unmapped:-표준계정코드 미사용-` 키로 충돌 → 단일 fetch 내 canonical
+    중복 → 저장 시 PITDataCorruptionError → 종목 전체 적재 실패. 본 테스트가 그
+    회귀를 가드한다(분기보고서 적재 unblock).
+    """
+    rows_raw = [
+        # 정상 매핑 행 — 보존돼야 함.
+        _dart_row(account_id="ifrs-full_Assets", thstrm_amount="100", sj_div="BS"),
+        # 표준계정코드 없음 sentinel — 같은 BS 에 서로 다른 값으로 2건(실 응답 형태).
+        # 제외 전이면 동일 canonical 2건 → 중복 → corruption.
+        _dart_row(account_id="-표준계정코드 미사용-", thstrm_amount="7", sj_div="BS"),
+        _dart_row(account_id="-표준계정코드 미사용-", thstrm_amount="13", sj_div="BS"),
+        # 빈 account_id sentinel — 역시 제외.
+        _dart_row(account_id="", thstrm_amount="3", sj_div="IS"),
+    ]
+    adapter = _adapter_with_response(_dart_response(rows=rows_raw))
+    result = adapter.fetch_financial_statement(
+        code="005930", corp_code="00126380", fiscal_year=2023,
+        fiscal_quarter=2, ifrs_type=IfrsType.CFS, batch_id=uuid4(),
+    )
+    accounts = [r.account for r in result.data]
+    # canonical 중복 0 (PIT 무결성 가드 충족 — corruption 미발생).
+    assert len(accounts) == len(set(accounts)), f"중복 canonical: {accounts}"
+    # sentinel 행은 적재 안 됨 — unmapped sentinel canonical 부재.
+    assert "unmapped:-표준계정코드 미사용-" not in accounts
+    assert f"{UNMAPPED_PREFIX}<empty>" not in accounts
+    # 정상 행은 보존.
+    by_acc = {r.account: r.value for r in result.data}
+    assert by_acc["total_assets"] == Decimal("100")
 
 
 # =============================================================================

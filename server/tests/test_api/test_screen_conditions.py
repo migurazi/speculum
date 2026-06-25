@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.screen import (
     _compile_conditions,
+    _ConditionOutcome,
     _parse_decimal_value,
     _passes_all_conditions,
 )
@@ -108,7 +109,7 @@ def _compile(canonical_id: str, op: OpEnum, value: str):
 
 
 @pytest.mark.parametrize(
-    ("op", "threshold", "actual", "expected"),
+    ("op", "threshold", "actual", "expected_pass"),
     [
         # op, value(str), factor 산출값(Decimal), 통과 여부
         (OpEnum.LT, "10", Decimal("9"), True),
@@ -127,31 +128,37 @@ def _compile(canonical_id: str, op: OpEnum, value: str):
     ],
 )
 def test_op_decimal_comparison(
-    op: OpEnum, threshold: str, actual: Decimal, expected: bool,
+    op: OpEnum, threshold: str, actual: Decimal, expected_pass: bool,
 ) -> None:
-    """각 op 의 Decimal 비교 정확성 (float 금지 — Decimal 동치 포함)."""
+    """각 op 의 Decimal 비교 정확성 (float 금지 — Decimal 동치 포함).
+
+    _passes_all_conditions 가 3-state(_ConditionOutcome) 를 반환하므로:
+    expected_pass=True → PASS, expected_pass=False → EXCLUDED_FAIL (값 있으나 불충족).
+    """
     cid = "per:ttm-consolidated-ifrs"
     compiled = _compile(cid, op, threshold)
     evaluator = _StubEvaluator({cid: _result(cid, actual)})
-    passed = _passes_all_conditions(
+    outcome = _passes_all_conditions(
         _FakeFieldProvider(), compiled, evaluator, as_of=date(2024, 5, 7),
     )
-    assert passed is expected
+    expected = _ConditionOutcome.PASS if expected_pass else _ConditionOutcome.EXCLUDED_FAIL
+    assert outcome is expected
 
 
 def test_na_factor_excludes_stock() -> None:
-    """N/A factor 종목은 조건 불충족으로 제외 (값 없는 종목이 만족 주장 안 함)."""
+    """N/A factor 종목 → EXCLUDED_NA (값 없는 종목이 만족 주장 안 함, §2.1)."""
     cid = "per:ttm-consolidated-ifrs"
     compiled = _compile(cid, OpEnum.LT, "10")
     evaluator = _StubEvaluator({cid: _result(cid, None)})  # N/A
-    passed = _passes_all_conditions(
+    outcome = _passes_all_conditions(
         _FakeFieldProvider(), compiled, evaluator, as_of=date(2024, 5, 7),
     )
-    assert passed is False
+    # 데이터 부재 → EXCLUDED_NA (임계 비교 실패 EXCLUDED_FAIL 과 구분, na_excluded_count).
+    assert outcome is _ConditionOutcome.EXCLUDED_NA
 
 
 def test_multiple_conditions_and_combination() -> None:
-    """다중 조건 AND — 모두 통과해야 True. 하나라도 불충족이면 False."""
+    """다중 조건 AND — 전부 통과면 PASS, 첫 실패가 결과 결정 (3-state AND)."""
     cid_a = "per:ttm-consolidated-ifrs"
     cid_b = "pbr:consolidated-ifrs"
     factors_by_id = {cid_a: _factor(cid_a), cid_b: _factor(cid_b)}
@@ -161,32 +168,32 @@ def test_multiple_conditions_and_combination() -> None:
     ]
     compiled = _compile_conditions(conditions, factors_by_id)
 
-    # 둘 다 통과 → True.
+    # 둘 다 통과 → PASS.
     ev_both = _StubEvaluator({
         cid_a: _result(cid_a, Decimal("8")),
         cid_b: _result(cid_b, Decimal("0.9")),
     })
     assert _passes_all_conditions(
         _FakeFieldProvider(), compiled, ev_both, as_of=date(2024, 5, 7),
-    ) is True
+    ) is _ConditionOutcome.PASS
 
-    # 두 번째 불충족 → False (AND).
+    # 두 번째 불충족(데이터 있음) → EXCLUDED_FAIL (AND 단축).
     ev_one = _StubEvaluator({
         cid_a: _result(cid_a, Decimal("8")),
         cid_b: _result(cid_b, Decimal("2")),  # PBR < 1 불충족
     })
     assert _passes_all_conditions(
         _FakeFieldProvider(), compiled, ev_one, as_of=date(2024, 5, 7),
-    ) is False
+    ) is _ConditionOutcome.EXCLUDED_FAIL
 
-    # 두 번째가 N/A → False (AND + N/A 제외).
+    # 두 번째가 N/A → EXCLUDED_NA (AND 단축 + 데이터 부재 구분).
     ev_na = _StubEvaluator({
         cid_a: _result(cid_a, Decimal("8")),
         cid_b: _result(cid_b, None),
     })
     assert _passes_all_conditions(
         _FakeFieldProvider(), compiled, ev_na, as_of=date(2024, 5, 7),
-    ) is False
+    ) is _ConditionOutcome.EXCLUDED_NA
 
 
 def test_parse_decimal_value_accepts_numeric() -> None:
@@ -269,9 +276,9 @@ def test_real_evaluator_integration_with_provider() -> None:
     )
     assert _passes_all_conditions(
         provider, pass_cond, evaluator, as_of=date(2024, 5, 7),
-    ) is True
+    ) is _ConditionOutcome.PASS
 
-    # 새 provider (캐시 회피) — EPS > 4000 불충족.
+    # 새 provider (캐시 회피) — EPS > 4000 불충족(데이터 있음 → EXCLUDED_FAIL).
     provider2 = DbFieldProvider(
         code=code, as_of=date(2024, 5, 7),
         price_repo=FakePriceRepository(records=()),
@@ -287,7 +294,7 @@ def test_real_evaluator_integration_with_provider() -> None:
     )
     assert _passes_all_conditions(
         provider2, fail_cond, evaluator, as_of=date(2024, 5, 7),
-    ) is False
+    ) is _ConditionOutcome.EXCLUDED_FAIL
 
 
 # =============================================================================
@@ -445,3 +452,118 @@ def test_e2e_save_run_matches_screen_result(e2e_client: TestClient) -> None:
     # screen = 조건 매칭 (005930 만). Save Run 이 active 전체가 아닌 동일 결과 저장.
     assert screen.json()["result_codes"] == ["005930"]
     assert run.json()["result_codes"] == screen.json()["result_codes"]
+
+
+# =============================================================================
+# S3 투명성 필드 — universe_size / na_excluded_count (§2.1 Fidelity)
+# =============================================================================
+
+def test_transparency_fields_na_excluded(e2e_client: TestClient) -> None:
+    """na_excluded_count: factor NA 종목 수만 집계 — 임계 미충족 종목은 미포함.
+
+    fixture: 005930 EPS=4000, 000660 EPS N/A.
+    EPS > 3999 조건:
+      - 005930: PASS → result_codes 에 포함.
+      - 000660: EXCLUDED_NA → na_excluded_count += 1.
+    na_excluded_count=1, universe_size=2, result_codes=["005930"].
+    """
+    res = e2e_client.post("/api/screen?as_of=2024-05-07", json=_body(">", "3999"))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["result_codes"] == ["005930"]
+    assert body["universe_size"] == 2          # 005930 + 000660 (자산군 필터 후)
+    assert body["na_excluded_count"] == 1       # 000660 EPS N/A
+
+
+def test_transparency_fields_fail_not_counted_as_na(e2e_client: TestClient) -> None:
+    """임계 비교 실패(데이터 있으나 조건 불충족) 종목은 na_excluded_count 에 미포함.
+
+    fixture: 005930 EPS=4000, 000660 EPS N/A.
+    EPS > 5000 조건:
+      - 005930: EPS=4000, 데이터 있으나 4000 > 5000 불충족 → EXCLUDED_FAIL.
+      - 000660: EXCLUDED_NA.
+    na_excluded_count=1 (000660 만), universe_size=2, result_codes=[].
+    """
+    res = e2e_client.post("/api/screen?as_of=2024-05-07", json=_body(">", "5000"))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["result_codes"] == []
+    assert body["universe_size"] == 2
+    assert body["na_excluded_count"] == 1       # 005930 은 EXCLUDED_FAIL — 미집계
+
+
+def test_transparency_fields_all_pass(e2e_client: TestClient) -> None:
+    """전 종목 통과 시 na_excluded_count=0 — 데이터 부재 없음.
+
+    두 종목 모두 EPS 4 분기 주입 → 전부 EPS > 0 통과.
+    na_excluded_count=0, universe_size=2, result_codes 에 둘 다 포함.
+    """
+    stocks = FakeStocksMasterRepository(records=[
+        _stock("005930", "삼성전자"), _stock("000660", "SK하이닉스"),
+    ])
+    financials = FakeFinancialRepository(records=(
+        _eps_quarters("005930", ["1000"] * 4)
+        + _eps_quarters("000660", ["500"] * 4)
+    ))
+    app = create_app(stocks_repository=stocks, financial_repository=financials)
+    with TestClient(app) as c:
+        res = c.post("/api/screen?as_of=2024-05-07", json=_body(">", "0"))
+    assert res.status_code == 200
+    body = res.json()
+    assert set(body["result_codes"]) == {"005930", "000660"}
+    assert body["universe_size"] == 2
+    assert body["na_excluded_count"] == 0
+
+
+def test_transparency_universe_size_matches_filtered_universe(e2e_client: TestClient) -> None:
+    """universe_size = 자산군 필터 후 실제 평가 모집단 크기.
+
+    e2e_client fixture 는 종목 2개(보통주). universe_size 는 security_types 필터 후
+    active universe 크기 — 조건 결과(total)와 무관.
+    """
+    # EPS > 999999 → 아무도 통과 못 하지만 universe_size=2 는 고정.
+    res = e2e_client.post("/api/screen?as_of=2024-05-07", json=_body(">", "999999"))
+    assert res.status_code == 200
+    body = res.json()
+    assert body["result_codes"] == []
+    assert body["universe_size"] == 2           # 모집단 크기는 조건 결과와 독립
+
+
+def test_transparency_byte_identity_result_codes_unchanged() -> None:
+    """result_codes byte-동일 회귀 가드 — 3-state 도입 후 result_codes 값 불변.
+
+    §2.10 핵심 불변: _ConditionOutcome 도입 전 동작(bool → tuple[str,...])과
+    result_codes 는 byte-동일해야 한다. ScreenCodesResult 반환으로 wrapping 만
+    추가됐을 뿐 result_codes 집합은 변경 없음.
+    """
+    from app.api.routes.screen import screen_active_codes
+    from app.repositories.fakes import (
+        FakeCorporateActionRepository,
+        FakeMarketCapRepository,
+        FakePriceRepository,
+        FakeTreasurySharesRepository,
+    )
+    from app.schemas.screen import ConditionIn, OpEnum
+    from app.services.factor_evaluator import FactorEvaluator
+    from app.services.factor_pack import DEFAULT_PACK
+
+    code = "005930"
+    stocks = FakeStocksMasterRepository(records=[_stock(code, "삼성전자")])
+    financials = FakeFinancialRepository(records=_eps_quarters(code, ["1000"] * 4))
+
+    result = screen_active_codes(
+        as_of=date(2024, 5, 7),
+        conditions=[ConditionIn(factor=_EPS_FACTOR_ID, op=OpEnum.GT, value="3999")],
+        stocks_repo=stocks,
+        pack=DEFAULT_PACK,
+        evaluator=FactorEvaluator(),
+        price_repo=FakePriceRepository(records=()),
+        financial_repo=financials,
+        corporate_action_repo=FakeCorporateActionRepository(records=()),
+        market_cap_repo=FakeMarketCapRepository(records=()),
+        treasury_repo=FakeTreasurySharesRepository(records=()),
+    )
+    # result_codes 는 이전 tuple[str,...] 반환과 byte-동일 — wrapping 만 변경.
+    assert result.result_codes == ("005930",)
+    assert result.universe_size == 1
+    assert result.na_excluded_count == 0

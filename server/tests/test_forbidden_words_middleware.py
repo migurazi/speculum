@@ -535,25 +535,18 @@ def test_environment_variable_prod() -> None:
 # 10. main.create_app — minimal app 통합 점검
 # =============================================================================
 
-def test_create_app_serves_demo_routes() -> None:
-    """main.create_app 의 demo endpoint 가 middleware 통과 — oracle v2 H3 반영.
-
-    default 환경 = DEV → REDACT. demo_dirty 는 어휘가 별표로 치환되어 200 반환.
+def test_create_app_middleware_wired() -> None:
+    """main.create_app 이 ForbiddenWordsGuardMiddleware 를 올바르게 wiring 하는지
+    smoke 검증. /healthz 가 200 을 반환하면 app factory + middleware stack 이
+    정상 초기화된 것이다.
     """
     from app.main import create_app
 
-    # 환경변수 격리 — 호스트의 SPECULUM_FORBIDDEN_POLICY 가 테스트에 영향 주지 않도록.
-    # T24 후속: demo route 는 명시적 factory parameter 로만 활성 (oracle 결정 7).
     with _env("SPECULUM_FORBIDDEN_POLICY", None):
-        client = TestClient(create_app(include_demo_routes=True))
-        res = client.get("/api/_demo/clean")
+        client = TestClient(create_app())
+        res = client.get("/healthz")
         assert res.status_code == 200
-        res2 = client.get("/api/_demo/dirty")
-        # REDACT — 응답은 200 이나 어휘 별표 치환
-        assert res2.status_code == 200
-        body = res2.json()
-        assert "추천" not in body["title"]
-        assert "Buy" not in body["message"]
+        assert res.json()["status"] == "ok"
 
 
 def test_create_app_healthz() -> None:

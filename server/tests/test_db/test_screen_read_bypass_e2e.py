@@ -151,10 +151,10 @@ def test_screen_serve_byte_identical_to_live_e2e(db_session: Session) -> None:
         **repos,
     )
 
-    # §2.10 핵심 — serve 와 live 가 byte-동일 result_codes.
-    assert served_codes == live_codes
+    # §2.10 핵심 — serve 와 live 가 byte-동일 result_codes(ScreenCodesResult 반환 후도 동일).
+    assert served_codes.result_codes == live_codes.result_codes
     # 조건 분기 확인(eps>5000 → code1(6000)·code2(8000)).
-    assert served_codes == ("000002", "000003")
+    assert served_codes.result_codes == ("000002", "000003")
 
 
 def test_screen_serve_stale_dv_falls_back_to_live_e2e(db_session: Session) -> None:

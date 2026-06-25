@@ -194,6 +194,15 @@ class FakePriceRepository(PriceRepository):
             )
         }
 
+    def fetch_latest_trade_date(self) -> date | None:
+        """적재된 최신 거래일(MAX effective_date). 데이터 없으면 None."""
+        all_dates = [
+            r.effective_date
+            for records in self._by_code.values()
+            for r in records
+        ]
+        return max(all_dates) if all_dates else None
+
     def save_prices(self, records: Sequence[PriceRecord]) -> None:
         """T18 합류 — bulk insert (Sql ON CONFLICT DO NOTHING 대칭 first-wins).
 

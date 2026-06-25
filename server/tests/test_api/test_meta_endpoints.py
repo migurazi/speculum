@@ -7,14 +7,15 @@
 2. `/api/as_of` (no input) — current calendar range 밖이면 400, 범위 내면 200
 3. `/api/policy-versions` — 14 키 + 모두 str
 4. `/healthz` — middleware skip + 200
-5. demo route 가 default 에서 비활성화 (include_demo_routes=False)
+5. `/api/calendar` — coverage + 적재 최신 거래일 (as_of 클램프 source)
 6. middleware × dependency 통합 — 400/422 응답이 middleware 통과
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -23,6 +24,8 @@ from fastapi.testclient import TestClient
 from app.db.orm.batch_runs import BATCH_STATUS_PARTIAL, BATCH_STATUS_SUCCESS
 from app.main import create_app
 from app.repositories.batch_run_repository import FakeBatchRunRepository
+from app.repositories.fakes import FakePriceRepository
+from app.repositories.pit_protocols import PriceRecord
 
 
 @pytest.fixture
@@ -114,22 +117,66 @@ def test_healthz_returns_ok(client: TestClient) -> None:
 
 
 # =============================================================================
-# 4. demo route 가 default 비활성화 (oracle 결정 7)
+# 4. /api/calendar — KRX 캘린더 coverage + 최신 적재 거래일
 # =============================================================================
 
-def test_demo_routes_disabled_by_default(client: TestClient) -> None:
-    """include_demo_routes 미지정 → demo 404."""
-    res = client.get("/api/_demo/clean")
-    assert res.status_code == 404
+def test_get_calendar_exposes_coverage(client: TestClient) -> None:
+    """200 + 응답 키 집합 검증 + 캘린더 범위 값 + business day 는 평일."""
+    res = client.get("/api/calendar")
+    assert res.status_code == 200
+    body = res.json()
+    expected_keys = {
+        "min_date", "max_date",
+        "earliest_business_day", "latest_business_day",
+        "latest_data_date",
+        "version", "content_hash",
+    }
+    assert set(body.keys()) == expected_keys
+    # KRX 캘린더 v1 coverage 실제 값.
+    assert body["min_date"] == "2024-01-01"
+    assert body["max_date"] == "2024-12-31"
+    # earliest/latest_business_day 는 [min_date, max_date] 범위 내 + 평일.
+    earliest = date.fromisoformat(body["earliest_business_day"])
+    latest = date.fromisoformat(body["latest_business_day"])
+    min_d = date.fromisoformat(body["min_date"])
+    max_d = date.fromisoformat(body["max_date"])
+    assert min_d <= earliest <= max_d
+    assert min_d <= latest <= max_d
+    assert earliest.weekday() < 5
+    assert latest.weekday() < 5
+    # 기본 client(FakePriceRepository 빈 records) → 데이터 없음 → null.
+    assert body["latest_data_date"] is None
 
 
-def test_demo_routes_can_be_enabled_for_testing() -> None:
-    """factory parameter 명시 시 demo 활성화 — middleware test fixture 용."""
-    from fastapi.testclient import TestClient
-    app = create_app(include_demo_routes=True)
+def test_get_calendar_latest_data_date_with_seeded_prices() -> None:
+    """FakePriceRepository 주입 → latest_data_date 가 주입 레코드의 MAX effective_date."""
+    _LINEAGE = uuid4()
+    _CITATION = uuid4()
+
+    def _price(*, d: date) -> PriceRecord:
+        p = Decimal("50000")
+        return PriceRecord(
+            id=uuid4(), code="005930", code_lineage_id=_LINEAGE,
+            effective_date=d,
+            open_raw=p, high_raw=p, low_raw=p, close_raw=p,
+            volume=1_000_000, trading_value=p * Decimal(1_000_000),
+            close_adjusted=p,
+            citation_id=_CITATION,
+            created_at=datetime(d.year, d.month, d.day, 17, 0, tzinfo=UTC),
+        )
+
+    records = [
+        _price(d=date(2024, 5, 7)),
+        _price(d=date(2024, 6, 3)),
+        _price(d=date(2024, 8, 12)),
+    ]
+    app = create_app()
+    app.state.price_repo_override = FakePriceRepository(records=records)
     with TestClient(app) as c:
-        res = c.get("/api/_demo/clean")
-        assert res.status_code == 200
+        res = c.get("/api/calendar")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["latest_data_date"] == "2024-08-12"
 
 
 # =============================================================================

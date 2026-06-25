@@ -40,7 +40,7 @@ M0~M1 은 `auth.py` 의 `SYSTEM_USER_ID` placeholder(실 인증 없음, 단일 �
 ### D3. M1 데이터 마이그레이션 — system-owned 유지
 - 기존 `SYSTEM_USER_ID` run/watchlist/screener_set 의 `user_id` **UPDATE 0건**(system-owned 유지). 재귀속(첫 실유저)·폐기 모두 거부(전자=의미 오염·비결정, 후자=§2.10 freeze 위반).
 - `users` 에 **system sentinel row**(`00000000-…-0001`) 추가로 기존 row 의 FK 만족. 마이그레이션 순서: **users 생성 → system row insert → FK 추가**(순서 어기면 FK 위반).
-- **운영 DB 한정, dev/demo 비대상**(seed_demo 는 fact 만 심고 run/watchlist 미생성 — 마이그레이션 대상 없음. dev/CI 는 fresh schema).
+- **운영 DB 한정, dev/CI 비대상**(dev/CI 는 fresh schema — 마이그레이션 대상 없음).
 - **불변식 교정(함정 C)**: 마이그레이션 불변식 = `result_hash`/`data_versions`/`as_of`/`result_codes` **byte 불변**이지 "user_id 보존"이 아니다. user_id 는 재현 무관(hash 입력 아님). **"computed_by 를 result_hash 입력에 추가" 금지** — 그 순간 기존 run hash 붕괴 + 재현의 user 종속화(D5 불변식 붕괴).
 
 ### D4. 미인증 사용자 정책

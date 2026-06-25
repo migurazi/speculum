@@ -29,6 +29,11 @@ vi.mock("@/components/AsOfDatePicker", () => ({
   AsOfDatePicker: () => <div data-testid="asof-picker" />,
 }));
 
+// StockSearch — NavBar 테스트 대상이 아니라 mock 으로 대체.
+vi.mock("@/components/StockSearch", () => ({
+  StockSearch: () => <div data-testid="stock-search" />,
+}));
+
 import { usePathname } from "next/navigation";
 
 describe("isNavLinkActive", () => {
@@ -50,28 +55,17 @@ describe("isNavLinkActive", () => {
   });
 });
 
-describe("NavBar 검색 input a11y (A-3)", () => {
+describe("NavBar 검색 영역 (T36/T37)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(usePathname).mockReturnValue("/screener");
   });
 
-  it("검색 input 이 readOnly + aria-disabled=true 로 렌더 (disabled 아님)", () => {
+  it("StockSearch 컴포넌트가 NavBar 안에 렌더된다", () => {
     const { container } = renderWithIntl(<NavBar />);
-    const input = container.querySelector("input[type='search']");
-    expect(input).not.toBeNull();
-    // disabled 이면 스크린리더가 건너뜀 — readOnly 여야 함.
-    expect(input).not.toHaveAttribute("disabled");
-    expect(input).toHaveAttribute("aria-disabled", "true");
-    expect(input).toHaveAttribute("readonly");
-  });
-
-  it("검색 input 이 포커스 가능 (tabIndex 제거 없음)", () => {
-    const { container } = renderWithIntl(<NavBar />);
-    const input = container.querySelector("input[type='search']");
-    // tabIndex 가 음수가 아니어야 키보드 접근 가능.
-    const tabIndex = (input as HTMLInputElement | null)?.tabIndex ?? 0;
-    expect(tabIndex).toBeGreaterThanOrEqual(0);
+    // StockSearch 는 mock 으로 data-testid="stock-search" 반환.
+    const stockSearch = container.querySelector("[data-testid='stock-search']");
+    expect(stockSearch).not.toBeNull();
   });
 });
 

@@ -67,6 +67,16 @@ export interface ScreenResult {
   readonly result_codes: ReadonlyArray<string>;
   readonly total: number;
   readonly data_versions: Readonly<Record<string, string>>;
+  /**
+   * 기준일 기준 universe 전체 종목 수 (자산군 필터 적용 후).
+   * 서버가 항상 반환하나 하위호환을 위해 optional. S4 투명성 표시에 사용.
+   */
+  readonly universe_size?: number;
+  /**
+   * universe 에서 필수 데이터 미적재로 제외된 종목 수.
+   * total === 0 일 때 진짜 조건 불충족과 데이터 부재를 구별하는 데 사용. S4.
+   */
+  readonly na_excluded_count?: number;
 }
 
 /**

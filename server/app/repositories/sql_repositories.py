@@ -366,6 +366,11 @@ class SqlPriceRepository(PriceRepository):
             found.update(self._session.execute(stmt).scalars().all())
         return found
 
+    def fetch_latest_trade_date(self) -> date | None:
+        """적재된 최신 거래일(MAX effective_date). 데이터 없으면 None."""
+        stmt = select(func.max(PriceDailyORM.effective_date))
+        return self._session.execute(stmt).scalar_one_or_none()
+
     def save_prices(self, records: Sequence[PriceRecord]) -> None:
         """T18 합류 — bulk insert (ON CONFLICT DO NOTHING idempotent, first-wins).
 

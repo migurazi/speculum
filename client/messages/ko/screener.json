@@ -23,8 +23,12 @@
   "runButton": "Screener 실행",
   "resultsHeading": "결과",
   "runError": "실행 실패: {message}",
+  "runErrorAsOfOutOfRange": "이 기준일의 데이터는 지원 범위 밖입니다. 다른 기준일을 선택해 주세요.",
   "resultsSummary": "총 {total} 종목 매칭 · 기준 {asOf}",
   "resultsEmpty": "아직 실행 결과가 없습니다.",
+  "resultsZeroNoUniverse": "해당 자산군에 적재된 종목이 없습니다.",
+  "resultsZeroNaExcluded": "모집단 {universeSize}종목 중 {naExcludedCount}종목이 데이터 미적재로 제외되어 매칭 0건입니다.",
+  "resultsZeroCondition": "조건을 만족하는 종목이 없습니다.",
   "conditionBuilder": {
     "sectionLabel": "조건",
     "loadError": "factor 목록을 불러오지 못했습니다. factor canonical_id 를 직접 입력하세요.",

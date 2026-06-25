@@ -1,9 +1,9 @@
 """stocks_master 실데이터 적재 — FDR StockListing(실 종목명/시장/상장일) 기반.
 
 KRX/DART 일배치는 prices/financials 등 **fact** 만 적재하고 stocks_master(종목
-마스터 = lineage entity)는 채우지 않는다(데모는 seed_demo 가 수동 생성). 그 결과
-실데이터 적재 후 `/api/stocks/{code}`(종목 상세·검색·factor)가 lineage 부재로
-404 가 된다. 본 스크립트가 그 갭을 메운다:
+마스터 = lineage entity)는 채우지 않는다. 그 결과 실데이터 적재 후
+`/api/stocks/{code}`(종목 상세·검색·factor)가 lineage 부재로 404 가 된다.
+본 스크립트가 그 갭을 메운다:
 
     FdrAdapter.fetch_stock_master(code) → 실 Name/Market/ListingDate →
     StockMasterRecord(lineage_id=종목코드 결정적) → stocks_master UPSERT.

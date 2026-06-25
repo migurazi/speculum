@@ -94,7 +94,7 @@ def test_screen_shares_single_financial_treasury_cache_across_stocks(
         monkeypatch, financial_repo=inner_fin, treasury_repo=inner_tr,
     )
 
-    assert len(result) == 3  # 조건 0개 → 전 종목 통과.
+    assert len(result.result_codes) == 3  # 조건 0개 → 전 종목 통과.
     assert len(cap_fin) == 3
     assert all(isinstance(f, CachingFinancialRepository) for f in cap_fin)
     assert all(isinstance(t, CachingTreasurySharesRepository) for t in cap_tr)

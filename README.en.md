@@ -91,8 +91,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the data-flow diagram.
 
 ## Running with Real Data — API Keys and How to Get Them
 
-The Korean [README](README.md) documents the dev demo seed (`scripts.seed_demo`,
-six KOSPI stocks at `as_of=2024-06-28`). To run against **real market data**, the
+To run against **real market data**, the
 daily batches (`server/batch/`) ingest from primary sources. Required keys differ
 by source and are **all free**, but you must sign up and request an auth key
 yourself. Price / market-cap / volume series work **without any key** (pykrx /
@@ -173,7 +172,7 @@ on a cache miss it fetches from DART — crno can take tens of minutes via per-t
 
 ### 3) Start backend / frontend
 
-Same as the demo, but set `as_of` to an ingested trading day.
+Set `as_of` to an ingested trading day.
 
 ```bash
 SPECULUM_DATABASE_URL=sqlite:///./speculum_dev.db uvicorn app.main:app --reload --port 8000

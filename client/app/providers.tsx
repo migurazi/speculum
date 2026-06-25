@@ -16,6 +16,7 @@ import { SessionProvider } from "next-auth/react";
 import { useState, type ReactNode } from "react";
 
 import { AuthTokenSync } from "@/components/AuthTokenSync";
+import { CalendarBoundsSync } from "@/components/CalendarBoundsSync";
 
 interface ProvidersProps {
   readonly children: ReactNode;
@@ -41,7 +42,11 @@ export function Providers({ children }: ProvidersProps): JSX.Element {
     <SessionProvider>
       {/* AuthTokenSync: useSession → setAuthToken 배선 (ADR-0021 D1.1 모델 B). */}
       <AuthTokenSync />
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={queryClient}>
+        {/* CalendarBoundsSync: GET /api/calendar → as_of 자동 클램프 + input min/max 반영. */}
+        <CalendarBoundsSync />
+        {children}
+      </QueryClientProvider>
     </SessionProvider>
   );
 }

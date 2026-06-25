@@ -54,7 +54,11 @@ from app.adapters.base import (
     FinancialStatementRow,
     IfrsType,
 )
-from app.adapters.dart_account_mapper import is_unmapped, map_ifrs_account
+from app.adapters.dart_account_mapper import (
+    is_no_standard_code,
+    is_unmapped,
+    map_ifrs_account,
+)
 from app.models.source_citation import SourceCitation, SourceKind
 
 __all__ = [
@@ -205,6 +209,9 @@ class _ParsedResponse:
         skipped_row_count: thstrm_amount 결측/비숫자로 skip 된 row 수.
         unmapped_account_count: IFRS taxonomy ID 가 미매핑인 row 수
             (canonical key 는 `unmapped:` prefix 로 보존).
+        no_standard_code_count: 표준계정코드 없음 sentinel (빈 account_id 또는
+            "-표준계정코드 미사용-") 으로 파싱 단계에서 제외된 row 수. canonical 화
+            불가하여 적재 제외 (dart_account_mapper._NO_STANDARD_CODE_SENTINELS).
         effective_date_max: 보고서 effective_date. rcept_no 도출 성공 시 정밀
             공시일 (ADR-0012 D6), 실패 시 신고기한 보수값 (ADR-0012 D1).
         effective_date_precise: effective_date_max 가 rcept_no 도출 실 공시일이면
@@ -216,6 +223,7 @@ class _ParsedResponse:
     rows: tuple[FinancialStatementRow, ...]
     skipped_row_count: int
     unmapped_account_count: int
+    no_standard_code_count: int
     effective_date_max: date
     effective_date_precise: bool
     rcept_no: str
@@ -355,6 +363,11 @@ class DartAdapter(DataSourceAdapter):
             warnings.append(
                 f"DART {parsed.unmapped_account_count} unmapped IFRS accounts — "
                 f"dart_account_mapper extension required"
+            )
+        if parsed.no_standard_code_count > 0:
+            warnings.append(
+                f"DART {parsed.no_standard_code_count} rows excluded — "
+                f"no standard account code ('' or '-표준계정코드 미사용-')"
             )
         # `effective_date` 는 ADR-0012 D6 — DART 응답 rcept_no 앞 8자리
         # (YYYYMMDD = 접수일자 = 공시일) 에서 직접 도출한 정밀 공시일. 도출 성공
@@ -874,6 +887,7 @@ class DartAdapter(DataSourceAdapter):
         # rcept_no 도출 (ADR-0012 D6) 결과에 의존하므로 row 생성은 2차로 미룸.
         # 분기 내 모든 row 가 같은 보고서 = 같은 rcept_no = 같은 effective_date.
         skipped_row_count = 0
+        no_standard_code_count = 0
         rcept_no = ""
         # canonical_account → 후보 row list [(statement_priority, value, rcept_no,
         # currency)]. 같은 canonical 이 복수 재무제표에 등장(예: net_income 은 손익
@@ -897,6 +911,16 @@ class DartAdapter(DataSourceAdapter):
                     f"DART schema drift — missing field in row: {exc}. "
                     f"row keys: {list(raw.keys()) if isinstance(raw, dict) else type(raw)}"
                 ) from exc
+
+            # S1 — 표준계정코드 없음 sentinel(빈 account_id / "-표준계정코드 미사용-")
+            # 행은 canonical 식별자가 없어 서로 다른 line item 이 동일 unmapped 키로
+            # 충돌한다. 같은 fetch 에 2건+ 이면 적재 단계 PIT 가드가 정상 데이터를
+            # corruption 으로 오인해 종목 전체를 실패시킨다(반기보고서에서 실측됨).
+            # 어떤 factor 도 소비하지 않으므로 파싱 단계에서 제외(silent drop 아님 —
+            # no_standard_code_count 로 가시화). map_ifrs_account 호출 이전에 거른다.
+            if is_no_standard_code(ifrs_account_id):
+                no_standard_code_count += 1
+                continue
 
             # 적재 제외 재무제표(자본변동표 SCE) — period-flow 계정 반복이 중복원.
             sj_div = str(raw.get("sj_div") or "").strip()
@@ -985,6 +1009,7 @@ class DartAdapter(DataSourceAdapter):
             rows=rows,
             skipped_row_count=skipped_row_count,
             unmapped_account_count=unmapped_account_count,
+            no_standard_code_count=no_standard_code_count,
             effective_date_max=effective_date,
             effective_date_precise=effective_date_precise,
             rcept_no=rcept_no,

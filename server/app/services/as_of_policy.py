@@ -29,8 +29,8 @@ Race condition 한계 (oracle R4):
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
-from typing import Final
+from datetime import date, timedelta
+from typing import Final, Literal
 
 from app.services.krx_calendar import (
     DEFAULT_CALENDAR,
@@ -117,6 +117,11 @@ class NormalizedAsOf:
         pit_policy_version: 본 정규화 결과를 만든 정책의 버전. Screen Run snapshot
             freeze key. `PIT_POLICY_VERSION` 의 copy — instance 가 자체 보관해
             policy 가 바뀌어도 옛 snapshot 재현 가능.
+        was_degraded: browse 모드에서 as_of 가 verified 캘린더 범위 밖이라 weekday
+            근사(휴장일 미반영)로 graceful degrade 했는지 (ROADMAP_v2 §2.3 R3 —
+            가용성 우선). True 면 response 에 `X-AsOf-Degraded: true`. strict 모드
+            (frozen 경로)는 항상 False — 범위 밖이면 `AsOfOutOfRangeError`. **데이터
+            정확성이 아닌 가용성 degrade** 이므로 frozen/재현 경로에는 절대 미적용.
     """
 
     value: date
@@ -124,6 +129,27 @@ class NormalizedAsOf:
     was_snapped: bool
     original_input: date | None
     pit_policy_version: str
+    # additive(default False) — 기존 strict 경로 생성자·소비처 무변경. browse degrade
+    # 경로에서만 True. frozen 경로는 strict 라 절대 True 불가.
+    was_degraded: bool = False
+
+
+# =============================================================================
+# browse degrade 헬퍼 — verified 캘린더 범위 밖의 weekday 근사 (ROADMAP_v2 §2.3)
+# =============================================================================
+
+def _previous_weekday(d: date) -> date:
+    """`d` 가 평일이면 그대로, 토/일이면 직전 금요일.
+
+    browse degrade 전용 — verified 캘린더 범위 밖이라 **공식 휴장일 데이터가 없을
+    때** 가용성 우선(R3)으로 영업일을 근사한다. 토(weekday 5)→금, 일(6)→금. 평일
+    이면 그대로(임시공휴일·대체공휴일은 반영 못 함 — 그래서 `was_degraded=True` 로
+    근사임을 고지). frozen/재현 경로는 이 근사를 쓰지 않고 verified 캘린더를 강제.
+    """
+    wd = d.weekday()  # 월=0 .. 토=5, 일=6
+    if wd < 5:
+        return d
+    return d - timedelta(days=wd - 4)  # 토→-1(금), 일→-2(금)
 
 
 # =============================================================================
@@ -150,19 +176,23 @@ class AsOfPolicy:
         input_value: date | None,
         *,
         calendar: TradingCalendar = DEFAULT_CALENDAR,
+        mode: Literal["strict", "browse"] = "strict",
     ) -> NormalizedAsOf:
         """**운영 전용** — As-of 일자를 정규화. `today` 는 항상 `kst_today()`.
 
         Args:
             input_value: 호출자가 전달한 일자. None 이면 default fill (ADR-0008 D6).
             calendar: 영업일/휴장일 판정 source. default = DEFAULT_CALENDAR.
+            mode: "strict"(기본, frozen/재현 경로) 면 verified 범위 밖 → 400.
+                "browse"(가용성 우선, ROADMAP_v2 §2.3) 면 범위 밖을 weekday 근사로
+                graceful degrade(`was_degraded=True`) — 오늘 날짜 200 보장(R3).
 
         Returns:
             NormalizedAsOf — 정규화된 영업일 + 메타데이터.
 
         Raises:
-            AsOfInFutureError: `input_value > kst_today()`.
-            AsOfOutOfRangeError: 정규화 결과가 calendar 의 verified 범위 밖.
+            AsOfInFutureError: `input_value > kst_today()` (browse 도 미래 불가).
+            AsOfOutOfRangeError: strict 모드에서 정규화 결과가 verified 범위 밖.
 
         Note (M0 race condition — oracle R4):
             `input_value == kst_today()` 이고 그날이 영업일이면 그대로 정규화. 그
@@ -170,7 +200,7 @@ class AsOfPolicy:
             M1 ADR 에서 "장 마감 후" 시점 보정 결정.
         """
         return AsOfPolicy._normalize_with_today(
-            input_value, today=kst_today(), calendar=calendar
+            input_value, today=kst_today(), calendar=calendar, mode=mode
         )
 
     @staticmethod
@@ -179,6 +209,7 @@ class AsOfPolicy:
         *,
         today: date,
         calendar: TradingCalendar = DEFAULT_CALENDAR,
+        mode: Literal["strict", "browse"] = "strict",
     ) -> NormalizedAsOf:
         """**테스트/내부 전용** — `today` 를 명시 주입한 정규화.
 
@@ -186,12 +217,27 @@ class AsOfPolicy:
         를 호출해야 하며, 운영 호출 site 가 본 함수를 사용하면 우회로 간주.
 
         Args / Returns / Raises: `normalize` 와 동일하나 `today` 가 required.
+
+        browse degrade(ROADMAP_v2 §2.3): verified 캘린더 범위 밖(`CalendarRangeError`)
+        일 때 strict 면 `AsOfOutOfRangeError`, browse 면 `_previous_weekday` 근사 +
+        `was_degraded=True`. 미래 거부·범위 내 휴장일 snap 은 두 모드 공통(정확성).
         """
         # 1. None → default
         if input_value is None:
             try:
                 value = calendar.latest_business_day(today)
             except CalendarRangeError as exc:
+                # browse: today 가 verified 범위 밖(예: 2026 vs 2024 캘린더) →
+                # weekday 근사로 degrade(가용성 우선). strict: 400.
+                if mode == "browse":
+                    return NormalizedAsOf(
+                        value=_previous_weekday(today),
+                        was_defaulted=True,
+                        was_snapped=False,
+                        original_input=None,
+                        pit_policy_version=PIT_POLICY_VERSION,
+                        was_degraded=True,
+                    )
                 raise AsOfOutOfRangeError(
                     today, calendar.min_date, calendar.max_date
                 ) from exc
@@ -203,7 +249,7 @@ class AsOfPolicy:
                 pit_policy_version=PIT_POLICY_VERSION,
             )
 
-        # 2. 미래 거부 — input > today
+        # 2. 미래 거부 — input > today (browse 도 미래 불가)
         if input_value > today:
             raise AsOfInFutureError(input_value, today)
 
@@ -231,6 +277,16 @@ class AsOfPolicy:
                 pit_policy_version=PIT_POLICY_VERSION,
             )
         except CalendarRangeError as exc:
+            # browse: 범위 밖 입력 → weekday 근사 degrade. strict: 400.
+            if mode == "browse":
+                return NormalizedAsOf(
+                    value=_previous_weekday(input_value),
+                    was_defaulted=False,
+                    was_snapped=False,
+                    original_input=input_value,
+                    pit_policy_version=PIT_POLICY_VERSION,
+                    was_degraded=True,
+                )
             raise AsOfOutOfRangeError(
                 input_value, calendar.min_date, calendar.max_date
             ) from exc

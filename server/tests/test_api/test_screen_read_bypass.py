@@ -219,7 +219,7 @@ def test_serve_hit_skips_live_evaluation() -> None:
                   evaluator=_RaisingEvaluator()),  # serve 실패 시 raise.
         conditions=_cond(OpEnum.GT, "3999"),
     )
-    assert result == ("005930",)
+    assert result.result_codes == ("005930",)
 
 
 def test_serve_value_none_excluded() -> None:
@@ -234,7 +234,7 @@ def test_serve_value_none_excluded() -> None:
                   evaluator=_RaisingEvaluator()),
         conditions=_cond(OpEnum.LT, "999999"),
     )
-    assert result == ()
+    assert result.result_codes == ()
 
 
 def test_stale_dv_falls_back_to_live() -> None:
@@ -253,7 +253,7 @@ def test_stale_dv_falls_back_to_live() -> None:
         **_kwargs(stocks, financials, snapshot_repo=snaps, current_dv=dict(_DV)),
         conditions=_cond(OpEnum.GT, "3999"),  # live EPS=4000 통과.
     )
-    assert result == ("005930",)
+    assert result.result_codes == ("005930",)
 
 
 def test_custom_pack_mismatch_all_live() -> None:
@@ -274,7 +274,7 @@ def test_custom_pack_mismatch_all_live() -> None:
         **_kwargs(stocks, financials, snapshot_repo=snaps, current_dv=custom_dv),
         conditions=_cond(OpEnum.GT, "3999"),
     )
-    assert result == ("005930",)
+    assert result.result_codes == ("005930",)
 
 
 def test_dividend_factor_condition_disables_serve() -> None:
@@ -352,7 +352,10 @@ def test_byte_identical_serve_vs_live() -> None:
             **_kwargs(stocks, financials, snapshot_repo=snaps, current_dv=dict(_DV)),
             conditions=_cond(op, value),
         )
-        assert served == live, f"op={op} value={value}: {served} != {live}"
+        # result_codes byte-동일 비교 (§2.10 불변) — ScreenCodesResult 반환 후도 동일.
+        assert served.result_codes == live.result_codes, (
+            f"op={op} value={value}: {served.result_codes} != {live.result_codes}"
+        )
 
 
 def test_partial_miss_falls_back_to_live() -> None:
@@ -373,7 +376,7 @@ def test_partial_miss_falls_back_to_live() -> None:
         **_kwargs(stocks, financials, snapshot_repo=snaps, current_dv=dict(_DV)),
         conditions=_cond(OpEnum.GE, "4000"),
     )
-    assert result == ("000660", "005930")
+    assert result.result_codes == ("000660", "005930")
 
 
 def test_no_snapshot_repo_regression() -> None:
@@ -384,7 +387,7 @@ def test_no_snapshot_repo_regression() -> None:
         **_kwargs(stocks, financials, snapshot_repo=None, current_dv=None),
         conditions=_cond(OpEnum.GT, "3999"),
     )
-    assert result == ("005930",)
+    assert result.result_codes == ("005930",)
 
 
 # =============================================================================

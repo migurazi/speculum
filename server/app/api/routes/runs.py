@@ -103,6 +103,8 @@ async def save_run(
     selected_security_types = _canonical_security_types(body.security_types)
 
     # 1. 조건 매칭 — screen 과 단일 경로. 저장 result_codes = screen 결과.
+    #    ScreenCodesResult 반환 — .result_codes 로 unwrap (universe_size/na_excluded
+    #    는 Save Run 에서 미사용, result_codes 만 필요).
     result_codes = screen_active_codes(
         as_of=as_of.value,
         conditions=body.conditions,
@@ -122,7 +124,7 @@ async def save_run(
         # execute_screen 과 동일하게 dividend_repo 를 배선해야 reproduce 와 일치.
         dividend_repo=dividend_repo,
         security_types=selected_security_types,
-    )
+    ).result_codes
 
     # 2. data_versions freeze — M1 T48b (M7 #5 키 set 확장 반영). 정책 14 키 +
     #    (SQL session 있으면) as_of 시점 최신 성공 batch 의 batch_id 3 키

@@ -146,6 +146,7 @@ async def execute_custom_screen(
     selected_security_types = _canonical_security_types(body.security_types)
 
     # custom pack 으로 조건 매칭 — screen_active_codes 의 pack 인자만 custom 명시.
+    # ScreenCodesResult 반환 — .result_codes 로 unwrap (custom screen 도 result_codes 만 필요).
     result_codes = screen_active_codes(
         as_of=as_of.value,
         conditions=body.conditions,
@@ -161,7 +162,7 @@ async def execute_custom_screen(
         # M7 #4 — dividend / total return field 실연결(§2.10 대칭, save 와 동일).
         dividend_repo=dividend_repo,
         security_types=selected_security_types,
-    )
+    ).result_codes
 
     # data_versions freeze — custom pack 명시 주입 → factor_pack_* 3 키가 custom
     # pack 의 hash/slug/version 으로 채워짐(빌트인 run 과 다른 hash). 빌트인 무인자
@@ -213,6 +214,7 @@ async def save_custom_run(
     )
     selected_security_types = _canonical_security_types(body.security_types)
 
+    # ScreenCodesResult 반환 — .result_codes 로 unwrap (custom Save Run 도 result_codes 만 필요).
     result_codes = screen_active_codes(
         as_of=as_of.value,
         conditions=body.conditions,
@@ -230,7 +232,7 @@ async def save_custom_run(
         # M7 #4 — dividend / total return field 실연결(§2.10 대칭, screen 과 동일).
         dividend_repo=dividend_repo,
         security_types=selected_security_types,
-    )
+    ).result_codes
 
     # custom pack 명시 주입 freeze — factor_pack_* 3 키가 custom pack hash/slug/
     # version. 빌트인 save_run 경로(runs.py)는 무변경(pack=DEFAULT_PACK 무인자).

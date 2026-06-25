@@ -152,7 +152,7 @@ def _build_scenario() -> dict:
     cond = [ConditionIn(factor=_EPS_FACTOR_ID, op=OpEnum.GT, value="3999")]
     frozen_codes = screen_active_codes(
         as_of=_AS_OF, conditions=cond, dart_batch_cutoff=cutoff1, **common,
-    )
+    ).result_codes
     assert frozen_codes == ("005930",)
 
     batch_repo = FakeBatchRunRepository()

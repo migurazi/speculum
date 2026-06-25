@@ -397,9 +397,11 @@ def test_save_custom_run_forwards_macro_repo(
 
     captured: dict[str, object] = {}
 
-    def _spy(**kwargs: object) -> tuple[str, ...]:
+    from app.api.routes.screen import ScreenCodesResult
+
+    def _spy(**kwargs: object) -> ScreenCodesResult:
         captured.update(kwargs)
-        return ()
+        return ScreenCodesResult(result_codes=(), universe_size=0, na_excluded_count=0)
 
     monkeypatch.setattr(sc_module, "screen_active_codes", _spy)
 

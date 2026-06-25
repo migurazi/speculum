@@ -179,7 +179,7 @@ def _live_codes(sc: dict) -> tuple[str, ...]:
             started_at=datetime(2024, 4, 1, 9, tzinfo=UTC), id=_KRX_BATCH,
         ),
         **sc["common"],
-    )
+    ).result_codes
 
 
 def _snapshot(sc: dict, result_codes: tuple[str, ...]) -> object:

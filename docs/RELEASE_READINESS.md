@@ -54,14 +54,14 @@ push는 사용자 명시 지시 시.
 ## (E) Viability 냉정 평가 (oracle 심층 리뷰 2026-06-08)
 
 **현 상태 = "8기둥 게이트·엔지니어링 골격은 실재하나, 실데이터 파이프라인 마지막
-1마일이 미완이라 seed 데모로만 동작이 증명된 정교한 골격"** — "코드 완료"(M0~M9)와
+1마일이 미완이라 실데이터 적재 후 동작이 증명된 정교한 골격"** — "코드 완료"(M0~M9)와
 "데이터 흐르는 제품" 사이 간극이 핵심.
 
 ### 실데이터 1마일 gap (켜면 화면이 빈다 — 치명)
 - **ECOS 일배치 부재**: `server/batch/ecos_daily.py` 파일 자체 없음(adapter/repo만) → 거시지표 빈값.
 - **DART corp_code 빈 매핑**: `corp_code_mapping.py` 운영 source(corpCode.xml fetch+cache) 미구현 → 재무 배치 실행해도 종목 미발견 → **PER/PBR/ROE 등 재무 factor 전부 N/A**.
 - **scheduler 전무**: krx/dart/kosis 배치 모두 manual CLI 호출(APScheduler 미통합) → 무인 운영 불가.
-- **유일 검증 경로 = `seed_demo.py` 6종목 데모**("정확성 보증 아님" 코드 명시).
+- **실 검증 경로 = 일배치(`batch/`) 실데이터 적재 후 운영 DB 기준**("정확성 보증 아님" 코드 명시).
 
 ### 테스트 green ≠ 실 동작
 - 실 API 테스트(`test_*_real.py`)는 전부 `@pytest.mark.integration` → **기본 deselect**, key/network 없으면 skip. server ~2339 green이 실 DART/KRX/ECOS/KOSIS를 **한 번도 호출 안 함** → pykrx 컬럼·DART account·KOSIS itmId schema drift 무방비(green인 채 운영서 깨질 수 있음).

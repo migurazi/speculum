@@ -24,6 +24,8 @@ import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 
 import { useAsOfStore, useIsToday } from "@/state/as-of-store";
+import { useCalendarBoundsStore } from "@/state/calendar-bounds-store";
+import { clampAsOf } from "@/lib/api/calendar";
 import { cn } from "@/lib/utils";
 
 interface AsOfDatePickerProps {
@@ -38,6 +40,7 @@ export function AsOfDatePicker({
   const isToday = useIsToday();
   const setAsOf = useAsOfStore((s) => s.setAsOf);
   const resetToToday = useAsOfStore((s) => s.resetToToday);
+  const bounds = useCalendarBoundsStore((s) => s.bounds);
 
   // SSR hydration 안전 — 첫 client mount 후에 store 의 persisted value 가
   // 반영. 그 사이 null 표시로 깜박임 방지.
@@ -75,10 +78,16 @@ export function AsOfDatePicker({
         <input
           type="date"
           value={asOf}
+          min={bounds?.lowerBound}
+          max={bounds?.upperBound}
           onChange={(e) => {
             const next = e.target.value;
             if (next) {
-              setAsOf(next);
+              // bounds 있으면 클램프 후 저장 — bounds null 이면 기존대로 next.
+              const clamped = bounds
+                ? clampAsOf(next, bounds.lowerBound, bounds.upperBound)
+                : next;
+              setAsOf(clamped);
             }
           }}
           aria-label={t("asOfDatePicker.inputAriaLabel")}

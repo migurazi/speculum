@@ -50,11 +50,13 @@ def _snapshot():
 
 def test_reproduce_run_forwards_macro_repo(monkeypatch) -> None:
     """reproduce_run 이 macro_repo 를 screen_active_codes 에 그대로 forward."""
+    from app.api.routes.screen import ScreenCodesResult
     captured: dict[str, object] = {}
 
-    def _spy(**kwargs: object) -> tuple[str, ...]:
+    def _spy(**kwargs: object) -> ScreenCodesResult:
         captured.update(kwargs)
-        return ()  # 빈 result_codes → matches=True (snapshot.result_codes=())
+        # 빈 result_codes → matches=True (snapshot.result_codes=())
+        return ScreenCodesResult(result_codes=(), universe_size=0, na_excluded_count=0)
 
     # reproduce_run 은 screen_active_codes 를 함수 내 지연 import
     # (`from app.api.routes.screen import screen_active_codes`) 한다. 지연 import 는
@@ -87,11 +89,12 @@ def test_reproduce_run_forwards_macro_repo(monkeypatch) -> None:
 
 def test_reproduce_run_macro_repo_defaults_none(monkeypatch) -> None:
     """macro_repo 미지정(구 호출 경로) → None forward (하위호환)."""
+    from app.api.routes.screen import ScreenCodesResult
     captured: dict[str, object] = {}
 
-    def _spy(**kwargs: object) -> tuple[str, ...]:
+    def _spy(**kwargs: object) -> ScreenCodesResult:
         captured.update(kwargs)
-        return ()
+        return ScreenCodesResult(result_codes=(), universe_size=0, na_excluded_count=0)
 
     monkeypatch.setattr(screen_module, "screen_active_codes", _spy)
 

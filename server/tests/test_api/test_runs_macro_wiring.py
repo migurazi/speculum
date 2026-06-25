@@ -40,9 +40,12 @@ def test_save_run_forwards_macro_repo(
     """POST /api/runs 가 주입 macro_repo 를 screen_active_codes 에 forward."""
     captured: dict[str, object] = {}
 
-    def _spy(**kwargs: object) -> tuple[str, ...]:
+    from app.api.routes.screen import ScreenCodesResult
+
+    def _spy(**kwargs: object) -> ScreenCodesResult:
         captured.update(kwargs)
-        return ()  # 빈 result_codes — snapshot 저장은 정상 진행.
+        # 빈 result_codes 반환 — snapshot 저장은 정상 진행.
+        return ScreenCodesResult(result_codes=(), universe_size=0, na_excluded_count=0)
 
     # runs 모듈 namespace 의 screen_active_codes 를 가로챔 (모듈 상단 import).
     monkeypatch.setattr(runs_module, "screen_active_codes", _spy)

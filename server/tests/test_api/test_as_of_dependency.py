@@ -22,7 +22,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.dependencies.as_of import NormalizedAsOfDep, get_normalized_as_of
+from app.api.dependencies.as_of import (
+    BrowseAsOfDep,
+    NormalizedAsOfDep,
+    get_normalized_as_of,
+)
 from app.api.dependencies.auth import CurrentUserDep, UserContext, get_current_user
 from app.api.exception_handlers import register_exception_handlers
 
@@ -53,7 +57,51 @@ def _make_app() -> FastAPI:
     async def echo_user(user: CurrentUserDep) -> dict:
         return {"user_id": str(user.user_id), "is_system": user.is_system}
 
+    # browse(읽기) 경로 echo — verified 범위 밖 degrade 검증 (ROADMAP_v2 §2.3).
+    @app.get("/echo/browse")
+    async def echo_browse(as_of: BrowseAsOfDep) -> dict:
+        return {
+            "value": as_of.value.isoformat(),
+            "was_degraded": as_of.was_degraded,
+            "was_defaulted": as_of.was_defaulted,
+        }
+
     return app
+
+
+# =============================================================================
+# 10. browse degrade — verified 범위 밖이 400 아닌 200 + X-AsOf-Degraded
+# =============================================================================
+
+def test_browse_out_of_range_degrades_to_200(client: TestClient) -> None:
+    """browse: 2024 캘린더 밖 과거일(2025-01-02) → 400 아닌 200 + degrade 헤더.
+
+    원래 strict(NormalizedAsOfDep)였다면 AS_OF_OUT_OF_RANGE 400. browse 는 가용성
+    우선으로 weekday 근사 degrade(ROADMAP_v2 §2.3). 2025-01-02 은 목요일(평일)이라
+    근사값=그대로. 시간 안정성: 2024 범위 밖이며 확실한 과거.
+    """
+    res = client.get("/echo/browse?as_of=2025-01-02")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["value"] == "2025-01-02"
+    assert body["was_degraded"] is True
+    assert res.headers["x-asof-degraded"] == "true"
+    assert res.headers["x-asof"] == "2025-01-02"
+
+
+def test_browse_in_range_no_degrade_header(client: TestClient) -> None:
+    """browse: 범위 내(2024) 정상 입력은 degrade 헤더 없음(strict 와 동일 정확)."""
+    res = client.get("/echo/browse?as_of=2024-05-07")
+    assert res.status_code == 200
+    assert res.json()["was_degraded"] is False
+    assert "x-asof-degraded" not in res.headers
+
+
+def test_browse_future_still_400(client: TestClient) -> None:
+    """browse 도 미래는 400 — degrade 는 가용성이지 미래 허용 아님."""
+    res = client.get("/echo/browse?as_of=2999-12-31")
+    assert res.status_code == 400
+    assert res.json()["code"] == "AS_OF_IN_FUTURE"
 
 
 @pytest.fixture

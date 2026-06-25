@@ -18,6 +18,7 @@ dividend / trading_value_20d_avg) 는 evaluator 가 정식 N/A (`missing_input:*
 
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from typing import Final
@@ -25,9 +26,11 @@ from typing import Final
 from fastapi import APIRouter, HTTPException, Path, Query
 
 from app.adapters.base import AdapterError
-from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies import BrowseAsOfDep
 from app.api.dependencies.repositories import (
     ActivePackDep,
+    BatchRunRepoDep,
+    CitationRepoDep,
     CorpCodeMappingDep,
     CorporateActionRepoDep,
     DartAdapterDep,
@@ -38,6 +41,7 @@ from app.api.dependencies.repositories import (
     MacroIndicatorRepoDep,
     MarketCapRepoDep,
     PriceRepoDep,
+    PykrxAdapterOptionalDep,
     StocksRepoDep,
     TreasurySharesRepoDep,
 )
@@ -80,11 +84,15 @@ from app.services.disclosure_fact_extraction import (
 )
 from app.services.factor_evaluator import FactorEvaluator
 from app.services.factor_pack import LoadedPack
+from app.services.krx_calendar import kst_today
+from app.services.lazy_price_fetch import ensure_prices_cached
 from app.services.price_adjuster import (
     _DECIMAL_PRECISION,
     AdjusterError,
 )
 from app.services.total_return_adjuster import TotalReturnAdjuster
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
 
@@ -113,7 +121,7 @@ def _normalize_single_code(code: str) -> str:
 
 @router.get("/search", response_model=StockSearchPageOut)
 async def search_stocks(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     repo: StocksRepoDep,
     q: str = Query(
         ...,
@@ -149,7 +157,7 @@ async def search_stocks(
 
 @router.get("/compare", response_model=StockCompareOut)
 async def compare_stocks(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     repo: StocksRepoDep,
     evaluator: FactorEvaluatorDep,
     pack: ActivePackDep,
@@ -261,7 +269,7 @@ async def compare_stocks(
 
 @router.get("/{code}", response_model=StockDetailOut)
 async def get_stock_detail(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     repo: StocksRepoDep,
     evaluator: FactorEvaluatorDep,
     pack: ActivePackDep,
@@ -342,11 +350,20 @@ _DISCLOSURE_MAX_LIMIT: Final[int] = 100
 
 @router.get("/{code}/prices", response_model=StockPricesOut)
 async def get_stock_prices(
-    as_of: NormalizedAsOfDep,
     price_repo: PriceRepoDep,
     corporate_action_repo: CorporateActionRepoDep,
+    citation_repo: CitationRepoDep,
+    batch_run_repo: BatchRunRepoDep,
+    pykrx_adapter: PykrxAdapterOptionalDep,
     code: str = Path(pattern=_CODE_PATH_REGEX),
     days: int = Query(_PRICES_DEFAULT_DAYS, ge=1, le=3650),
+    as_of: date | None = Query(  # noqa: B008
+        None,
+        description=(
+            "조회 기준일 (KST naive date, 예: '2026-06-20'). None 이면 KST 오늘. "
+            "미래 일자는 거부(400). 가격 차트 표시 전용 — 캘린더 cap·스냅 없음."
+        ),
+    ),
 ) -> StockPricesOut:
     """가격 시계열 — Stock Detail 가격 차트(lightweight-charts)의 backend.
 
@@ -355,14 +372,55 @@ async def get_stock_prices(
     frontend 가 raw/adjusted 토글. 데이터 없으면 빈 bars(200) — 차트가 "데이터
     없음" 표시. (지표 카드와 달리 lineage 404 검사 없음 — 가격 시계열 자체 조회.)
 
+    on-demand lazy fetch (차트 전용):
+        요청 구간 주가가 DB 에 없으면 KRX(pykrx, keyless)에서 즉석으로 당겨와
+        prices_daily 에 캐시한 뒤 반환한다(`ensure_prices_cached`). 데이터가 과거
+        시점에 멈춰 현재 주가를 못 보던 문제 해소. **스크리너/재현성과 무관** —
+        본 endpoint 는 live observation 이라 frozen cutoff 경로 밖이다. lazy fetch
+        는 `app.state.pykrx_adapter` 설정 운영 app 에서만 활성(테스트는 미설정).
+        실패해도 차트 조회를 막지 않음(DB 있는 것만으로 degrade).
+
+    as_of:
+        raw date Query(캘린더 cap·스냅 제거 — 2025~2026 등 현재 일자 허용). None
+        이면 KST 오늘. 미래 일자는 400. (financials/history 의 raw date 패턴 일관.)
+
     actions: [start, as_of] 범위 내 corporate action — 차트 ▾ 마커용.
         No Advice: action_type/effective_date/ratio 같은 시장 사실만 노출 (T59 gate).
         PIT: CorporateActionRepository 가 announced_date<=as_of active chain 반환.
         effective_date 가 prices 범위(start~as_of) 밖이면 마커 표시 대상 외라 제외.
     """
     normalized = _normalize_single_code(code)
-    start = as_of.value - timedelta(days=days)
-    records = price_repo.fetch_prices(normalized, as_of=as_of.value, start=start)
+    today = kst_today()
+    effective_as_of = as_of if as_of is not None else today
+    if effective_as_of > today:
+        raise HTTPException(
+            status_code=400, detail="미래 일자는 조회할 수 없습니다.",
+        )
+    start = effective_as_of - timedelta(days=days)
+
+    # on-demand lazy fetch — DB 갭을 KRX 에서 즉석 충전·캐시(차트 전용). pykrx
+    # adapter 미설정(테스트·키 불필요)이면 skip. 실패가 차트 조회를 막지 않도록
+    # broad-except degrade(DB 에 있는 것만 반환).
+    if pykrx_adapter is not None:
+        try:
+            ensure_prices_cached(
+                normalized,
+                start=start,
+                end=effective_as_of,
+                price_repo=price_repo,
+                citation_repo=citation_repo,
+                krx_adapter=pykrx_adapter,
+                batch_run_repo=batch_run_repo,
+            )
+        except Exception:  # noqa: BLE001 — lazy fetch 실패 ≠ 차트 실패(degrade).
+            logger.warning(
+                "lazy price fetch 실패 code=%s start=%s end=%s",
+                normalized, start, effective_as_of,
+            )
+
+    records = price_repo.fetch_prices(
+        normalized, as_of=effective_as_of, start=start,
+    )
     bars = tuple(
         StockPriceBarOut(
             date=r.effective_date,
@@ -377,7 +435,9 @@ async def get_stock_prices(
     )
     # corporate action — announced_date<=as_of active chain 중 effective_date 가
     # 가격 범위(start~as_of) 내인 것만 마커 대상. 범위 밖(미래·너무 과거) 제외.
-    raw_actions = corporate_action_repo.fetch_actions(normalized, as_of=as_of.value)
+    raw_actions = corporate_action_repo.fetch_actions(
+        normalized, as_of=effective_as_of,
+    )
     actions = tuple(
         CorporateActionOut(
             effective_date=a.effective_date,
@@ -385,16 +445,16 @@ async def get_stock_prices(
             ratio=(str(a.ratio) if a.ratio is not None else None),
         )
         for a in raw_actions
-        if start <= a.effective_date <= as_of.value
+        if start <= a.effective_date <= effective_as_of
     )
     return StockPricesOut(
-        code=normalized, as_of=as_of.value, bars=bars, actions=actions,
+        code=normalized, as_of=effective_as_of, bars=bars, actions=actions,
     )
 
 
 @router.get("/{code}/total-return", response_model=StockTotalReturnOut)
 async def get_stock_total_return(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     price_repo: PriceRepoDep,
     corporate_action_repo: CorporateActionRepoDep,
     dividend_repo: DividendRepoDep,
@@ -521,7 +581,7 @@ async def get_stock_total_return(
 
 @router.get("/{code}/financials", response_model=FinancialSeriesOut)
 async def get_stock_financials(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     financial_repo: FinancialRepoDep,
     code: str = Path(pattern=_CODE_PATH_REGEX),
 ) -> FinancialSeriesOut:
@@ -664,7 +724,7 @@ async def get_stock_financials_history(
 
 @router.get("/{code}/disclosures", response_model=DisclosuresOut)
 async def get_stock_disclosures(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     adapter: DartAdapterDep,
     corp_mapping: CorpCodeMappingDep,
     code: str = Path(pattern=_CODE_PATH_REGEX),
