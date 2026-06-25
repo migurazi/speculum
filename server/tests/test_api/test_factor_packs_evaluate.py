@@ -56,12 +56,18 @@ def _ni_quarters(code: str, per_quarter: str) -> list[FinancialRecord]:
 
     effective_date 는 as_of(2024-05-07) 이전 고정 (PIT 통과). annual field 는
     4 분기 strict 합 scalar (db_field_provider financial_annual kind).
+
+    **B1 (ROADMAP_v2 V1b)**: net_income 은 FLOW 계정이라 DART 는 회계연도 **누적
+    (YTD)** 으로 보고. 분기단독(standalone)이 per_quarter 가 되도록 누적값
+    [pq, 2*pq, 3*pq, 4*pq] 으로 seed → `_resolve_financial_series` 가 standalone
+    [pq,pq,pq,pq] 로 복원, TTM 합 = per_quarter*4 (의도 유지).
     """
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
     out: list[FinancialRecord] = []
-    for fp, e in zip(periods, eff, strict=True):
+    pq = Decimal(per_quarter)
+    for idx, (fp, e) in enumerate(zip(periods, eff, strict=True), start=1):
         out.append(FinancialRecord(
             id=uuid4(),
             code=code,
@@ -69,7 +75,7 @@ def _ni_quarters(code: str, per_quarter: str) -> list[FinancialRecord]:
             effective_date=e,
             fiscal_period=fp,
             account=_NI_ACCOUNT,
-            value=Decimal(per_quarter),
+            value=pq * idx,  # 누적(YTD): Q1=pq, Q2=2pq, Q3=3pq, Q4=4pq.
             unit="krw",
             ifrs_type=_CONSOLIDATED,
             citation_id=_CITATION,

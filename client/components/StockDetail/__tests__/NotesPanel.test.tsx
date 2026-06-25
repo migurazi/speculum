@@ -23,7 +23,8 @@ const LINEAGE_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 /** 정상 메모 목록 wire 응답 */
 const NOTES_WIRE = {
-  notes: [
+  total: 1,
+  items: [
     {
       id: "note-001",
       code_lineage_id: LINEAGE_ID,
@@ -37,7 +38,8 @@ const NOTES_WIRE = {
 
 /** XSS 악성 입력을 body 로 가진 메모 */
 const XSS_NOTES_WIRE = {
-  notes: [
+  total: 1,
+  items: [
     {
       id: "note-xss",
       code_lineage_id: LINEAGE_ID,
@@ -50,7 +52,7 @@ const XSS_NOTES_WIRE = {
 };
 
 /** 빈 메모 목록 */
-const EMPTY_WIRE = { notes: [] };
+const EMPTY_WIRE = { total: 0, items: [] };
 
 function makeClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });

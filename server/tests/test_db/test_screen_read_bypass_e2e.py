@@ -99,12 +99,15 @@ def _seed(session: Session) -> None:
             ifrs_preference_default="AUTO",
         )))
         # TTM eps = 분기별 (1000 + i*500) 합 → 종목별 다른 eps 로 조건 분기 검증.
+        # B1: basic_eps 는 FLOW 계정 — DART 누적(YTD) 보고. 분기단독 each 가 되도록
+        # 누적 [each, 2each, 3each, 4each] seed → resolver 가 standalone 복원,
+        # TTM = each*4 (code0=4000, code1=6000, code2=8000 의도 유지).
         each = Decimal(1000 + i * 500)
-        for fp, eff in zip(periods, effs, strict=True):
+        for q, (fp, eff) in enumerate(zip(periods, effs, strict=True), start=1):
             session.add(financial_record_to_orm(FinancialRecord(
                 id=uuid4(), code=code, code_lineage_id=UUID(int=i + 1),
                 effective_date=eff, fiscal_period=fp, account=_EPS_ACCOUNT,
-                value=each, unit="krw", ifrs_type=_CONSOLIDATED,
+                value=each * q, unit="krw", ifrs_type=_CONSOLIDATED,  # 누적(YTD).
                 citation_id=_CITATION, superseded_by=None,
                 created_at=datetime(2024, 1, 1, tzinfo=UTC),
             )))

@@ -105,12 +105,26 @@ def _financial_quarters(
 
     effective_date 는 as_of (2024-05-07) 이전 고정 (PIT 통과). financial_annual /
     financial_series resolver 가 4 분기 strict 합으로 해소.
+
+    **B1 (ROADMAP_v2 V1b)**: B1 은 `_FLOW_CUMULATIVE_ACCOUNTS`(net_income 등)에만
+    누적→standalone 변환을 적용한다. 따라서 seed 방식을 account 별로 달리한다:
+    - FLOW 계정(net_income): DART 누적(YTD)으로 보고되므로 분기단독이 per_quarter
+      가 되도록 누적 [pq,2pq,3pq,4pq] seed → resolver 가 standalone [pq×4] 복원.
+    - 비-FLOW 계정(depreciation_expense): B1 미변환이므로 flat per_quarter ×4 를
+      그대로 seed (resolver 가 시점값 그대로 합산).
+    둘 다 TTM 합 = per_quarter × 4 (의도 유지).
     """
+    from app.services.db_field_provider import _FLOW_CUMULATIVE_ACCOUNTS
+
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
     out: list[FinancialRecord] = []
-    for fp, e in zip(periods, eff, strict=True):
+    pq = Decimal(per_quarter)
+    is_flow = account in _FLOW_CUMULATIVE_ACCOUNTS
+    for idx, (fp, e) in enumerate(zip(periods, eff, strict=True), start=1):
+        # FLOW → 누적(YTD) pq*idx, 비-FLOW → flat pq.
+        value = pq * idx if is_flow else pq
         out.append(FinancialRecord(
             id=uuid4(),
             code=code,
@@ -118,7 +132,7 @@ def _financial_quarters(
             effective_date=e,
             fiscal_period=fp,
             account=account,
-            value=Decimal(per_quarter),
+            value=value,
             unit="krw",
             ifrs_type=_CONSOLIDATED,
             citation_id=_CITATION,

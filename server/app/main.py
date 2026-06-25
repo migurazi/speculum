@@ -54,6 +54,7 @@ from app.core.config import (
     assert_auth_config_for_environment,
     get_database_url,
 )
+from app.core.logging_config import setup_logging
 from app.db.session import create_engine_from_url, create_sessionmaker
 from app.middleware.forbidden_words_guard import ForbiddenWordsGuardMiddleware
 from app.repositories.batch_run_repository import (
@@ -218,6 +219,10 @@ def create_app(
         `database_url` 주입이 환경변수보다 우선 — 테스트는 fixture 단계에서
         DSN 지정 가능.
     """
+    # 파일 로깅 활성화 — server/logs/speculum.log 에 RotatingFileHandler 부착
+    # (root + uvicorn 로거). 멱등이라 create_app() 다중 호출(테스트)에도 핸들러
+    # 1회만 추가. logs/ 는 gitignore(*.log) 라 미커밋.
+    setup_logging()
     # 효과적 DB URL — 명시 인자 > 환경변수 > None.
     # oracle 리뷰 L2 — 빈 문자열도 None 으로 정규화 (명시 `database_url=""` 의도
     # 가 SQLAlchemy create_engine 의 raise 로 이어지지 않도록).

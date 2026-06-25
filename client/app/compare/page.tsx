@@ -7,10 +7,10 @@
  * 응답을 CompareGrid 로 렌더.
  *
  * UX:
- *   - 코드 입력 = comma-separated text input. backend 가 정규화 (zero-pad +
- *     dedup) 책임.
- *   - "비교 실행" 버튼 클릭 시 useQuery refetch (manual fetch — input 이
- *     바뀔 때 자동 호출 X, 사용자 확정 후만).
+ *   - **종목 검색으로 추가** — StockSearch(이름/코드 combobox)에서 선택하면 비교
+ *     대상 칩으로 추가(코드를 외울 필요 없음). 칩의 × 로 제거. 2~6 개.
+ *   - "비교 실행" 버튼 클릭 시 useQuery refetch (manual fetch — 칩이 바뀌어도
+ *     자동 호출 X, 사용자 확정 후만).
  *   - not_found 종목은 grid 위쪽 warning banner.
  *
  * 관련:
@@ -24,96 +24,64 @@ import { useMemo, useState } from "react";
 
 import { CompareChart } from "@/components/Compare/CompareChart";
 import { CompareGrid } from "@/components/Compare/CompareGrid";
-import { fetchStockCompare, type StockCompare } from "@/lib/api/stocks";
+import { StockSearch } from "@/components/StockSearch";
+import {
+  fetchStockCompare,
+  type StockCompare,
+  type StockSummary,
+} from "@/lib/api/stocks";
 import { useAsOfStore } from "@/state/as-of-store";
 
 const MIN_CODES = 2;
 const MAX_CODES = 6;
 
-/** 입력 텍스트를 raw codes 배열로 — split + trim 만. */
-function parseRawCodes(text: string): ReadonlyArray<string> {
-  return text
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-
-/**
- * raw codes 를 6 자리 zero-pad + dedup (insertion order 보존) — backend
- * normalize 와 동치 (oracle T38 C2). 본 정규화 후 길이로 검증해야 frontend·
- * backend 가 같은 판정 기준.
- */
-function normalizeCodes(
-  raw: ReadonlyArray<string>,
-): ReadonlyArray<string> {
-  const seen = new Map<string, null>();
-  for (const code of raw) {
-    seen.set(code.padStart(6, "0"), null);
-  }
-  return Array.from(seen.keys());
-}
-
-/**
- * 클라이언트 측 사전 검증 — backend 의 400 응답 회피 (UX 신호 우선).
- * 형식 검증은 raw codes 에 적용 (zero-pad 전), 개수 검증은 정규화 후.
- * t 함수를 주입해 i18n 메시지를 반환한다.
- */
-function validateCodes(
-  raw: ReadonlyArray<string>,
-  t: (key: string, values?: Record<string, string | number>) => string,
-): string | null {
-  for (const code of raw) {
-    if (!/^\d{1,6}$/.test(code)) {
-      return t("validationInvalidCode", { code });
-    }
-  }
-  const normalized = normalizeCodes(raw);
-  if (normalized.length < MIN_CODES) {
-    const wasDeduped = raw.length > normalized.length;
-    return wasDeduped
-      ? t("validationTooFewDeduped", { min: MIN_CODES })
-      : t("validationTooFew", { min: MIN_CODES });
-  }
-  if (normalized.length > MAX_CODES) {
-    return t("validationTooMany", { max: MAX_CODES });
-  }
-  return null;
-}
-
 export default function ComparePage(): JSX.Element {
   const t = useTranslations("compare");
   const asOf = useAsOfStore((s) => s.asOf);
-  // 입력 = 사용자가 편집 중인 텍스트. 확정 = 실 query 가 실행된 codes.
-  const [codesText, setCodesText] = useState<string>("");
-  const [submittedText, setSubmittedText] = useState<string>("");
+  // 선택 = 사용자가 검색으로 추가한 종목 칩. 확정 = 실 query 가 실행된 codes.
+  const [selected, setSelected] = useState<ReadonlyArray<StockSummary>>([]);
   const [submittedCodes, setSubmittedCodes] = useState<ReadonlyArray<string>>(
     [],
   );
 
-  const validationError = useMemo<string | null>(
-    () => validateCodes(parseRawCodes(codesText), t),
-    [codesText, t],
+  const selectedCodes = useMemo(
+    () => selected.map((s) => s.code),
+    [selected],
   );
+  const atMax = selected.length >= MAX_CODES;
 
-  // submittedCodes 가 빈 배열이면 query 비활성. 사용자가 "비교 실행" 클릭
-  // 후에만 backend call.
+  // 검색에서 선택 → 칩 추가. 이미 있는 코드는 무시(dedup), 최대 초과도 무시.
+  function addStock(item: StockSummary): void {
+    setSelected((prev) => {
+      if (prev.length >= MAX_CODES) return prev;
+      if (prev.some((s) => s.code === item.code)) return prev;
+      return [...prev, item];
+    });
+  }
+
+  function removeStock(code: string): void {
+    setSelected((prev) => prev.filter((s) => s.code !== code));
+  }
+
+  // submittedCodes 가 빈 배열이면 query 비활성. 사용자가 "비교 실행" 클릭 후에만 call.
   const query = useQuery<StockCompare>({
     queryKey: ["compare", submittedCodes, asOf],
-    queryFn: ({ signal }) =>
-      fetchStockCompare(submittedCodes, asOf, signal),
+    queryFn: ({ signal }) => fetchStockCompare(submittedCodes, asOf, signal),
     enabled: submittedCodes.length >= MIN_CODES,
   });
 
-  const canSubmit = validationError === null && !query.isFetching;
-  // 입력이 마지막 실행 시점과 다르면 stale — 결과를 dim 처리 (oracle T38 M3).
-  const isStale = submittedText !== "" && codesText !== submittedText;
+  const canSubmit =
+    selected.length >= MIN_CODES &&
+    selected.length <= MAX_CODES &&
+    !query.isFetching;
+  // 선택이 마지막 실행 시점과 다르면 stale — 결과를 dim 처리 (oracle T38 M3).
+  const isStale =
+    submittedCodes.length > 0 &&
+    selectedCodes.join(",") !== submittedCodes.join(",");
 
   function handleSubmit(): void {
-    if (validationError !== null) {
-      return;
-    }
-    setSubmittedText(codesText);
-    setSubmittedCodes(normalizeCodes(parseRawCodes(codesText)));
+    if (selected.length < MIN_CODES || selected.length > MAX_CODES) return;
+    setSubmittedCodes(selectedCodes);
   }
 
   return (
@@ -124,27 +92,53 @@ export default function ComparePage(): JSX.Element {
       </p>
 
       <section className="mt-6 space-y-3 rounded-lg border border-neutral-200 bg-neutral-50 p-4">
-        <label
-          htmlFor="compare-codes"
-          className="block text-sm font-medium text-neutral-700"
-        >
-          {t("codesLabel")}
+        <label className="block text-sm font-medium text-neutral-700">
+          {t("searchAddLabel")}
         </label>
-        <input
-          id="compare-codes"
-          type="text"
-          value={codesText}
-          onChange={(e) => setCodesText(e.target.value)}
-          placeholder="005930, 000660, 035420"
-          className="w-full rounded border border-neutral-300 px-3 py-1.5 font-mono text-sm"
-        />
-        {validationError !== null && codesText.length > 0 ? (
-          <p className="text-xs text-amber-700">{validationError}</p>
-        ) : (
-          <p className="text-xs text-neutral-500">
-            예: <span className="font-mono">005930, 000660, 035420</span>
+        {/* 이름/코드 검색 → 선택 시 addStock 콜백(이동 안 함). 최대 도달 시 비활성. */}
+        {atMax ? (
+          <p className="text-xs text-amber-700">
+            {t("maxReached", { max: MAX_CODES })}
           </p>
+        ) : (
+          <StockSearch
+            onSelect={addStock}
+            placeholder={t("searchAddPlaceholder")}
+            className="w-full"
+          />
         )}
+
+        {/* 선택된 비교 대상 칩 */}
+        {selected.length > 0 ? (
+          <div>
+            <p className="mb-1.5 text-xs font-medium text-neutral-500">
+              {t("selectedHeading", { count: selected.length, max: MAX_CODES })}
+            </p>
+            <ul className="flex flex-wrap gap-2">
+              {selected.map((s) => (
+                <li key={s.code}>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-neutral-300 bg-white py-1 pl-3 pr-1.5 text-sm">
+                    <span className="font-medium text-neutral-900">
+                      {s.name}
+                    </span>
+                    <span className="text-xs text-neutral-400">{s.code}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeStock(s.code)}
+                      aria-label={t("removeChipAria", { name: s.name })}
+                      className="ml-0.5 flex h-5 w-5 items-center justify-center rounded-full text-neutral-400 transition hover:bg-neutral-100 hover:text-neutral-700"
+                    >
+                      ×
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="text-xs text-neutral-500">{t("emptySelected")}</p>
+        )}
+
         <button
           type="button"
           onClick={handleSubmit}

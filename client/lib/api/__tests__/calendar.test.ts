@@ -2,17 +2,14 @@
  * calendar.ts 단위 테스트.
  *
  * 검증 항목:
- *   1. clampAsOf — 하한 미달·범위 내·상한 초과·경계값(동일값).
- *   2. clampUpperBound — latestDataDate 있으면 그것, null 이면 latestBusinessDay.
- *   3. fetchCalendarCoverage — snake→camel 매핑 정확성, latestDataDate null 케이스,
+ *   1. fetchCalendarCoverage — snake→camel 매핑 정확성, latestDataDate null 케이스,
  *      /api/calendar 경로 호출 확인, ApiError 전파.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { clampAsOf, clampUpperBound, fetchCalendarCoverage } from "../calendar";
+import { fetchCalendarCoverage } from "../calendar";
 import { ApiError } from "../client";
-import type { CalendarCoverage } from "../calendar";
 
 const MOCK_BASE_URL = "http://test.local";
 
@@ -22,63 +19,6 @@ function makeResponse(body: unknown, status = 200): Response {
     headers: { "Content-Type": "application/json" },
   });
 }
-
-// ── clampAsOf ──────────────────────────────────────────────────────────────
-
-describe("clampAsOf", () => {
-  it("하한 미달 → lower 반환", () => {
-    expect(clampAsOf("2023-12-31", "2024-01-02", "2024-06-28")).toBe(
-      "2024-01-02",
-    );
-  });
-
-  it("범위 내 → asOf 그대로 반환", () => {
-    expect(clampAsOf("2024-03-15", "2024-01-02", "2024-06-28")).toBe(
-      "2024-03-15",
-    );
-  });
-
-  it("상한 초과 → upper 반환", () => {
-    expect(clampAsOf("2026-06-19", "2024-01-02", "2024-06-28")).toBe(
-      "2024-06-28",
-    );
-  });
-
-  it("경계값 하한 동일 → 변경 없음", () => {
-    expect(clampAsOf("2024-01-02", "2024-01-02", "2024-06-28")).toBe(
-      "2024-01-02",
-    );
-  });
-
-  it("경계값 상한 동일 → 변경 없음", () => {
-    expect(clampAsOf("2024-06-28", "2024-01-02", "2024-06-28")).toBe(
-      "2024-06-28",
-    );
-  });
-});
-
-// ── clampUpperBound ────────────────────────────────────────────────────────
-
-describe("clampUpperBound", () => {
-  const base: CalendarCoverage = {
-    minDate: "2024-01-01",
-    maxDate: "2024-12-31",
-    earliestBusinessDay: "2024-01-02",
-    latestBusinessDay: "2024-12-30",
-    latestDataDate: null,
-    version: "1.0.0",
-  };
-
-  it("latestDataDate 있으면 그것을 상한으로", () => {
-    const c: CalendarCoverage = { ...base, latestDataDate: "2024-06-28" };
-    expect(clampUpperBound(c)).toBe("2024-06-28");
-  });
-
-  it("latestDataDate null 이면 latestBusinessDay 를 상한으로", () => {
-    const c: CalendarCoverage = { ...base, latestDataDate: null };
-    expect(clampUpperBound(c)).toBe("2024-12-30");
-  });
-});
 
 // ── fetchCalendarCoverage ──────────────────────────────────────────────────
 

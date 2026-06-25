@@ -22,6 +22,7 @@ M1 (조건 매칭):
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -77,6 +78,8 @@ from app.services.snapshot_versions import collect_run_data_versions
 from app.services.total_return_adjuster import TotalReturnAdjuster
 
 router = APIRouter(prefix="/api", tags=["screen"])
+
+logger = logging.getLogger(__name__)
 
 # dividend-의존 factor input — read-bypass serve 제외 대상 (C2-a, oracle 설계검토).
 # dividend 정정은 dividend_batch_id(FSC) 가 현재 항상 ""(FSC 배치 미존재)라
@@ -169,6 +172,18 @@ async def execute_screen(
     #    저장 POST 에 전달하여 두 호출 간 정책/배치 변경 race 차단 (oracle Risk-X2).
     #    Fake-only mode 는 정책-only 14 키.
     data_versions = dict(collect_run_data_versions(as_of.value, session))
+
+    # 결과 요약 INFO 로깅 — 운영 중 "0건" 의 원인(as_of 인지 na_excluded 인지)을
+    # 파일 로그(server/logs/speculum.log)에서 바로 진단하도록. total=0 이고
+    # na_excluded 가 universe 에 근접하면 데이터 부재, na_excluded=0 이면 조건
+    # 자체가 0건(§2.1 Fidelity 의 두 케이스 구별).
+    logger.info(
+        "screen as_of=%s total=%d universe=%d na_excluded=%d",
+        as_of.value,
+        len(result.result_codes),
+        result.universe_size,
+        result.na_excluded_count,
+    )
 
     return ScreenResultOut(
         result_codes=result.result_codes,

@@ -25,9 +25,12 @@
  * - M0_PLAN T37 / AC-F-04.
  */
 
+import { useTranslations } from "next-intl";
+
 import { SourceAttribution } from "@/components/SourceAttribution";
 import type { FactorValue } from "@/lib/api/stocks";
 import { formatPercentValue } from "@/lib/factor/format";
+import { parseNaReason } from "@/lib/factor/na-reason";
 import { inferFactorSource } from "@/lib/factor/source";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +60,29 @@ export function MetricCard({
 }: MetricCardProps): JSX.Element {
   const source = inferFactorSource(factor.canonical_id);
   const formula = describeFormula(factor);
+  // N/A 사유의 한국어 변환용 — naReason 네임스페이스로 스코프.
+  const tReason = useTranslations("stock.naReason");
+
+  /**
+   * backend 기계 코드 na_reason → 사람이 읽는 한국어. field 라벨은 i18n
+   * `fields.<key>` 에서 찾되, 미등록 field 는 raw key 로 graceful fallback
+   * (새 factor 추가 시 라벨 누락이 crash 가 아니라 식별자 노출로 degrade).
+   * 알 수 없는 형식(unknown)은 원문 그대로(정보 손실 0).
+   */
+  const naReasonText = (raw: string): string => {
+    const r = parseNaReason(raw);
+    if (r.kind === "unknown") return r.raw;
+    const fieldKey = `fields.${r.field}`;
+    const field = tReason.has(fieldKey) ? tReason(fieldKey) : r.field;
+    if (r.kind === "missing_input") {
+      return tReason("missingInput", { field });
+    }
+    return tReason("insufficientSeries", {
+      field,
+      requested: r.requested ?? "?",
+      got: r.got ?? "?",
+    });
+  };
 
   // 계약: is_na=false 이면 value!==null (backend FactorValueOut 보장). 그러나
   // 계약 위반 데이터(is_na=false && value===null)에도 crash 하지 않도록 이
@@ -75,7 +101,7 @@ export function MetricCard({
         <div className="mt-2 text-base text-neutral-400">N/A</div>
         {factor.na_reason !== null ? (
           <div className="mt-1 text-xs text-neutral-500">
-            {factor.na_reason}
+            {naReasonText(factor.na_reason)}
           </div>
         ) : null}
         <div className="mt-2 font-mono text-[10px] text-neutral-400">

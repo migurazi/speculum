@@ -59,12 +59,14 @@ describe("useAsOfStore", () => {
     expect(useAsOfStore.getState().asOf).toBe(kstToday());
   });
 
-  it("setAsOf persists to localStorage (partialize asOf only)", () => {
+  it("setAsOf does NOT persist to localStorage (ADR-0008 D1.2 — 새 로드 시 최근일)", () => {
+    // localStorage 영구화 제거 — stale as_of(공시 전 일자)가 사용자를 가두던 회귀
+    // 방지. 세션 내 메모리는 유지되나 localStorage 에는 쓰지 않는다.
     useAsOfStore.getState().setAsOf("2024-05-07");
-    const raw = localStorage.getItem("speculum-as-of-v1");
-    expect(raw).not.toBeNull();
-    const parsed = JSON.parse(raw!);
-    expect(parsed.state.asOf).toBe("2024-05-07");
+    // 메모리 state 는 갱신.
+    expect(useAsOfStore.getState().asOf).toBe("2024-05-07");
+    // localStorage 에는 어떤 as_of 키도 쓰이지 않음.
+    expect(localStorage.getItem("speculum-as-of-v1")).toBeNull();
   });
 });
 

@@ -34,7 +34,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 __all__ = [
@@ -42,6 +42,34 @@ __all__ = [
     "create_sessionmaker",
     "get_session",
 ]
+
+# SQLite busy 대기 시간(ms) — 다른 connection 이 쓰기 락을 잡고 있을 때 즉시
+# "database is locked" 로 실패하는 대신 이 시간만큼 재시도 대기한다. WAL 모드에서
+# 읽기는 writer 와 무관(차단 0)하나, **쓰기끼리는 여전히 단일 writer** 라(서버의
+# lazy-fetch/watchlist 쓰기 vs 배치 쓰기) 대기 여유가 필요하다.
+_SQLITE_BUSY_TIMEOUT_MS = 15000
+
+
+def _apply_sqlite_pragmas(dbapi_connection: object, _record: object) -> None:
+    """매 SQLite connection 에 WAL + busy_timeout pragma 적용 (connect 이벤트).
+
+    - `journal_mode=WAL`: 읽기와 쓰기가 동시 가능(reader 는 writer 에 차단되지
+      않음) → 무인 배치(쓰기)가 도는 중에도 API 서버(읽기)가 정상 응답. file DB
+      에서만 실효(=memory 는 'memory' 반환, 무해). **DB 파일 단위 영속 설정**이라
+      한 번 켜지면 유지되지만, 매 연결에서 멱등 재설정해도 무해.
+    - `busy_timeout`: 쓰기 경합 시 즉시 실패 대신 대기(위 상수).
+    - `synchronous=NORMAL`: WAL 권장 — 앱 크래시엔 안전, 전원 손실 시 마지막
+      트랜잭션만 위험. 배치 대량 쓰기 throughput 개선.
+
+    PostgreSQL 등 비-SQLite 연결에는 listener 가 부착되지 않으므로 호출되지 않는다.
+    """
+    cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute(f"PRAGMA busy_timeout={_SQLITE_BUSY_TIMEOUT_MS}")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+    finally:
+        cursor.close()
 
 
 def create_engine_from_url(
@@ -73,7 +101,10 @@ def create_engine_from_url(
     # SQLite 는 default SingletonThreadPool 사용 — pool_size/max_overflow 미지원.
     # PostgreSQL 등 다른 dialect 는 QueuePool default — pool args 지원.
     if url.startswith("sqlite"):
-        return create_engine(url, echo=echo, future=True)
+        engine = create_engine(url, echo=echo, future=True)
+        # WAL + busy_timeout — 배치(쓰기)와 API 서버(읽기) 동시 운용 가능하게.
+        event.listen(engine, "connect", _apply_sqlite_pragmas)
+        return engine
     return create_engine(
         url,
         echo=echo,

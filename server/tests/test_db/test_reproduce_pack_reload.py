@@ -99,18 +99,23 @@ def _build_scenario() -> dict:
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
+    # B1: basic_eps 는 FLOW 계정 — DART 누적(YTD) 보고. 분기단독 1000 씩
+    # (frozen TTM 4000 > 3999 매칭)이 되도록 누적 [1000,2000,3000,4000] seed →
+    # resolver 가 standalone 복원, frozen TTM=4000. 정정 Q4 standalone 100 →
+    # 누적 Q4 = Q3누적(3000)+100 = 3100 (live TTM=1100, frozen 과 분기).
+    cum_values = ["1000", "2000", "3000", "4000"]
     records: list[FinancialRecord] = []
     last_q4_id = None
-    for fp, e in zip(periods, eff, strict=True):
+    for fp, val, e in zip(periods, cum_values, eff, strict=True):
         rid = uuid4()
         if fp == "2023Q4":
             last_q4_id = rid
         records.append(_eps(
-            fiscal_period=fp, value="1000", effective_date=e,
+            fiscal_period=fp, value=val, effective_date=e,
             citation_id=_C1, record_id=rid,
         ))
     correction = _eps(
-        fiscal_period="2023Q4", value="100", effective_date=date(2024, 3, 30),
+        fiscal_period="2023Q4", value="3100", effective_date=date(2024, 3, 30),
         citation_id=_C2, created_at=datetime(2024, 5, 5, tzinfo=UTC),
     )
     assert last_q4_id is not None

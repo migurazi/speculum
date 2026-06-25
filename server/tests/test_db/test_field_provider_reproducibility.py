@@ -308,12 +308,18 @@ def test_factor_values_byte_identical_across_independent_providers() -> None:
 # =============================================================================
 
 def _supersede_scenario_financials() -> list[FinancialRecord]:
-    """4 분기 EPS — 2023Q4 가 batch1 원 공시 (800) 에서 batch2 정정 (100) 으로
-    supersede. frozen=batch1 이면 원값 (TTM 합 = 500+600+700+800 = 2600),
-    라이브 (cutoff 없음) 면 정정값 (500+600+700+100 = 1900).
+    """4 분기 EPS — 2023Q4 가 batch1 원 공시 (standalone 800) 에서 batch2 정정
+    (standalone 100) 으로 supersede. frozen=batch1 이면 원값 (TTM 합 =
+    500+600+700+800 = 2600), 라이브 (cutoff 없음) 면 정정값 (500+600+700+100 = 1900).
+
+    **B1 (ROADMAP_v2 V1b)**: basic_eps 는 FLOW 계정이라 DART 누적(YTD) 보고.
+    분기단독(standalone) [500,600,700,800] 의도를 위해 누적 [500,1100,1800,2600]
+    seed. 정정 Q4 standalone 100 → 누적 Q4 = Q3누적(1800)+100 = 1900 으로 정정.
+    resolver 가 standalone 복원 → frozen TTM=2600, live TTM=1900 (의도 유지).
     """
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
-    values = ["500", "600", "700", "800"]
+    # 누적(YTD): standalone [500,600,700,800] 의 prefix-sum.
+    values = ["500", "1100", "1800", "2600"]
     eff = [date(2023, 5, 15), date(2023, 8, 14),
            date(2023, 11, 14), date(2024, 3, 30)]
     q4_orig_id = UUID("00000000-0000-0000-0000-0000000000e4")
@@ -328,9 +334,9 @@ def _supersede_scenario_financials() -> list[FinancialRecord]:
             record_id=q4_orig_id if is_q4 else None,
             superseded_by=correction_id if is_q4 else None,
         ))
-    # batch2 정정 — 2023Q4 를 100 으로 하향 (원 row supersede).
+    # batch2 정정 — 2023Q4 standalone 을 100 으로 하향 → 누적 Q4 = 1800+100 = 1900.
     records.append(_fin(
-        account=_EPS_ACCOUNT, fiscal_period="2023Q4", value="100",
+        account=_EPS_ACCOUNT, fiscal_period="2023Q4", value="1900",
         effective_date=date(2024, 3, 30), citation_id=_CIT2,
         record_id=correction_id,
         created_at=datetime(2024, 5, 5, tzinfo=UTC),

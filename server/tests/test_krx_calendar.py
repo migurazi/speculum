@@ -19,7 +19,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -94,17 +94,20 @@ def _write_raw(tmp_path: Path, body: dict, name: str = "cal.json") -> Path:
 def test_default_calendar_loaded() -> None:
     cal = DEFAULT_CALENDAR
     assert isinstance(cal, TradingCalendar)
-    assert cal.version == "1.0.0"
+    assert cal.version == "1.1.0"
     assert cal.min_date == date(2024, 1, 1)
-    assert cal.max_date == date(2024, 12, 31)
+    assert cal.max_date >= date(2024, 12, 31)  # 재확장 견고: max_date 는 2024-12-31 이상
     assert isinstance(cal.closed_days, frozenset)
     assert isinstance(cal.half_days, frozenset)
 
 
 def test_default_calendar_closed_days_count_matches_known_list() -> None:
-    """oracle L5 — count 와 KNOWN_2024_HOLIDAYS 를 단일 source 로 동기화."""
-    assert len(DEFAULT_CALENDAR.closed_days) == len(KNOWN_2024_HOLIDAYS)
-    assert DEFAULT_CALENDAR.closed_days == frozenset(d for d, _ in KNOWN_2024_HOLIDAYS)
+    """oracle L5 — KNOWN_2024_HOLIDAYS 전부 포함 확인. 캘린더 확장 후 총 count 는 더 클 수 있음."""
+    # 2024 년 알려진 휴장일은 전부 포함되어야 함
+    known_2024 = frozenset(d for d, _ in KNOWN_2024_HOLIDAYS)
+    assert known_2024.issubset(DEFAULT_CALENDAR.closed_days)
+    # 현재 캘린더 총 휴장일 수 (2024~2026.6 포함) — 향후 재확장 시 ≥ 현재 값
+    assert len(DEFAULT_CALENDAR.closed_days) >= len(KNOWN_2024_HOLIDAYS)
 
 
 def test_default_calendar_half_days_empty() -> None:
@@ -123,8 +126,8 @@ def test_default_calendar_verified_fields_exposed() -> None:
     """oracle M8 — UI citation 용 verified_* 필드 노출."""
     cal = DEFAULT_CALENDAR
     assert isinstance(cal.verified_at, date)
-    assert cal.verified_by  # non-empty
-    assert cal.verified_source.startswith("http")
+    assert cal.verified_by == "speculum-pykrx-derived"  # pykrx 도출 캘린더
+    assert cal.verified_source  # non-empty (URL 또는 출처 문자열)
 
 
 def test_load_calendar_via_path() -> None:
@@ -201,8 +204,9 @@ def test_is_business_day_raises_for_date_below_range() -> None:
 
 
 def test_is_business_day_raises_for_date_above_range() -> None:
+    above = DEFAULT_CALENDAR.max_date + timedelta(days=1)
     with pytest.raises(CalendarRangeError):
-        DEFAULT_CALENDAR.is_business_day(date(2025, 1, 1))
+        DEFAULT_CALENDAR.is_business_day(above)
 
 
 # =============================================================================
@@ -247,8 +251,9 @@ def test_snap_to_next_skips_weekend() -> None:
 
 
 def test_snap_to_next_raises_when_past_max() -> None:
+    # max_date + 1 은 range 밖 — snap_to_next 가 _assert_in_range 에서 RangeError
     with pytest.raises(CalendarRangeError):
-        DEFAULT_CALENDAR.snap_to_next(date(2024, 12, 31))
+        DEFAULT_CALENDAR.snap_to_next(DEFAULT_CALENDAR.max_date + timedelta(days=1))
 
 
 def test_latest_business_day_is_snap_to_previous_alias() -> None:
@@ -270,9 +275,11 @@ def test_next_business_day_skips_weekend() -> None:
 
 def test_next_business_day_raises_at_max_boundary_preserves_original_input() -> None:
     """oracle C2 — boundary 에러가 호출자 원본 input 을 보존."""
+    # max_date 에서 next_business_day 는 범위 초과로 RangeError
+    boundary = DEFAULT_CALENDAR.max_date
     with pytest.raises(CalendarRangeError) as exc:
-        DEFAULT_CALENDAR.next_business_day(date(2024, 12, 31))
-    assert exc.value.original_input == date(2024, 12, 31)
+        DEFAULT_CALENDAR.next_business_day(boundary)
+    assert exc.value.original_input == boundary
     assert "next_business_day" in str(exc.value)
 
 
@@ -377,8 +384,9 @@ def test_business_days_in_range_raises_for_out_of_range_start() -> None:
 
 
 def test_business_days_in_range_raises_for_out_of_range_end() -> None:
+    above = DEFAULT_CALENDAR.max_date + timedelta(days=1)
     with pytest.raises(CalendarRangeError):
-        DEFAULT_CALENDAR.business_days_in_range(date(2024, 12, 30), date(2025, 1, 5))
+        DEFAULT_CALENDAR.business_days_in_range(date(2024, 12, 30), above)
 
 
 # =============================================================================
@@ -386,13 +394,14 @@ def test_business_days_in_range_raises_for_out_of_range_end() -> None:
 # =============================================================================
 
 def test_calendar_range_error_carries_attributes() -> None:
+    above = DEFAULT_CALENDAR.max_date + timedelta(days=1)
     try:
-        DEFAULT_CALENDAR.is_business_day(date(2025, 6, 1))
+        DEFAULT_CALENDAR.is_business_day(above)
     except CalendarRangeError as exc:
-        assert exc.requested == date(2025, 6, 1)
-        assert exc.min_date == date(2024, 1, 1)
-        assert exc.max_date == date(2024, 12, 31)
-        assert exc.original_input == date(2025, 6, 1)  # original = requested
+        assert exc.requested == above
+        assert exc.min_date == DEFAULT_CALENDAR.min_date
+        assert exc.max_date == DEFAULT_CALENDAR.max_date
+        assert exc.original_input == above  # original = requested
     else:
         pytest.fail("CalendarRangeError not raised")
 
@@ -457,7 +466,8 @@ def test_load_calendar_rejects_closed_day_outside_coverage(
     tmp_path: Path, base_body: dict
 ) -> None:
     body = copy.deepcopy(base_body)
-    body["closed_days"].append({"date": "2025-06-06", "reason": "out of coverage"})
+    # max_date(2026-06-25) 이후 날짜 — 항상 coverage 밖
+    body["closed_days"].append({"date": "2027-01-01", "reason": "out of coverage"})
     p = _write_with_fresh_hash(tmp_path, body)
     with pytest.raises(CalendarDataError, match="outside coverage"):
         _load_calendar(p, enforce_path_guard=False)
@@ -585,7 +595,7 @@ def test_load_calendar_rejects_path_outside_repo(tmp_path: Path) -> None:
 def test_load_calendar_allows_path_inside_repo() -> None:
     """repo 내 default data path 는 가드 통과 — 기본 동작."""
     cal = _load_calendar(_DATA_PATH, enforce_path_guard=True)
-    assert cal.version == "1.0.0"
+    assert cal.version == DEFAULT_CALENDAR.version
 
 
 # =============================================================================
@@ -622,7 +632,7 @@ def test_path_guard_handles_case_insensitive_normcase() -> None:
     """
     # 기본 data path 는 가드 통과 — 회귀 확인.
     cal = _load_calendar(_DATA_PATH, enforce_path_guard=True)
-    assert cal.version == "1.0.0"
+    assert cal.version == DEFAULT_CALENDAR.version
 
     # 케이싱 변경 (Windows 만 의미 있음). POSIX 면 동일 path resolve 실패 가능 →
     # 그 경우 case-aware FS 라 skip.

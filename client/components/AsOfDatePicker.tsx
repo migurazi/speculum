@@ -23,9 +23,8 @@
 import { useEffect, useState } from "react";
 import { useTranslations } from "next-intl";
 
-import { useAsOfStore, useIsToday } from "@/state/as-of-store";
+import { useAsOfStore, useIsToday, kstToday } from "@/state/as-of-store";
 import { useCalendarBoundsStore } from "@/state/calendar-bounds-store";
-import { clampAsOf } from "@/lib/api/calendar";
 import { cn } from "@/lib/utils";
 
 interface AsOfDatePickerProps {
@@ -78,16 +77,12 @@ export function AsOfDatePicker({
         <input
           type="date"
           value={asOf}
-          min={bounds?.lowerBound}
-          max={bounds?.upperBound}
+          min={bounds?.minDate}
+          max={kstToday()}
           onChange={(e) => {
             const next = e.target.value;
             if (next) {
-              // bounds 있으면 클램프 후 저장 — bounds null 이면 기존대로 next.
-              const clamped = bounds
-                ? clampAsOf(next, bounds.lowerBound, bounds.upperBound)
-                : next;
-              setAsOf(clamped);
+              setAsOf(next);
             }
           }}
           aria-label={t("asOfDatePicker.inputAriaLabel")}

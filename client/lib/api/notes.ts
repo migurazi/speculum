@@ -29,7 +29,10 @@ interface NoteOutWire {
 }
 
 interface NoteListWire {
-  readonly notes: ReadonlyArray<NoteOutWire>;
+  // backend NoteListOut 은 watchlist 등과 동일하게 `{items, total}` 컨벤션.
+  // (과거 `notes` 로 잘못 기대해 wire.notes.map → undefined.map 크래시였음.)
+  readonly items: ReadonlyArray<NoteOutWire>;
+  readonly total: number;
 }
 
 // =============================================================================
@@ -81,7 +84,7 @@ export async function listNotes(
     searchParams: { code_lineage_id: codeLineageId },
     signal,
   });
-  return { notes: wire.notes.map(wireToNote) };
+  return { notes: wire.items.map(wireToNote) };
 }
 
 /**

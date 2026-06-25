@@ -254,7 +254,14 @@ export function PriceChart({
       );
       chart.timeScale().fitContent();
       return () => {
-        chart.removeSeries(series);
+        // 언마운트(페이지 이탈) 시 Effect 1 의 cleanup 이 `chart.remove()` 로 차트를
+        // 먼저 폐기하면(chartRef.current=null), 폐기된 차트에 removeSeries 호출 →
+        // lightweight-charts 내부 "Value is undefined" 크래시. 차트가 살아있을 때만
+        // (= series 교체용 re-render) 제거하고, 언마운트면 chart.remove() 가 series
+        // 까지 처리하므로 skip. (re-render: chartRef.current 유효 → 옛 series 제거.)
+        if (chartRef.current) {
+          chart.removeSeries(series);
+        }
       };
     }
 
@@ -296,7 +303,14 @@ export function PriceChart({
       chart.timeScale().fitContent();
 
       return () => {
-        chart.removeSeries(series);
+        // 언마운트(페이지 이탈) 시 Effect 1 의 cleanup 이 `chart.remove()` 로 차트를
+        // 먼저 폐기하면(chartRef.current=null), 폐기된 차트에 removeSeries 호출 →
+        // lightweight-charts 내부 "Value is undefined" 크래시. 차트가 살아있을 때만
+        // (= series 교체용 re-render) 제거하고, 언마운트면 chart.remove() 가 series
+        // 까지 처리하므로 skip. (re-render: chartRef.current 유효 → 옛 series 제거.)
+        if (chartRef.current) {
+          chart.removeSeries(series);
+        }
       };
     } else {
       // adjusted 모드 — 수정 종가 라인.
@@ -313,7 +327,14 @@ export function PriceChart({
       chart.timeScale().fitContent();
 
       return () => {
-        chart.removeSeries(series);
+        // 언마운트(페이지 이탈) 시 Effect 1 의 cleanup 이 `chart.remove()` 로 차트를
+        // 먼저 폐기하면(chartRef.current=null), 폐기된 차트에 removeSeries 호출 →
+        // lightweight-charts 내부 "Value is undefined" 크래시. 차트가 살아있을 때만
+        // (= series 교체용 re-render) 제거하고, 언마운트면 chart.remove() 가 series
+        // 까지 처리하므로 skip. (re-render: chartRef.current 유효 → 옛 series 제거.)
+        if (chartRef.current) {
+          chart.removeSeries(series);
+        }
       };
     }
   }, [data, trData, mode]);

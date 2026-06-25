@@ -247,16 +247,23 @@ def _provider(
 
 
 # 4 분기 net_income series — 2023Q1~Q4, 공시일 보수 추정 (분기 종료 +45/90 일).
+#
+# **B1 (ROADMAP_v2 V1b)**: net_income 은 FLOW 계정이므로 DART 분기보고서는
+# 회계연도 **누적(YTD)** 값으로 보고한다(1분기=3M, 반기=6M, 3분기=9M, 사업보고서=12M).
+# 따라서 fixture 를 누적값으로 seed 한다: 의도한 standalone(분기단독) = [100,200,300,400]
+# 이 나오도록 누적 = [100, 300, 600, 1000] 을 seed → `_resolve_financial_series` 가
+# 누적→standalone 변환(누적[q] − 누적[q-1], 1분기는 누적=standalone)하여
+# (100, 200, 300, 400) 반환, TTM 합 = 1000.
 def _four_quarter_net_income() -> list[FinancialRecord]:
     return [
         _fin(account=_NET_INCOME_ACCOUNT, fiscal_period="2023Q1",
              value="100", effective_date=date(2023, 5, 15)),
         _fin(account=_NET_INCOME_ACCOUNT, fiscal_period="2023Q2",
-             value="200", effective_date=date(2023, 8, 14)),
+             value="300", effective_date=date(2023, 8, 14)),
         _fin(account=_NET_INCOME_ACCOUNT, fiscal_period="2023Q3",
-             value="300", effective_date=date(2023, 11, 14)),
+             value="600", effective_date=date(2023, 11, 14)),
         _fin(account=_NET_INCOME_ACCOUNT, fiscal_period="2023Q4",
-             value="400", effective_date=date(2024, 3, 30)),
+             value="1000", effective_date=date(2024, 3, 30)),
     ]
 
 
@@ -894,17 +901,23 @@ def _full_data_provider(
     financials: list[FinancialRecord] = []
     if net_income_quarters is not None:
         # 4 분기 net_income — fiscal_period asc, 공시일 보수 추정.
+        # net_income 은 FLOW 계정이므로 인자(net_income_quarters)를 분기단독
+        # (standalone) 값으로 받아 DART 누적(YTD) 으로 변환 후 seed (B1 reality).
+        # 누적[q] = standalone[0..q] 합 → `_resolve_financial_series` 가 다시
+        # standalone 으로 복원하여 원 인자 값을 평가에 사용 (TTM 합 == sum(인자)).
         eff = [
             date(2023, 5, 15), date(2023, 8, 14),
             date(2023, 11, 14), date(2024, 3, 30),
         ]
+        cumulative = 0
         for fp, val, e in zip(
             ("2023Q1", "2023Q2", "2023Q3", "2023Q4"),
             net_income_quarters, eff, strict=True,
         ):
+            cumulative += int(val)
             financials.append(
                 _fin(account=_NET_INCOME_ACCOUNT, fiscal_period=fp,
-                     value=val, effective_date=e)
+                     value=str(cumulative), effective_date=e)
             )
     if equity_common is not None:
         financials.append(
@@ -1326,16 +1339,21 @@ def test_provider_holds_as_of() -> None:
 # =============================================================================
 
 def test_end_to_end_eps_ttm() -> None:
-    """EPS (basic, TTM) factor 를 실제 산출 — sum_last_n_quarters(4)."""
+    """EPS (basic, TTM) factor 를 실제 산출 — sum_last_n_quarters(4).
+
+    basic_eps 는 FLOW 계정 — DART 누적(YTD)으로 seed. 의도 standalone
+    [500,600,700,800](TTM 2600)을 위해 누적 [500,1100,1800,2600] seed →
+    B1 변환 후 standalone 합 = 2600.
+    """
     financials = [
         _fin(account=_EPS_ACCOUNT, fiscal_period="2023Q1",
              value="500", effective_date=date(2023, 5, 15)),
         _fin(account=_EPS_ACCOUNT, fiscal_period="2023Q2",
-             value="600", effective_date=date(2023, 8, 14)),
+             value="1100", effective_date=date(2023, 8, 14)),
         _fin(account=_EPS_ACCOUNT, fiscal_period="2023Q3",
-             value="700", effective_date=date(2023, 11, 14)),
+             value="1800", effective_date=date(2023, 11, 14)),
         _fin(account=_EPS_ACCOUNT, fiscal_period="2023Q4",
-             value="800", effective_date=date(2024, 3, 30)),
+             value="2600", effective_date=date(2024, 3, 30)),
     ]
     provider = _provider(as_of=date(2024, 5, 1), financials=financials)
     evaluator = FactorEvaluator()
@@ -1352,7 +1370,7 @@ def test_end_to_end_eps_ttm() -> None:
     }
     result = evaluator.evaluate(factor, provider, as_of=date(2024, 5, 1))
     assert not result.is_na
-    assert result.value == Decimal("2600")  # 500+600+700+800
+    assert result.value == Decimal("2600")  # standalone [500,600,700,800] 합
 
 
 def test_end_to_end_na_when_insufficient() -> None:
@@ -1791,3 +1809,77 @@ def test_registry_covers_all_builtin_pack_inputs() -> None:
         all_inputs.update(factor["formula"]["inputs"])
     missing = all_inputs - set(FIELD_RESOLUTIONS.keys())
     assert not missing, f"레지스트리 미등록 field: {sorted(missing)}"
+
+
+# =============================================================================
+# B1 (ROADMAP_v2 V1b) — DART 분기 누적값 → standalone 변환 (FLOW 계정)
+# =============================================================================
+
+def test_b1_flow_cumulative_to_standalone_series() -> None:
+    """FLOW 계정(basic_eps) 누적값을 standalone 으로 차분 — 005930 실데이터 형태.
+
+    DART 분기보고서 누적(YTD): Q1=3M, Q2=6M, Q3=9M, Q4=연간. 최근 4분기 standalone =
+    [Q2-Q1, Q3-Q2, Q4-Q3, 다음Q1(=standalone)]. 삼성 2024-06-28: TTM EPS = 2900.
+    """
+    as_of = date(2024, 6, 28)
+    # 누적값(005930 실측): Q1=206 Q2=228 Q3=810 Q4=2131 / 2024Q1=975
+    records = [
+        _fin(account="basic_eps", fiscal_period="2023Q1", value="206",
+             effective_date=date(2023, 5, 15)),
+        _fin(account="basic_eps", fiscal_period="2023Q2", value="228",
+             effective_date=date(2023, 8, 14)),
+        _fin(account="basic_eps", fiscal_period="2023Q3", value="810",
+             effective_date=date(2023, 11, 14)),
+        _fin(account="basic_eps", fiscal_period="2023Q4", value="2131",
+             effective_date=date(2024, 3, 12)),
+        _fin(account="basic_eps", fiscal_period="2024Q1", value="975",
+             effective_date=date(2024, 5, 16)),
+    ]
+    prov = _provider(as_of=as_of, financials=records)
+    series = prov._resolve_financial_series(
+        FIELD_RESOLUTIONS["basic_eps_consolidated_ifrs"], n=4,
+    )
+    # 최근 4분기 [Q2'23,Q3'23,Q4'23,Q1'24] standalone.
+    assert series == (
+        Decimal("22"),    # 228-206
+        Decimal("582"),   # 810-228
+        Decimal("1321"),  # 2131-810
+        Decimal("975"),   # Q1=standalone(직전 차감 없음)
+    )
+    assert sum(series, Decimal(0)) == Decimal("2900")
+
+
+def test_b1_q1_is_standalone_no_prior_subtraction() -> None:
+    """회계연도 1분기는 누적=3M=standalone — 직전(전년 Q4) 차감 안 함."""
+    as_of = date(2024, 6, 28)
+    # 2개 회계연도 1분기 — 각 Q1 은 직전 차감 없이 그대로.
+    records = [
+        _fin(account="basic_eps", fiscal_period="2023Q4", value="2131",
+             effective_date=date(2024, 3, 12)),
+        _fin(account="basic_eps", fiscal_period="2024Q1", value="975",
+             effective_date=date(2024, 5, 16)),
+    ]
+    prov = _provider(as_of=as_of, financials=records)
+    series = prov._resolve_financial_series(
+        FIELD_RESOLUTIONS["basic_eps_consolidated_ifrs"], n=2,
+    )
+    # Q4'23 standalone 은 Q3'23 결손이라 산출 불가 → 전체 strict 빈 tuple.
+    assert series == ()
+
+
+def test_b1_missing_prior_quarter_strict_na() -> None:
+    """직전 분기(q>1) 결손이면 standalone 산출 불가 → strict 빈 tuple."""
+    as_of = date(2024, 6, 28)
+    # Q1 결손 + Q2(6M 누적) — Q2 standalone 은 Q1 차감 필요 → 결손 → 빈 tuple.
+    records = [
+        _fin(account="basic_eps", fiscal_period="2023Q2", value="228",
+             effective_date=date(2023, 8, 14)),
+        _fin(account="basic_eps", fiscal_period="2023Q3", value="810",
+             effective_date=date(2023, 11, 14)),
+    ]
+    prov = _provider(as_of=as_of, financials=records)
+    series = prov._resolve_financial_series(
+        FIELD_RESOLUTIONS["basic_eps_consolidated_ifrs"], n=2,
+    )
+    # Q2 standalone 의 직전(Q1) 결손 → strict.
+    assert series == ()

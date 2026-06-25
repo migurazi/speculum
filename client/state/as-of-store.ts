@@ -4,9 +4,14 @@
  * As-of date global store — ADR-0008 D1.2.
  *
  * 모든 화면이 본 store 를 통과해 PIT 기준 일자를 인지. zustand 사용 — context
- * 없이 hook 호출만으로 전역 access. localStorage 영구화 + 새 session 시작
- * 시 default reset (oracle ADR-0008 D1.2 의 "로그인 직후 default 는 항상
- * 최근 영업일").
+ * 없이 hook 호출만으로 전역 access.
+ *
+ * **localStorage 영구화 안 함** (ADR-0008 D1.2 — "로그인 직후 default 는 항상
+ * 최근 영업일"). 세션 내 navigation(탭/페이지 전환)은 zustand 메모리로 유지되나,
+ * 새 페이지 로드(새로고침/새 세션)는 항상 `kstToday()` 로 default. 과거에 localStorage
+ * 에 stale 한 as_of(예: 재무 공시 전 일자)가 남아 사용자를 가두던 회귀를 제거 —
+ * stale 날짜는 전 factor 가 PIT-NA 라 스크리너가 0건이 되는데, 그게 "데이터 없음"
+ * 처럼 보였다. 최근일 default 로 실데이터가 바로 보이게 한다.
  *
  * 운영 약속:
  *   - `asOf` 는 ISO 8601 date string ("YYYY-MM-DD"). 시간 단위 미지원
@@ -22,9 +27,6 @@
  */
 
 import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
-
-const STORAGE_KEY = "speculum-as-of-v1";
 
 /**
  * KST timezone 기준 today (`YYYY-MM-DD`).
@@ -45,7 +47,7 @@ export function kstToday(): string {
 interface AsOfState {
   /** ISO 8601 date — "YYYY-MM-DD". 항상 영업일 정규화는 backend 책임. */
   readonly asOf: string;
-  /** asOf 변경 + localStorage 영구화. */
+  /** asOf 변경 (세션 내 메모리 유지 — 영구화 없음). */
   readonly setAsOf: (date: string) => void;
   /** Today 로 reset — header picker 의 "오늘" button 용. */
   readonly resetToToday: () => void;
@@ -54,42 +56,23 @@ interface AsOfState {
 /**
  * 본 store 의 단일 export hook.
  *
- * 첫 mount 시 `kstToday()` default. localStorage 의 저장된 값은 본 cycle
- * 의 scope 상 사용 X — ADR-0008 D1.2 의 "로그인 직후 default 는 최근
- * 영업일" 약속. 단 같은 session 안의 navigation 에서는 zustand persist 가
- * 유지 (탭 전환 등).
+ * 첫 mount + 매 페이지 로드 시 `kstToday()` default (localStorage 영구화 없음 —
+ * ADR-0008 D1.2). 같은 session 안의 navigation(탭/페이지 전환)은 zustand 메모리로
+ * 선택값 유지. SSR 첫 render 와 client 첫 render 모두 kstToday 라 hydration mismatch
+ * 없음.
  *
- * oracle 리뷰 M1 — `isToday` 는 store state 에서 derived selector 로 분리.
- * `useIsToday()` hook 호출 시 매번 `kstToday()` 와 비교. 장점:
- *   - zustand persist 의 onRehydrateStorage mutation 의존성 제거 (v5 호환).
- *   - 자정 crossover 시 자동 stale 해소 (re-render 시점에 재계산).
- *   - store 의 readonly interface 와 mutation assertion 충돌 해소.
- *
- * Note (Hydration 안전):
- *   `persist` middleware 는 client mount 후 storage 에서 값을 rehydrate.
- *   SSR 첫 render = default state (kstToday). 첫 hydration 이후 storage
- *   value 가 반영. layout.tsx 의 SSR 출력과 첫 client render 일치 보장.
+ * `isToday` 는 store state 에서 derived selector(`useIsToday`)로 분리 — 매 re-render
+ * 시 `kstToday()` 재계산(자정 crossover 자동 반영).
  */
-export const useAsOfStore = create<AsOfState>()(
-  persist(
-    (set) => ({
-      asOf: kstToday(),
-      setAsOf: (date: string) => {
-        set({ asOf: date });
-      },
-      resetToToday: () => {
-        set({ asOf: kstToday() });
-      },
-    }),
-    {
-      name: STORAGE_KEY,
-      // localStorage 만 사용 — sessionStorage 는 새 tab 마다 reset.
-      storage: createJSONStorage(() => localStorage),
-      // asOf 만 영구화 — 다른 derived 값 없음.
-      partialize: (state) => ({ asOf: state.asOf }),
-    },
-  ),
-);
+export const useAsOfStore = create<AsOfState>()((set) => ({
+  asOf: kstToday(),
+  setAsOf: (date: string) => {
+    set({ asOf: date });
+  },
+  resetToToday: () => {
+    set({ asOf: kstToday() });
+  },
+}));
 
 
 /**

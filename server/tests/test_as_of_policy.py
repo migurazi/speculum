@@ -24,7 +24,7 @@ from app.services.as_of_policy import (
     AsOfPolicy,
     AsOfPolicyError,
 )
-from app.services.krx_calendar import DEFAULT_CALENDAR
+from app.services.krx_calendar import DEFAULT_CALENDAR, kst_today
 
 # =============================================================================
 # 1. None default fill
@@ -120,16 +120,19 @@ def test_normalize_below_min_raises_out_of_range() -> None:
 
 
 def test_normalize_above_max_raises_out_of_range_when_today_in_future() -> None:
-    """today 가 캘린더 범위 밖이고 input 도 그 범위면 → AsOfOutOfRangeError."""
-    # input < today, 둘 다 범위 밖 — calendar 가 가장 먼저 차단
+    """today 가 캘린더 범위 밖이고 input 도 그 범위면 → AsOfOutOfRangeError.
+
+    캘린더가 2026-06-25 까지 확장됐으므로(V1a B2) 범위 밖은 그 이후 일자로 검증.
+    """
+    # input < today, 둘 다 verified 범위(>2026-06-25) 밖 — calendar 가 가장 먼저 차단
     with pytest.raises(AsOfOutOfRangeError):
-        AsOfPolicy._normalize_with_today(date(2025, 6, 1), today=date(2025, 12, 1))
+        AsOfPolicy._normalize_with_today(date(2027, 6, 1), today=date(2027, 12, 1))
 
 
 def test_normalize_none_with_today_out_of_range_raises() -> None:
     """None default + today 가 범위 밖 → AsOfOutOfRangeError (latest_business_day 실패)."""
     with pytest.raises(AsOfOutOfRangeError):
-        AsOfPolicy._normalize_with_today(None, today=date(2025, 6, 1))
+        AsOfPolicy._normalize_with_today(None, today=date(2027, 6, 1))
 
 
 def test_calendar_range_error_chains_via_from_exc() -> None:
@@ -190,13 +193,22 @@ def test_private_helper_is_underscore_prefixed() -> None:
     assert "_normalize_with_today" not in (mod.__all__ or [])
 
 
-def test_normalize_uses_real_kst_today_by_default() -> None:
-    """운영 normalize 가 kst_today 기반으로 동작 (range 가 맞으면 통과)."""
-    import pytest
-    # DEFAULT_CALENDAR 가 2024 단년 verified — 현재 (2026) 는 범위 밖 → 명시적 fail.
-    # 본 테스트는 운영 entry 가 kst_today 를 사용한다는 contract 만 확인.
-    with pytest.raises(AsOfOutOfRangeError):
-        AsOfPolicy.normalize(None)  # today 미주입, kst_today 자동 사용
+def test_normalize_today_succeeds_after_calendar_extension() -> None:
+    """운영 normalize(None) 이 **실제 오늘**로 성공 — V1a B2 캘린더 확장 후.
+
+    복구플랜 0.4 (시간-비고정 as_of 계약): `today` 를 하드코딩하지 않고 실 `kst_today()`
+    로 `normalize(None)` 이 200(성공)이어야 한다. 캘린더가 2026-06-25 까지 확장됐으므로
+    오늘이 verified 범위 내 → AsOfOutOfRangeError 없이 영업일 정규화. (확장 전엔 이
+    테스트가 의도적으로 AsOfOutOfRangeError 를 단언해 'production 실패'를 문서화했고,
+    그 우회가 바로 oracle 기획검토가 지적한 'production 실패 은폐'였다 — 확장으로 해소.)
+
+    Note: 캘린더 max_date 를 today 가 초과하는 시점(미확장 경과)에는 다시 범위 밖이
+    되므로 `build_krx_calendar` 재실행이 필요(§8 — 손작업 아닌 스크립트 재실행).
+    """
+    result = AsOfPolicy.normalize(None)  # today 미주입, kst_today 자동 사용
+    # 영업일 정규화 성공 — value 는 today 이하의 최근 영업일.
+    assert result.was_defaulted is True
+    assert result.value <= kst_today()
 
 
 # =============================================================================
@@ -212,11 +224,14 @@ def test_previous_weekday_snaps_weekend_to_friday() -> None:
 
 
 def test_browse_none_out_of_range_degrades_not_raises() -> None:
-    """browse: today(2026)가 2024 캘린더 밖 → AsOfOutOfRangeError 대신 weekday degrade."""
+    """browse: today 가 verified 범위 밖 → AsOfOutOfRangeError 대신 weekday degrade.
+
+    캘린더가 2026-06-25 까지라(V1a B2) 범위 밖은 그 이후 일자로 검증.
+    """
     from app.services.as_of_policy import _previous_weekday
-    today = date(2026, 6, 25)  # 목, 2024 캘린더 밖
+    today = date(2030, 1, 1)  # 범위(≤2026-06-25) 밖
     result = AsOfPolicy._normalize_with_today(None, today=today, mode="browse")
-    assert result.value == _previous_weekday(today)  # == 2026-06-25 (목)
+    assert result.value == _previous_weekday(today)
     assert result.was_degraded is True
     assert result.was_defaulted is True
 
@@ -224,11 +239,11 @@ def test_browse_none_out_of_range_degrades_not_raises() -> None:
 def test_browse_input_out_of_range_degrades() -> None:
     """browse: 명시 입력이 캘린더 밖 → weekday 근사 degrade(범위 밖 입력)."""
     from app.services.as_of_policy import _previous_weekday
-    out_of_range = date(2026, 6, 21)  # 일, 2024 캘린더 밖
+    out_of_range = date(2030, 1, 6)  # 범위 밖(미래 today 주입으로 future 거부 회피)
     result = AsOfPolicy._normalize_with_today(
-        out_of_range, today=date(2026, 6, 25), mode="browse",
+        out_of_range, today=date(2030, 6, 1), mode="browse",
     )
-    assert result.value == _previous_weekday(out_of_range)  # 일→금 2026-06-19
+    assert result.value == _previous_weekday(out_of_range)
     assert result.was_degraded is True
     assert result.original_input == out_of_range
 
@@ -251,12 +266,15 @@ def test_browse_future_still_rejected() -> None:
 
 
 def test_strict_out_of_range_still_raises() -> None:
-    """strict(기본) 는 범위 밖이면 여전히 AsOfOutOfRangeError — frozen 경로 보호."""
+    """strict(기본) 는 범위 밖이면 여전히 AsOfOutOfRangeError — frozen 경로 보호.
+
+    캘린더 2026-06-25 까지라(V1a B2) 범위 밖은 그 이후 일자로 검증.
+    """
     with pytest.raises(AsOfOutOfRangeError):
         AsOfPolicy._normalize_with_today(
-            None, today=date(2026, 6, 25), mode="strict",
+            None, today=date(2030, 1, 1), mode="strict",
         )
     with pytest.raises(AsOfOutOfRangeError):
         AsOfPolicy._normalize_with_today(
-            date(2026, 6, 19), today=date(2026, 6, 25), mode="strict",
+            date(2030, 1, 1), today=date(2030, 6, 1), mode="strict",
         )

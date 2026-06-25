@@ -17,7 +17,7 @@
  * snake↔camel 변환 패턴: notes.ts / financial-history.ts 와 동일.
  */
 
-import { fetchJson } from "./client";
+import { ApiError, fetchJson } from "./client";
 
 // =============================================================================
 // Wire types (backend snake_case)
@@ -122,10 +122,22 @@ export async function fetchDisclosures(
     searchParams["limit"] = String(options.limit);
   }
 
-  const wire = await fetchJson<DisclosureListWire>(
-    `/api/stocks/${encodeURIComponent(code)}/disclosures`,
-    { searchParams, signal },
-  );
+  let wire: DisclosureListWire;
+  try {
+    wire = await fetchJson<DisclosureListWire>(
+      `/api/stocks/${encodeURIComponent(code)}/disclosures`,
+      { searchParams, signal },
+    );
+  } catch (err) {
+    // backend 는 DART corp_code 매핑이 없는 종목에 404 를 던진다(대부분의 종목이
+    // crno 매핑 미적재). 이는 정확성 결함이 아니라 가용성 부재 — 에러 배너 대신
+    // 빈 공시 목록으로 graceful degrade(패널이 "공시 없음" 상태 표시). DART 장애
+    // (502) 등 다른 에러는 그대로 전파해 사용자에게 알린다.
+    if (err instanceof ApiError && err.status === 404) {
+      return { code, asOf: options.asOf ?? "", disclosures: [] };
+    }
+    throw err;
+  }
 
   return {
     code: wire.code,

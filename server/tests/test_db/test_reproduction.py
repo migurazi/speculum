@@ -719,20 +719,24 @@ def test_reproduce_run_end_to_end_byte_identical() -> None:
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
-    # batch1 (원 공시) — 각 분기 1000 → TTM 합 4000.
+    # batch1 (원 공시) — 분기단독 1000 씩 → TTM 합 4000.
+    # B1: basic_eps 는 FLOW 계정 — DART 누적(YTD) 보고. standalone 1000×4 를 위해
+    # 누적 [1000,2000,3000,4000] seed → resolver 가 standalone 복원, frozen TTM=4000.
+    cum_values = ["1000", "2000", "3000", "4000"]
     records: list[FinancialRecord] = []
     last_orig_id = None
-    for fp, e in zip(periods, eff, strict=True):
+    for fp, val, e in zip(periods, cum_values, eff, strict=True):
         rid = uuid4()
         if fp == "2023Q4":
             last_orig_id = rid
         records.append(_eps_quarter(
-            code=code, fiscal_period=fp, value="1000", effective_date=e,
+            code=code, fiscal_period=fp, value=val, effective_date=e,
             citation_id=c1, record_id=rid,
         ))
-    # batch2 (정정) — 마지막 분기 2023Q4 를 100 으로 하향 (원 row supersede).
+    # batch2 (정정) — 2023Q4 standalone 을 100 으로 하향 → 누적 Q4 = Q3누적(3000)+100
+    #  = 3100 (live standalone TTM = 1000*3 + 100 = 3100, 원 row supersede).
     correction = _eps_quarter(
-        code=code, fiscal_period="2023Q4", value="100", effective_date=date(2024, 3, 30),
+        code=code, fiscal_period="2023Q4", value="3100", effective_date=date(2024, 3, 30),
         citation_id=c2, created_at=datetime(2024, 5, 5, tzinfo=UTC),
     )
     # 원 2023Q4 row 가 정정으로 supersede.

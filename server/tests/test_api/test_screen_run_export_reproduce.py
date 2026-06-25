@@ -606,12 +606,19 @@ def lag_client() -> Iterator[TestClient]:
     }
     records = [
         # 원 공시 (as_of 이전) — 4 분기로 EPS 합 매칭 보장.
-        _lag_record(fiscal_period="2023Q1", effective_date=date(2023, 5, 15)),
-        _lag_record(fiscal_period="2023Q2", effective_date=date(2023, 8, 14)),
-        _lag_record(fiscal_period="2023Q3", effective_date=date(2023, 11, 14)),
-        _lag_record(fiscal_period="2023Q4", effective_date=date(2024, 3, 30)),
-        # 정정 공시 (as_of 이후) — 2023Q4 group 전후 공존.
-        _lag_record(fiscal_period="2023Q4", effective_date=date(2024, 6, 1), value="900"),
+        # B1: basic_eps 는 FLOW 계정이라 DART 누적(YTD)으로 보고. 분기단독 1000
+        # 씩(TTM 4000 > 3999 매칭)이 되도록 누적 [1000,2000,3000,4000] seed →
+        # resolver 가 standalone [1000×4] 복원, TTM=4000 (005930 result_codes 포함).
+        _lag_record(fiscal_period="2023Q1", effective_date=date(2023, 5, 15),
+                    value="1000"),
+        _lag_record(fiscal_period="2023Q2", effective_date=date(2023, 8, 14),
+                    value="2000"),
+        _lag_record(fiscal_period="2023Q3", effective_date=date(2023, 11, 14),
+                    value="3000"),
+        _lag_record(fiscal_period="2023Q4", effective_date=date(2024, 3, 30),
+                    value="4000"),
+        # 정정 공시 (as_of 이후) — 2023Q4 group 전후 공존 (누적값 정정).
+        _lag_record(fiscal_period="2023Q4", effective_date=date(2024, 6, 1), value="3900"),
     ]
     stocks_repo = FakeStocksMasterRepository(records=[_SAMSUNG])
     financial_repo = FakeFinancialRepository(records, citation_runs=citation_runs)

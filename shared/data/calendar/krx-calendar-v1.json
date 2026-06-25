@@ -1,15 +1,15 @@
 {
   "$schema": "https://speculum.dev/schemas/krx-calendar-v1.json",
   "type": "krx-trading-calendar",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "KRX 영업일 캘린더 v1.0.0 — 2024 calendar year (verified). 후속 release 에서 2020~2023 + 2025~2027 확장 예정 (work-order 별도). 본 데이터는 한국 공휴일 (관공서의공휴일에관한규정) + KRX 공식 휴장일 발표 + 임시공휴일 고시 기준으로 작성됨. 토/일은 자동 휴장으로 처리 — closed_days 에 포함 X.",
   "coverage": {
     "min_date": "2024-01-01",
-    "max_date": "2024-12-31"
+    "max_date": "2026-06-25"
   },
-  "verified_at": "2026-05-27",
-  "verified_by": "speculum-initial-author",
-  "verified_source": "https://open.krx.co.kr/contents/MKD/01/0110/01100305/MKD01100305.jsp",
+  "verified_at": "2026-06-25",
+  "verified_by": "speculum-pykrx-derived",
+  "verified_source": "2024: KRX 공식 캘린더 수동 검증; 2025+: pykrx get_market_ohlcv(005930) 거래일 도출 (keyless). https://open.krx.co.kr / pykrx",
   "closed_days": [
     {
       "date": "2024-01-01",
@@ -82,8 +82,120 @@
     {
       "date": "2024-12-31",
       "reason": "연말 휴장 (KRX 공식)"
+    },
+    {
+      "date": "2025-01-01",
+      "reason": "신정"
+    },
+    {
+      "date": "2025-01-27",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-01-28",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-01-29",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-01-30",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-03-03",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-05-01",
+      "reason": "근로자의날 (KRX 휴장)"
+    },
+    {
+      "date": "2025-05-05",
+      "reason": "어린이날"
+    },
+    {
+      "date": "2025-05-06",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-06-03",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-06-06",
+      "reason": "현충일"
+    },
+    {
+      "date": "2025-08-15",
+      "reason": "광복절"
+    },
+    {
+      "date": "2025-10-03",
+      "reason": "개천절"
+    },
+    {
+      "date": "2025-10-06",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-10-07",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-10-08",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2025-10-09",
+      "reason": "한글날"
+    },
+    {
+      "date": "2025-12-25",
+      "reason": "성탄절"
+    },
+    {
+      "date": "2025-12-31",
+      "reason": "연말 폐장"
+    },
+    {
+      "date": "2026-01-01",
+      "reason": "신정"
+    },
+    {
+      "date": "2026-02-16",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2026-02-17",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2026-02-18",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2026-03-02",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2026-05-01",
+      "reason": "근로자의날 (KRX 휴장)"
+    },
+    {
+      "date": "2026-05-05",
+      "reason": "어린이날"
+    },
+    {
+      "date": "2026-05-25",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
+    },
+    {
+      "date": "2026-06-03",
+      "reason": "KRX 휴장 (pykrx 거래일 도출)"
     }
   ],
   "half_days": [],
-  "content_hash": "sha256:906cc72cb243df056641eec4e7e619ac46699947cad4667dbfed99473226c72e"
+  "content_hash": "sha256:d00a4a9afb3b7317a2a27b2199ed5d7fd5d3a861049e3b52dd875cf4d3a8e48d"
 }

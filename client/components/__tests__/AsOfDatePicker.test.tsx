@@ -79,13 +79,11 @@ describe("AsOfDatePicker", () => {
     expect(useAsOfStore.getState().asOf).toBe(kstToday());
   });
 
-  it("bounds 주입 시 input 의 min/max 가 lowerBound/upperBound 와 일치", async () => {
+  it("bounds 주입 시 input 의 min=minDate, max=kstToday()", async () => {
     act(() => {
       useCalendarBoundsStore.getState().setBounds({
         minDate: "2024-01-01",
         maxDate: "2024-12-31",
-        lowerBound: "2024-01-02",
-        upperBound: "2024-06-28",
       });
     });
 
@@ -94,8 +92,8 @@ describe("AsOfDatePicker", () => {
       "기준 일자 선택",
     )) as HTMLInputElement;
 
-    expect(input.min).toBe("2024-01-02");
-    expect(input.max).toBe("2024-06-28");
+    expect(input.min).toBe("2024-01-01");
+    expect(input.max).toBe(kstToday());
   });
 });
 

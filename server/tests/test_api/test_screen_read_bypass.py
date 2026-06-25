@@ -82,18 +82,24 @@ def _stock(code: str) -> StockMasterRecord:
 
 
 def _eps_quarters(code: str, total: str) -> list[FinancialRecord]:
-    """code 의 4 분기 basic_eps — TTM 합 = total (분기별 total/4)."""
-    each = str(Decimal(total) / 4)
+    """code 의 4 분기 basic_eps — TTM 합 = total (분기별 total/4).
+
+    **B1 (ROADMAP_v2 V1b)**: basic_eps 는 FLOW 계정 — DART 누적(YTD) 보고.
+    분기단독(standalone) each=total/4 가 되도록 누적 [each,2each,3each,4each]
+    seed → resolver 가 standalone 으로 복원, TTM 합 = total (live 평가값 불변,
+    serve==live byte-동일 유지).
+    """
+    each = Decimal(total) / 4
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
     out: list[FinancialRecord] = []
-    for fp, e in zip(periods, eff, strict=True):
+    for idx, (fp, e) in enumerate(zip(periods, eff, strict=True), start=1):
         out.append(FinancialRecord(
             id=uuid4(), code=code,
             code_lineage_id=UUID(int=int(code)),
             effective_date=e, fiscal_period=fp, account=_EPS_ACCOUNT,
-            value=Decimal(each), unit="krw", ifrs_type=_CONSOLIDATED,
+            value=each * idx, unit="krw", ifrs_type=_CONSOLIDATED,  # 누적(YTD).
             citation_id=_CITATION, superseded_by=None,
             created_at=datetime(2024, 1, 1, tzinfo=UTC),
         ))

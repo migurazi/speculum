@@ -51,7 +51,38 @@ describe("MetricCard", () => {
     };
     renderWithIntl(<MetricCard factor={naFactor} asOf="2024-09-30" />);
     expect(screen.getByText("N/A")).toBeInTheDocument();
+    // 자유 텍스트 사유(기계 코드 아님)는 그대로 표시(unknown → raw, 정보 손실 0).
     expect(screen.getByText("분모가 0 — 자기자본 음수")).toBeInTheDocument();
+  });
+
+  it("기계 코드 na_reason(missing_input) 을 한국어로 변환", () => {
+    const f: FactorValue = {
+      ...BASE_FACTOR,
+      value: null,
+      is_na: true,
+      na_reason: "missing_input:shares_issued",
+    };
+    renderWithIntl(<MetricCard factor={f} asOf="2024-09-30" />);
+    expect(screen.getByText("발행주식수 데이터 미적재")).toBeInTheDocument();
+    // raw 기계 코드는 더 이상 사유 줄에 노출되지 않는다.
+    expect(
+      screen.queryByText("missing_input:shares_issued"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("기계 코드 na_reason(insufficient_series) 을 한국어로 변환", () => {
+    const f: FactorValue = {
+      ...BASE_FACTOR,
+      canonical_id: "eps:basic-ttm-consolidated-ifrs",
+      value: null,
+      is_na: true,
+      na_reason:
+        "insufficient_series:basic_eps_consolidated_ifrs:requested=4,got=1",
+    };
+    renderWithIntl(<MetricCard factor={f} asOf="2024-09-30" />);
+    expect(
+      screen.getByText("기본주당이익(연결) 분기 데이터 부족 (필요 4, 보유 1)"),
+    ).toBeInTheDocument();
   });
 
   it("renders 'N/A' when value=null even if is_na=false", () => {

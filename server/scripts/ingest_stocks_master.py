@@ -17,6 +17,7 @@ code_lineage_id 와 자동 정합. FDR 은 키 불필요(StockListing). 종목�
     set SPECULUM_DATABASE_URL=sqlite:///./speculum_real.db
     python -m scripts.ingest_stocks_master                 # prices_daily 적재 종목 전체
     python -m scripts.ingest_stocks_master 005930 000660   # 지정 종목만
+    python -m scripts.ingest_stocks_master --full          # 전 상장종목(KOSPI+KOSDAQ)
 
 설계:
 - **UPSERT(session.merge)** — 재실행 멱등(같은 lineage id overwrite).
@@ -58,6 +59,52 @@ def _distinct_price_codes(session) -> list[str]:
     return sorted({r[0] for r in rows})
 
 
+def _full_universe_rows() -> list[tuple[str, str, str]]:
+    """FDR StockListing(KOSPI+KOSDAQ) — 전체 KRX 유니버스 (code, name, market).
+
+    keyless(FDR). 한 시장당 1 호출로 전 종목(code/name)을 받아 per-code FDR fetch
+    (수천 회) 를 회피한다. listing_date 는 미제공이라 `--full` 경로는 보수 fallback.
+    비숫자/6자리 아님/빈 이름 row 는 skip(ETF/지수/SPAC 일부 비정형 방어).
+    """
+    import FinanceDataReader as fdr
+
+    rows: list[tuple[str, str, str]] = []
+    for market in ("KOSPI", "KOSDAQ"):
+        listing = fdr.StockListing(market)
+        for _, r in listing.iterrows():
+            code = str(r.get("Code") or "").strip()
+            name = str(r.get("Name") or "").strip()
+            if not name or not code.isdigit() or len(code) != 6:
+                continue
+            rows.append((code, name, market))
+    return rows
+
+
+def _build_master_record(
+    *, code: str, name: str, market: str, listing_date: date,
+) -> StockMasterRecord:
+    """공통 마스터 레코드 빌드 — per-code 경로와 `--full` 경로 단일 출처."""
+    return StockMasterRecord(
+        id=lineage_id_for_code(code),
+        current_code=code,
+        current_name=name,
+        market=market,
+        listing_date=listing_date,
+        delisting_date=None,
+        fiscal_month=12,
+        code_history=(
+            CodeHistoryEntry(
+                code=code,
+                valid_from=listing_date,
+                valid_to=None,
+                reason="initial_listing",
+            ),
+        ),
+        ifrs_preference_default="AUTO",
+        security_type="common",
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     url = get_database_url()
@@ -75,6 +122,27 @@ def main(argv: list[str] | None = None) -> int:
     skipped: list[str] = []
     try:
         with maker() as session:
+            # --full: FDR StockListing(KOSPI+KOSDAQ) 전체 유니버스 직적재(keyless,
+            # per-code fetch 없음). 스크리너 모집단을 10 → 전 상장종목으로 확장.
+            if "--full" in args:
+                rows = _full_universe_rows()
+                logger.info(
+                    "전체 유니버스 적재 — %d 종목 (FDR StockListing, keyless)",
+                    len(rows),
+                )
+                for code, name, market in rows:
+                    record = _build_master_record(
+                        code=code,
+                        name=name,
+                        market=market,
+                        listing_date=_LISTING_DATE_FALLBACK,
+                    )
+                    session.merge(stocks_master_record_to_orm(record))
+                    saved += 1
+                session.commit()
+                logger.info("전체 유니버스 적재 완료 — saved=%d", saved)
+                return 0 if saved > 0 else 1
+
             codes = args or _distinct_price_codes(session)
             if not codes:
                 logger.warning(
@@ -95,24 +163,11 @@ def main(argv: list[str] | None = None) -> int:
 
                 master = result.data
                 listing = master.listing_date or _LISTING_DATE_FALLBACK
-                record = StockMasterRecord(
-                    id=lineage_id_for_code(code),
-                    current_code=code,
-                    current_name=master.name,
+                record = _build_master_record(
+                    code=code,
+                    name=master.name,
                     market=master.market,
                     listing_date=listing,
-                    delisting_date=None,
-                    fiscal_month=12,
-                    code_history=(
-                        CodeHistoryEntry(
-                            code=code,
-                            valid_from=listing,
-                            valid_to=None,
-                            reason="initial_listing",
-                        ),
-                    ),
-                    ifrs_preference_default="AUTO",
-                    security_type="common",
                 )
                 # UPSERT — lineage id(PK) 기준 merge. 재실행 멱등.
                 session.merge(stocks_master_record_to_orm(record))

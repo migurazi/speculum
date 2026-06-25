@@ -42,9 +42,22 @@ interface StockSearchProps {
    * 테스트 환경에서 0 을 전달하면 디바운스 없이 즉시 query 실행 가능.
    */
   readonly debounceMs?: number;
+  /**
+   * 종목 선택 시 콜백. 전달하면 `/stock/{code}` 이동 대신 본 콜백을 호출한다
+   * (예: Compare 의 "검색해서 추가"). 미전달(기본)이면 상세 화면으로 이동 —
+   * NavBar 검색의 기존 동작 하위호환.
+   */
+  readonly onSelect?: (item: StockSummary) => void;
+  /** 입력 placeholder override. 미전달 시 공통 검색 placeholder. */
+  readonly placeholder?: string;
 }
 
-export function StockSearch({ className, debounceMs = 250 }: StockSearchProps): JSX.Element {
+export function StockSearch({
+  className,
+  debounceMs = 250,
+  onSelect,
+  placeholder,
+}: StockSearchProps): JSX.Element {
   const t = useTranslations("common");
   const router = useRouter();
   const asOf = useAsOfStore((s) => s.asOf);
@@ -135,9 +148,14 @@ export function StockSearch({ className, debounceMs = 250 }: StockSearchProps): 
       setDebouncedQ("");
       setIsOpen(false);
       setHighlightedIndex(-1);
+      // onSelect 가 있으면 그 콜백(예: Compare 추가)이 우선 — 이동 안 함.
+      if (onSelect) {
+        onSelect(item);
+        return;
+      }
       router.push(`/stock/${item.code}`);
     },
-    [router],
+    [router, onSelect],
   );
 
   // ─── 키보드 이벤트 핸들러 ────────────────────────────────────────────────
@@ -201,7 +219,7 @@ export function StockSearch({ className, debounceMs = 250 }: StockSearchProps): 
         aria-activedescendant={activeDescendant}
         aria-autocomplete="list"
         aria-label={t("searchAriaLabel")}
-        placeholder={t("searchPlaceholder")}
+        placeholder={placeholder ?? t("searchPlaceholder")}
         value={inputValue}
         autoComplete="off"
         className="w-full max-w-md rounded-md border border-neutral-300 px-3 py-1.5 text-sm placeholder:text-neutral-400 focus:border-neutral-500 focus:outline-none focus:ring-1 focus:ring-neutral-400"

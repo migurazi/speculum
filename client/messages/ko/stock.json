@@ -93,5 +93,42 @@
     "bodyTooLong": "메모는 10,000자를 초과할 수 없습니다.",
     "bodyEmpty": "내용을 입력하세요.",
     "dateLabel": "작성일"
+  },
+  "landing": {
+    "heading": "종목 검색",
+    "description": "종목명 또는 종목코드(6자리)로 검색하세요. 선택하면 해당 종목의 상세 화면으로 이동합니다.",
+    "examplesLabel": "바로가기"
+  },
+  "naReason": {
+    "missingInput": "{field} 데이터 미적재",
+    "insufficientSeries": "{field} 분기 데이터 부족 (필요 {requested}, 보유 {got})",
+    "fields": {
+      "shares_issued": "발행주식수",
+      "shares_treasury": "자기주식수",
+      "market_cap": "시가총액",
+      "market_cap_ex_treasury": "시가총액(자사주 제외)",
+      "market_cap_krx_official": "시가총액(KRX 공식)",
+      "basic_eps_consolidated_ifrs": "기본주당이익(연결)",
+      "net_income_consolidated_ifrs": "순이익(연결)",
+      "net_income_attributable_consolidated_ifrs": "지배주주 순이익(연결)",
+      "net_income_attributable_consolidated_ifrs_annual": "지배주주 순이익(연결, 연간)",
+      "equity_attributable_to_common_consolidated_ifrs": "지배주주 자본(연결)",
+      "equity_attributable_to_common_consolidated_ifrs_period_begin": "지배주주 자본(연결, 기초)",
+      "depreciation_expense_annual": "감가상각비(연간)",
+      "dividend_per_share_annual": "주당배당금(연간)",
+      "dividend_per_share_trailing_annual": "주당배당금(최근 1년)",
+      "dividends_paid_annual": "배당금총액(연간)",
+      "close_price_adjusted": "수정종가",
+      "total_return_annual": "총수익률(연간)",
+      "total_return_trailing_1y": "총수익률(최근 1년)",
+      "trading_value_20d_avg": "20일 평균 거래대금",
+      "trading_value_avg": "평균 거래대금",
+      "ecos_base_rate": "기준금리",
+      "ecos_cpi": "소비자물가지수",
+      "kosis_employment_rate": "고용률",
+      "kosis_industrial_production": "산업생산지수",
+      "kosis_leading_index": "선행종합지수",
+      "kosis_unemployment_rate": "실업률"
+    }
   }
 }

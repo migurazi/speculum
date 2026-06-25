@@ -8,26 +8,22 @@
  * 불필요. 페이지 새로고침 시 CalendarBoundsSync 가 재조회.
  *
  * 소비자:
- *   - components/AsOfDatePicker.tsx — input min/max 속성 반영.
+ *   - components/AsOfDatePicker.tsx — input min 속성 반영(picker 하한).
  *
  * 관련:
- *   - lib/api/calendar.ts (CalendarCoverage, clampUpperBound, clampAsOf)
+ *   - lib/api/calendar.ts (CalendarCoverage, fetchCalendarCoverage)
  *   - components/CalendarBoundsSync.tsx (store 쓰기 주체)
  *   - state/as-of-store.ts (참고 패턴, persist 미사용 차이점)
  */
 
 import { create } from "zustand";
 
-/** AsOfDatePicker 및 클램프 로직이 사용하는 캘린더 유효 범위. */
+/** AsOfDatePicker 가 사용하는 캘린더 유효 범위. */
 export interface CalendarBounds {
   /** 지원 최소 일자 ("YYYY-MM-DD"). */
   readonly minDate: string;
   /** 지원 최대 일자 ("YYYY-MM-DD"). */
   readonly maxDate: string;
-  /** 클램프 하한 = CalendarCoverage.earliestBusinessDay ("YYYY-MM-DD"). */
-  readonly lowerBound: string;
-  /** 클램프 상한 = latestDataDate ?? latestBusinessDay ("YYYY-MM-DD"). */
-  readonly upperBound: string;
 }
 
 interface CalendarBoundsState {

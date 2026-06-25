@@ -141,6 +141,73 @@ def test_main_idempotent_upsert(
         engine.dispose()
 
 
+def test_main_full_ingests_whole_universe(
+    _db_url: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--full: FDR StockListing 전체 → per-code fetch 없이 마스터 직적재.
+
+    `_full_universe_rows` 를 monkeypatch(네트워크 격리). 시장은 row 출처
+    (KOSPI/KOSDAQ)에서 직접, listing_date 는 fallback 으로 채워진다.
+    """
+    rows = [
+        ("005930", "삼성전자", "KOSPI"),
+        ("035420", "NAVER", "KOSPI"),
+        ("247540", "에코프로비엠", "KOSDAQ"),
+    ]
+    monkeypatch.setattr(mod, "_full_universe_rows", lambda: rows)
+    # --full 경로는 FdrAdapter.fetch_stock_master 를 호출하지 않아야 한다.
+    monkeypatch.setattr(
+        mod, "FdrAdapter", lambda: _FakeFdr({}),  # 빈 fake — 호출되면 미발견.
+    )
+
+    rc = mod.main(["--full"])
+    assert rc == 0
+    assert _stocks(_db_url) == [
+        ("005930", "삼성전자", "KOSPI"),
+        ("035420", "NAVER", "KOSPI"),
+        ("247540", "에코프로비엠", "KOSDAQ"),
+    ]
+    # listing_date 는 fallback(상장일 미제공 경로).
+    engine = create_engine(_db_url, future=True)
+    try:
+        with sessionmaker(bind=engine, future=True)() as s:
+            ld = s.scalar(
+                select(StocksMasterORM.listing_date).where(
+                    StocksMasterORM.current_code == "247540",
+                )
+            )
+            assert ld == mod._LISTING_DATE_FALLBACK
+    finally:
+        engine.dispose()
+
+
+def test_full_universe_rows_filters_malformed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_full_universe_rows: 빈 이름·비숫자·6자리 아님 row 는 skip(비정형 방어)."""
+    import pandas as pd
+
+    listings = {
+        "KOSPI": pd.DataFrame(
+            {"Code": ["005930", "12345", "", "00000A"], "Name": ["삼성전자", "짧음", "무이름", "문자"]},
+        ),
+        "KOSDAQ": pd.DataFrame(
+            {"Code": ["247540"], "Name": ["에코프로비엠"]},
+        ),
+    }
+
+    class _FakeFdrModule:
+        @staticmethod
+        def StockListing(market):  # noqa: N802 (FDR API 시그니처)
+            return listings[market]
+
+    monkeypatch.setitem(__import__("sys").modules, "FinanceDataReader", _FakeFdrModule)
+    rows = mod._full_universe_rows()
+    # 005930(KOSPI) + 247540(KOSDAQ) 만 — 12345(5자리)·빈코드·00000A(비숫자) 제외.
+    assert rows == [
+        ("005930", "삼성전자", "KOSPI"),
+        ("247540", "에코프로비엠", "KOSDAQ"),
+    ]
+
+
 def test_main_listing_date_fallback(
     _db_url: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

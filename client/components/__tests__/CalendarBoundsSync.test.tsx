@@ -2,9 +2,8 @@
  * CalendarBoundsSync 단위 테스트.
  *
  * 검증 항목:
- *   1. fetchCalendarCoverage 응답 도착 후 CalendarBoundsStore 가 갱신됨.
- *   2. 범위 밖 asOf(미래 날짜)가 upperBound 로 클램프됨.
- *   3. 이미 범위 내 asOf 는 변경되지 않음.
+ *   1. fetchCalendarCoverage 응답 도착 후 CalendarBoundsStore 가 minDate/maxDate 로 갱신됨.
+ *   2. asOf 는 CalendarBoundsSync 가 건드리지 않음 — 범위 밖 값도 그대로 유지.
  *
  * fetchCalendarCoverage 를 vi.mock 으로 대체. QueryClientProvider 로 감싸
  * useQuery 를 활성화.
@@ -19,7 +18,7 @@ import { CalendarBoundsSync } from "@/components/CalendarBoundsSync";
 import { useAsOfStore } from "@/state/as-of-store";
 import { useCalendarBoundsStore } from "@/state/calendar-bounds-store";
 
-// fetchCalendarCoverage 모킹 — 순수 함수(clampUpperBound, clampAsOf)는 실 구현 사용.
+// fetchCalendarCoverage 모킹.
 const mockFetchCalendarCoverage = vi.fn();
 vi.mock("@/lib/api/calendar", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api/calendar")>();
@@ -66,28 +65,30 @@ describe("CalendarBoundsSync", () => {
     localStorage.clear();
   });
 
-  it("data 도착 후 CalendarBoundsStore 가 갱신됨", async () => {
+  it("data 도착 후 CalendarBoundsStore 가 minDate/maxDate 로 갱신됨", async () => {
     render(<CalendarBoundsSync />, { wrapper });
 
     await waitFor(() => {
       const bounds = useCalendarBoundsStore.getState().bounds;
       expect(bounds).not.toBeNull();
-      expect(bounds?.lowerBound).toBe("2024-01-02");
-      expect(bounds?.upperBound).toBe("2024-06-28");
       expect(bounds?.minDate).toBe("2024-01-01");
       expect(bounds?.maxDate).toBe("2024-12-31");
     });
   });
 
-  it("범위 밖 asOf(미래 날짜) → upperBound 로 클램프", async () => {
+  it("범위 밖 asOf(미래 날짜) — CalendarBoundsSync 가 asOf 를 건드리지 않음", async () => {
     // 미래 날짜로 설정.
-    useAsOfStore.getState().setAsOf("2026-06-19");
+    useAsOfStore.getState().setAsOf("2026-06-25");
 
     render(<CalendarBoundsSync />, { wrapper });
 
+    // bounds 가 채워졌음을 확인.
     await waitFor(() => {
-      expect(useAsOfStore.getState().asOf).toBe("2024-06-28");
+      expect(useCalendarBoundsStore.getState().bounds).not.toBeNull();
     });
+
+    // asOf 는 그대로여야 함 — 클램프 동작 없음.
+    expect(useAsOfStore.getState().asOf).toBe("2026-06-25");
   });
 
   it("범위 내 asOf → 변경 없음", async () => {

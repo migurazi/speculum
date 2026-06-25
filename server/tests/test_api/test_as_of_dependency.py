@@ -80,13 +80,15 @@ def test_browse_out_of_range_degrades_to_200(client: TestClient) -> None:
     우선으로 weekday 근사 degrade(ROADMAP_v2 §2.3). 2025-01-02 은 목요일(평일)이라
     근사값=그대로. 시간 안정성: 2024 범위 밖이며 확실한 과거.
     """
-    res = client.get("/echo/browse?as_of=2025-01-02")
+    # 캘린더가 2024-01-01 ~ 2026-06-25(V1a B2)이므로 범위 밖은 pre-min(2023) 사용.
+    # 2023-06-15(목)은 verified 범위 밖이며 과거(미래 거부 회피).
+    res = client.get("/echo/browse?as_of=2023-06-15")
     assert res.status_code == 200
     body = res.json()
-    assert body["value"] == "2025-01-02"
+    assert body["value"] == "2023-06-15"
     assert body["was_degraded"] is True
     assert res.headers["x-asof-degraded"] == "true"
-    assert res.headers["x-asof"] == "2025-01-02"
+    assert res.headers["x-asof"] == "2023-06-15"
 
 
 def test_browse_in_range_no_degrade_header(client: TestClient) -> None:
@@ -212,7 +214,8 @@ def test_as_of_out_of_calendar_range_returns_400(client: TestClient) -> None:
     assert body["code"] == "AS_OF_OUT_OF_RANGE"
     assert body["requested"] == "2023-06-01"
     assert body["min_date"] == "2024-01-01"
-    assert body["max_date"] == "2024-12-31"
+    # V1a B2 — 캘린더가 pykrx 도출로 2026-06-25 까지 확장됨.
+    assert body["max_date"] == "2026-06-25"
 
 
 # =============================================================================

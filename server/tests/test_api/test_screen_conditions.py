@@ -306,12 +306,19 @@ def _eps_quarters(code: str, values: Sequence[str]) -> list[FinancialRecord]:
 
     fiscal_period 2023Q1~Q4. effective_date 는 as_of(2024-05-07) 이전이도록 분기
     신고기한 보수값 (+45/90 일) 보다 충분히 이전인 고정 일자.
+
+    **B1 (ROADMAP_v2 V1b)**: basic_eps 는 FLOW 계정이라 DART 는 회계연도 **누적
+    (YTD)** 으로 보고. `values` 는 분기단독(standalone) 의도값으로 받아 누적
+    (prefix-sum)으로 변환해 seed → `_resolve_financial_series` 가 standalone
+    으로 복원해 평가, TTM 합 = sum(values) 유지.
     """
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
     out: list[FinancialRecord] = []
+    cumulative = Decimal(0)
     for fp, v, e in zip(periods, values, eff, strict=True):
+        cumulative += Decimal(v)
         out.append(FinancialRecord(
             id=uuid4(),
             code=code,
@@ -319,7 +326,7 @@ def _eps_quarters(code: str, values: Sequence[str]) -> list[FinancialRecord]:
             effective_date=e,
             fiscal_period=fp,
             account=_EPS_ACCOUNT,
-            value=Decimal(v),
+            value=cumulative,  # 누적(YTD) = standalone prefix-sum.
             unit="krw",
             ifrs_type=_CONSOLIDATED,
             citation_id=_CITATION,

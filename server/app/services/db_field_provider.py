@@ -201,6 +201,44 @@ _DEPRECIATION_ACCOUNT: Final[str] = "depreciation_expense"
 _DIVIDENDS_PAID_ACCOUNT: Final[str] = "dividends_paid_annual"
 
 
+# B1 (ROADMAP_v2 V1b) — DART 분기보고서의 **누적(YTD) flow 계정** 집합.
+#
+# DART 손익계산서·현금흐름표 항목(`thstrm_amount`)은 회계연도 기준 **누적값**이다:
+# 1분기=3M, 반기=6M, 3분기=9M, 사업보고서=12M(연간). 따라서 TTM(4분기 합)을
+# 단순히 raw 분기값으로 더하면 중복 계산되어 ~2.5배 과대해진다(예: 삼성 2024-06-28
+# 기준 EPS — naive 합 4144 vs 정확 standalone 합 2900). `_resolve_financial_series`
+# 가 본 집합의 계정에 대해 **누적→분기단독(standalone) 변환** 후 합산한다.
+#
+# **재무상태표(stock) 계정은 미포함** — 자본/자산/부채는 시점 잔액이라 누적이 아니다
+# (그대로 시점값 사용). 이미 연 누적 의미인 `_annual` resolution 계정(dividends_paid_
+# annual, depreciation_expense)도 미포함(별도 처리).
+#
+# **재현성(metis H1 — 미해결 follow-up)**: 본 변환은 factor 값을 바꿔 result_hash 에
+# 영향한다. 정식으로는 `field_resolution_policy_version` 신규 키로 freeze 해야 하나,
+# 현재 실 frozen run 이 0건(시스템이 실값을 낸 적 없음)이라 기존 재현 파괴 없음 →
+# 정책버전 키는 후속(ROADMAP_v2 Phase 1). 본 변경 시점 이후 저장 run 부터 적용.
+_FLOW_CUMULATIVE_ACCOUNTS: Final[frozenset[str]] = frozenset({
+    "basic_eps",
+    "diluted_eps",
+    "net_income",
+    "net_income_attributable_to_owners",
+    "revenue",
+    "operating_income",
+    "cash_flow_operating",
+    "cash_flow_investing",
+    "cash_flow_financing",
+})
+
+
+def _parse_fiscal_period(fiscal_period: str) -> tuple[int, int]:
+    """`"2024Q1"` → `(2024, 1)`. dart_daily 의 `f"{year}Q{quarter}"` 포맷 전제.
+
+    파싱 실패 시 `ValueError` — 호출자가 strict N/A 로 처리(비표준 포맷은 변환 불가).
+    """
+    year_str, _, quarter_str = fiscal_period.partition("Q")
+    return int(year_str), int(quarter_str)
+
+
 # 레지스트리 — field 명 → FieldResolution 메타. resolver dispatch 는
 # DbFieldProvider 의 method 들이 kind 기준으로 수행.
 _RESOLUTIONS: Final[dict[str, FieldResolution]] = {
@@ -727,6 +765,13 @@ class DbFieldProvider:
 
         strict 의미 — fiscal_period asc 정렬 후 마지막 n 개. n 개 미만이면 빈
         tuple (`factor_evaluator.py:137` 의 부분 series 금지 정책).
+
+        **B1 (ROADMAP_v2 V1b)**: account 가 `_FLOW_CUMULATIVE_ACCOUNTS`(손익/현금흐름
+        누적 flow)면 각 분기의 누적(YTD)값을 **분기단독(standalone)** 으로 변환 후
+        반환한다. 변환 = 해당 분기 누적 − 직전 분기(같은 회계연도) 누적. 1분기는
+        누적=3M=standalone(직전 없음). 변환에 필요한 직전 분기가 결손이면 standalone
+        산출 불가 → strict N/A(빈 tuple). 재무상태표(stock) 계정은 시점 잔액이라
+        미변환(기존 동작). 누적을 안 고치면 TTM 합이 ~2.5배 과대(EPS 4144 vs 2900).
         """
         assert resolution.account is not None and resolution.ifrs_type is not None
         records = self._fetch_financial_periods(
@@ -734,7 +779,34 @@ class DbFieldProvider:
         )
         if len(records) < n:
             return ()
-        return tuple(r.value for r in records[-n:])
+
+        if resolution.account not in _FLOW_CUMULATIVE_ACCOUNTS:
+            # stock(잔액) 또는 비-누적 계정 — 시점값 그대로(기존 동작).
+            return tuple(r.value for r in records[-n:])
+
+        # flow(누적) — fetch 된 전 분기로 (year, quarter)→누적 map 을 만들고, 최근 n
+        # 분기 각각을 standalone 으로 변환. 직전 분기(q>1) 결손이면 strict N/A.
+        try:
+            cum_by_period: dict[tuple[int, int], Decimal] = {
+                _parse_fiscal_period(r.fiscal_period): r.value for r in records
+            }
+        except ValueError:
+            # 비표준 fiscal_period 포맷 — 변환 불가, 보수적 N/A.
+            return ()
+
+        standalones: list[Decimal] = []
+        for r in records[-n:]:
+            year, quarter = _parse_fiscal_period(r.fiscal_period)
+            if quarter == 1:
+                # 1분기 누적(3M) = standalone — 직전 분기 차감 불필요.
+                standalones.append(r.value)
+                continue
+            prior = cum_by_period.get((year, quarter - 1))
+            if prior is None:
+                # 직전 분기 누적 결손 → 이 분기 standalone 산출 불가 → 부분 series 금지.
+                return ()
+            standalones.append(r.value - prior)
+        return tuple(standalones)
 
     # ---------------------------------------------------------------------
     # 가격 해소 — close_price_adjusted (as_of-aware read-time 보정)

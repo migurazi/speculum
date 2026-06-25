@@ -258,8 +258,15 @@ export function CompareChart({
 
     // cleanup: 다음 effect 실행 전 series 제거.
     return () => {
-      for (const s of seriesList) {
-        chart.removeSeries(s);
+      // 언마운트(페이지 이탈) 시 차트 init effect 의 cleanup 이 `chart.remove()` 로
+      // 차트를 먼저 폐기(chartRef.current=null)하면, 폐기된 차트에 removeSeries 호출 →
+      // lightweight-charts 내부 "Value is undefined" 크래시(PriceChart 와 동일 버그).
+      // 차트가 살아있을 때(= series 교체용 re-render)만 제거 — 언마운트면 chart.remove()
+      // 가 series 까지 정리하므로 skip.
+      if (chartRef.current) {
+        for (const s of seriesList) {
+          chart.removeSeries(s);
+        }
       }
     };
   // deps = dataSignature — 데이터 갱신 시각/상태가 바뀔 때만 재실행. effect 내부는

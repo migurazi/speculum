@@ -952,11 +952,13 @@ def _wired_client() -> TestClient:
             created_at=datetime(2024, 1, 1, tzinfo=UTC),
         )
 
+    # B1: basic_eps 는 FLOW 계정 — DART 누적(YTD)으로 seed. 의도 standalone
+    # [500,600,700,800](TTM 2600)을 위해 누적 [500,1100,1800,2600] seed.
     financials = [
         _eps("2023Q1", "500", date(2023, 5, 15)),
-        _eps("2023Q2", "600", date(2023, 8, 14)),
-        _eps("2023Q3", "700", date(2023, 11, 14)),
-        _eps("2023Q4", "800", date(2024, 3, 30)),
+        _eps("2023Q2", "1100", date(2023, 8, 14)),
+        _eps("2023Q3", "1800", date(2023, 11, 14)),
+        _eps("2023Q4", "2600", date(2024, 3, 30)),
     ]
     price = PriceRecord(
         id=uuid4(), code="005930", code_lineage_id=lineage,
@@ -1070,14 +1072,17 @@ def _per_pbr_wired_client() -> TestClient:
             citation_id=cid, superseded_by=None, created_at=created,
         )
 
+    # B1: net_income 은 FLOW 계정 — DART 누적(YTD)으로 seed. 의도 분기단독
+    # 1e9 × 4(TTM 4e9)를 위해 누적 [1e9,2e9,3e9,4e9] seed. equity 는 stock
+    # 계정(시점 잔액)이라 미변환 — 그대로 시점값.
     financials = [
         _fin("net_income_attributable_to_owners", "2023Q1", "1000000000",
              date(2023, 5, 15)),
-        _fin("net_income_attributable_to_owners", "2023Q2", "1000000000",
+        _fin("net_income_attributable_to_owners", "2023Q2", "2000000000",
              date(2023, 8, 14)),
-        _fin("net_income_attributable_to_owners", "2023Q3", "1000000000",
+        _fin("net_income_attributable_to_owners", "2023Q3", "3000000000",
              date(2023, 11, 14)),
-        _fin("net_income_attributable_to_owners", "2023Q4", "1000000000",
+        _fin("net_income_attributable_to_owners", "2023Q4", "4000000000",
              date(2024, 3, 30)),
         _fin("equity_attributable_to_owners", "2023Q4", "30000000000",
              date(2024, 3, 30)),

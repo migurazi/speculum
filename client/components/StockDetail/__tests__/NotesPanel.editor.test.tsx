@@ -21,7 +21,7 @@ import { NotesPanel } from "../NotesPanel";
 import { renderWithIntl } from "@/test-utils/intl";
 
 const LINEAGE_ID = "550e8400-e29b-41d4-a716-446655440000";
-const EMPTY_WIRE = { notes: [] };
+const EMPTY_WIRE = { total: 0, items: [] };
 
 function makeClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } });

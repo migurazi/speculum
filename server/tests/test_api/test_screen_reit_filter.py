@@ -69,12 +69,19 @@ _COMMON_CODE = "005930"
 # =============================================================================
 
 def _eps_quarters(code: str, values: Sequence[str]) -> list[FinancialRecord]:
-    """code 의 4 분기 basic_eps consolidated 재무 — TTM 합 = sum(values)."""
+    """code 의 4 분기 basic_eps consolidated 재무 — TTM 합 = sum(values).
+
+    **B1 (ROADMAP_v2 V1b)**: basic_eps 는 FLOW 계정 — DART 누적(YTD) 보고.
+    `values`(분기단독 의도값)를 누적(prefix-sum)으로 변환해 seed → resolver 가
+    standalone 으로 복원, TTM 합 = sum(values) 유지.
+    """
     periods = ["2023Q1", "2023Q2", "2023Q3", "2023Q4"]
     eff = [date(2023, 5, 15), date(2023, 8, 14), date(2023, 11, 14),
            date(2024, 3, 30)]
     out: list[FinancialRecord] = []
+    cumulative = Decimal(0)
     for fp, v, e in zip(periods, values, eff, strict=True):
+        cumulative += Decimal(v)
         out.append(FinancialRecord(
             id=uuid4(),
             code=code,
@@ -82,7 +89,7 @@ def _eps_quarters(code: str, values: Sequence[str]) -> list[FinancialRecord]:
             effective_date=e,
             fiscal_period=fp,
             account=_EPS_ACCOUNT,
-            value=Decimal(v),
+            value=cumulative,  # 누적(YTD) = standalone prefix-sum.
             unit="krw",
             ifrs_type=_CONSOLIDATED,
             citation_id=_CITATION,
