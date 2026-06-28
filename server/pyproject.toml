@@ -32,6 +32,10 @@ dependencies = [
   # breaker 는 adapter 의 호출자 책임 (T18 일배치).
   "pykrx>=1.0,<2.0",
   "pandas>=2.0,<3.0",
+  # krx_calendar 의 거래일 schema 검증 (Draft202012Validator). 운영 코드가 직접
+  # import 하나 미선언이었음 — CI 클린 설치(`pip install -e .[test]`) 누락으로
+  # 122개 테스트가 수집 단계 ModuleNotFoundError. 직접 의존이므로 명시 declare.
+  "jsonschema>=4.18,<5.0",
   # T14 — FDR adapter (verify 출처). pykrx 와 cross-check (ADR-0001 D3 /
   # ADR-0003 D4). 외부 source (Yahoo / Naver) wrap 라 신뢰성은 pykrx 보다 낮음.
   "finance-datareader>=0.9,<1.0",
