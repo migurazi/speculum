@@ -415,6 +415,7 @@ class PriceRepository(Protocol):
         """
         ...
 
+    # pit-exempt: 적재 상태 메타 조회(MAX effective_date) — 특정 as-of 시점 무관
     def fetch_latest_trade_date(self) -> date | None:
         """적재된 최신 거래일(MAX effective_date). 데이터 없으면 None."""
         ...
@@ -542,6 +543,7 @@ class FinancialRepository(Protocol):
         """
         ...
 
+    # pit-exempt: DART 정정공시 배치 전용 — 현재 active(superseded_by IS NULL) 상태 조회
     def fetch_active_disclosure(
         self,
         code: str,
@@ -646,6 +648,7 @@ class TreasurySharesRepository(Protocol):
         """
         ...
 
+    # pit-exempt: DART 정정공시 배치 전용 — 현재 active 상태 조회
     def fetch_active_treasury_disclosure(
         self,
         code: str,

@@ -366,6 +366,7 @@ class SqlPriceRepository(PriceRepository):
             found.update(self._session.execute(stmt).scalars().all())
         return found
 
+    # pit-exempt: 적재 상태 메타 조회(MAX effective_date) — 특정 as-of 시점 무관
     def fetch_latest_trade_date(self) -> date | None:
         """적재된 최신 거래일(MAX effective_date). 데이터 없으면 None."""
         stmt = select(func.max(PriceDailyORM.effective_date))
@@ -623,6 +624,7 @@ class SqlFinancialRepository(FinancialRepository):
         self._enforcer.assert_no_lookahead(result_records, as_of)
         return result_records
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임(batch_cutoff)
     def fetch_all_financials_bulk(
         self,
         codes: Sequence[str],
@@ -664,6 +666,7 @@ class SqlFinancialRepository(FinancialRepository):
                 grouped[rec.code].append(rec)
         return {c: tuple(grouped.get(c, ())) for c in dict.fromkeys(codes)}
 
+    # pit-exempt: DART 정정공시 배치 전용 — 현재 active(superseded_by IS NULL) 상태 조회
     def fetch_active_disclosure(
         self,
         code: str,
@@ -863,6 +866,7 @@ class SqlTreasurySharesRepository(TreasurySharesRepository):
         self._enforcer.assert_no_lookahead((record,), as_of)
         return record
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임(batch_cutoff)
     def fetch_all_treasury_bulk(
         self,
         codes: Sequence[str],
@@ -897,6 +901,7 @@ class SqlTreasurySharesRepository(TreasurySharesRepository):
                 grouped[rec.code].append(rec)
         return {c: tuple(grouped.get(c, ())) for c in dict.fromkeys(codes)}
 
+    # pit-exempt: DART 정정공시 배치 전용 — 현재 active 상태 조회
     def fetch_active_treasury_disclosure(
         self,
         code: str,
@@ -1042,6 +1047,7 @@ class SqlCorporateActionRepository(CorporateActionRepository):
         )
         return actions
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임
     def fetch_all_actions_bulk(
         self,
         codes: Sequence[str],
@@ -1161,6 +1167,7 @@ class SqlDividendRepository(DividendRepository):
         )
         return dividends
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임
     def fetch_all_dividends_bulk(
         self,
         codes: Sequence[str],

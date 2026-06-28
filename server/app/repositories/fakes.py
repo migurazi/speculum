@@ -194,6 +194,7 @@ class FakePriceRepository(PriceRepository):
             )
         }
 
+    # pit-exempt: 적재 상태 메타 조회(MAX effective_date) — 특정 as-of 시점 무관
     def fetch_latest_trade_date(self) -> date | None:
         """적재된 최신 거래일(MAX effective_date). 데이터 없으면 None."""
         all_dates = [
@@ -424,6 +425,7 @@ class FakeFinancialRepository(FinancialRepository):
             enforcer=self._enforcer,
         )
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임(batch_cutoff)
     def fetch_all_financials_bulk(
         self,
         codes: Sequence[str],
@@ -451,6 +453,7 @@ class FakeFinancialRepository(FinancialRepository):
             result[code] = tuple(candidates)
         return result
 
+    # pit-exempt: DART 정정공시 배치 전용 — 현재 active(superseded_by IS NULL) 상태 조회
     def fetch_active_disclosure(
         self,
         code: str,
@@ -584,6 +587,7 @@ class FakeTreasurySharesRepository(TreasurySharesRepository):
             candidates, as_of, enforcer=self._enforcer,
         )
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임(batch_cutoff)
     def fetch_all_treasury_bulk(
         self,
         codes: Sequence[str],
@@ -610,6 +614,7 @@ class FakeTreasurySharesRepository(TreasurySharesRepository):
             result[code] = tuple(candidates)
         return result
 
+    # pit-exempt: DART 정정공시 배치 전용 — 현재 active 상태 조회
     def fetch_active_treasury_disclosure(
         self,
         code: str,
@@ -774,6 +779,7 @@ class FakeCorporateActionRepository(CorporateActionRepository):
             enforcer=self._enforcer,
         )
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임
     def fetch_all_actions_bulk(
         self,
         codes: Sequence[str],
@@ -825,6 +831,7 @@ class FakeDividendRepository(DividendRepository):
             enforcer=self._enforcer,
         )
 
+    # pit-exempt: 전체 vintage bulk 반환 — PIT 필터는 호출자 책임
     def fetch_all_dividends_bulk(
         self,
         codes: Sequence[str],

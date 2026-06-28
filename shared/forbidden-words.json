@@ -158,6 +158,19 @@
     "매수 거래금액",
     "매도 거래",
     "매수 거래",
-    "매도세"
+    "매도세",
+    "short-circuit",
+    "--tb=short",
+    "best-effort",
+    "best: dict[str, MarketCapRecord]",
+    "best[rec.code]",
+    "tuple(best.values())",
+    "return best",
+    "기대한",
+    "기대했",
+    "기대해",
+    "기대:",
+    "기대)",
+    "기대값"
   ]
 }
