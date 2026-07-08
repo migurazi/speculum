@@ -18,11 +18,13 @@
 
 import { expect, test } from "@playwright/test";
 
-import { mockWatchlist, withConsent } from "./_fixtures";
+import { mockCalendar, mockWatchlist, withConsent } from "./_fixtures";
 
 test.describe("Watchlist page — AC-F-06", () => {
   test.beforeEach(async ({ page }) => {
     await withConsent(page);
+    // 전역 CalendarBoundsSync 의 GET /api/calendar — 실 네트워크 시도 제거.
+    await mockCalendar(page);
     await mockWatchlist(page);
   });
 

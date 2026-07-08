@@ -18,11 +18,13 @@
 
 import { expect, test } from "@playwright/test";
 
-import { mockStockDetail, withConsent } from "./_fixtures";
+import { mockCalendar, mockStockDetail, withConsent } from "./_fixtures";
 
 test.describe("Stock Detail page — AC-F-04", () => {
   test.beforeEach(async ({ page }) => {
     await withConsent(page);
+    // 전역 CalendarBoundsSync 의 GET /api/calendar — 실 네트워크 시도 제거.
+    await mockCalendar(page);
     await mockStockDetail(page);
   });
 
@@ -53,7 +55,9 @@ test.describe("Stock Detail page — AC-F-04", () => {
     await expect(page.getByText("ROE (TTM)")).toBeVisible();
 
     // factor value 표시 (Decimal string wire).
+    // PER 은 unit=ratio → 값 그대로. ROE 는 unit=percent → 표시 layer 가 ×100
+    // (0.108 → "10.80%", ADR-0035 D7 / MetricCard.formatPercentValue).
     await expect(page.getByText("12.5")).toBeVisible();
-    await expect(page.getByText("10.8")).toBeVisible();
+    await expect(page.getByText("10.80%")).toBeVisible();
   });
 });

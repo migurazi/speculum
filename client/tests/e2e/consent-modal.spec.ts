@@ -23,11 +23,15 @@
 
 import { expect, test } from "@playwright/test";
 
+import { mockCalendar } from "./_fixtures";
+
 const CONSENT_KEY = "speculum-consent-v2";
 
 test.describe("ConsentModal — AC-F-01 / AC-L-01 / Momus V2", () => {
-  test.beforeEach(async ({ context }) => {
+  test.beforeEach(async ({ context, page }) => {
     await context.clearCookies();
+    // 전역 CalendarBoundsSync 의 GET /api/calendar — 실 네트워크 시도 제거.
+    await mockCalendar(page);
   });
 
   test("A. 첫 진입 → 모달 + 3 unchecked + button disabled", async ({ page }) => {
@@ -156,6 +160,11 @@ test.describe("ConsentModal — AC-F-01 / AC-L-01 / Momus V2", () => {
 });
 
 test.describe("Privacy / Terms / Disclaimer 페이지 sanity", () => {
+  test.beforeEach(async ({ page }) => {
+    // legal 페이지도 동일 layout(NavBar/providers)이라 GET /api/calendar 발생.
+    await mockCalendar(page);
+  });
+
   test("/privacy 진입 → heading", async ({ page }) => {
     await page.goto("/privacy");
     await expect(

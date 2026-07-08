@@ -21,11 +21,15 @@
 
 import { expect, test } from "@playwright/test";
 
+import { mockCalendar } from "./_fixtures";
+
 const CONSENT_KEY = "speculum-consent-v2";
 
 // 모든 test 가 동의 완료 상태에서 시작 — consent-modal.spec.ts 의 흐름과 분리.
 // useConsent v2 schema 의 JSON record 주입 (T46 V2 fix 후).
 test.beforeEach(async ({ page }) => {
+  // 전역 CalendarBoundsSync 의 GET /api/calendar — 실 네트워크 시도 제거.
+  await mockCalendar(page);
   await page.addInitScript((key) => {
     window.localStorage.setItem(
       key,

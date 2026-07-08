@@ -80,7 +80,9 @@ export const SAMSUNG_DETAIL = {
       canonical_id: "roe:ttm-consolidated-ifrs",
       name: "ROE (TTM)",
       unit: "percent",
-      value: "10.8",
+      // percent factor 는 backend 가 ratio(소수) 로 반환 — 표시 layer 가 ×100
+      // (ADR-0035 D7 / lib/factor/format.formatPercentValue). 0.108 → "10.80%".
+      value: "0.108",
       is_na: false,
       na_reason: null,
       evaluator_version: "1.0.0",
@@ -247,6 +249,140 @@ export async function mockWatchlist(page: Page): Promise<void> {
           },
         ],
         total: 1,
+      }),
+    });
+  });
+}
+
+/**
+ * StockSummary mock — 검색 결과 row (backend StockSummaryOut schema).
+ *
+ * StockDetail 과 달리 factors / code_history 없는 경량 형태. Compare 의
+ * StockSearch combobox (T38 e722a5b 전환) 가 소비.
+ */
+export const SAMSUNG_SUMMARY = {
+  id: "11111111-1111-1111-1111-111111111111",
+  code: "005930",
+  name: "삼성전자",
+  market: "KOSPI",
+  listing_date: "1975-06-11",
+  delisting_date: null,
+  status: "active",
+} as const;
+
+export const SK_HYNIX_SUMMARY = {
+  id: "22222222-2222-2222-2222-222222222222",
+  code: "000660",
+  name: "SK하이닉스",
+  market: "KOSPI",
+  listing_date: "1996-12-26",
+  delisting_date: null,
+  status: "active",
+} as const;
+
+/**
+ * GET /api/stocks/search mock — 종목 검색 combobox (StockSearch).
+ *
+ * q(검색어) 로 name substring 또는 code substring 매칭. backend StockSearchPage
+ * (`{items, total, next_cursor}`) schema 와 1:1. NavBar 와 Compare 양쪽의
+ * StockSearch 가 동일 endpoint 사용 — 본 mock 이 둘 다 커버.
+ */
+export async function mockStockSearch(
+  page: Page,
+  pool: ReadonlyArray<typeof SAMSUNG_SUMMARY> = [SAMSUNG_SUMMARY, SK_HYNIX_SUMMARY],
+): Promise<void> {
+  await page.route(/\/api\/stocks\/search(\?|$)/, async (route) => {
+    const url = new URL(route.request().url());
+    const q = (url.searchParams.get("q") ?? "").trim();
+    const matched =
+      q.length === 0
+        ? []
+        : pool.filter((s) => s.name.includes(q) || s.code.includes(q));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: matched,
+        total: matched.length,
+        next_cursor: null,
+      }),
+    });
+  });
+}
+
+/**
+ * GET /api/factors mock — Screener 의 factor 체크박스 + ConditionBuilder select.
+ *
+ * backend `get_factors` wire (`{pack_slug, pack_version, factors: [...]}`) 와
+ * 1:1. canonical_id 는 screener.spec 이 조건/선택에 사용하는 값과 일치해야 함.
+ */
+export const FACTORS_FIXTURE = [
+  {
+    canonical_id: "per:ttm-consolidated-ifrs",
+    name: "PER (TTM)",
+    unit: "배",
+    tags: ["valuation"],
+  },
+  {
+    canonical_id: "roe:ttm-consolidated-ifrs",
+    name: "ROE (TTM)",
+    unit: "%",
+    tags: ["profitability"],
+  },
+] as const;
+
+export async function mockFactors(page: Page): Promise<void> {
+  await page.route(/\/api\/factors(\?|$)/, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        pack_slug: "speculum-core",
+        pack_version: "1.0.0",
+        factors: FACTORS_FIXTURE,
+      }),
+    });
+  });
+}
+
+/**
+ * GET /api/calendar mock — 서버 KRX 캘린더 유효 범위.
+ *
+ * 배경: CalendarBoundsSync 가 providers.tsx 에서 전역 1회 마운트되어 모든
+ * 페이지 로드 시 GET /api/calendar 를 호출한다(lib/api/calendar.fetchCalendarCoverage).
+ * mock 이 없으면 실 backend(localhost:8000)로 실패 요청이 나가 CI 로그 noise 를
+ * 남긴다. useQuery 실패가 페이지를 crash 시키진 않으나(bounds=null → AsOfDatePicker
+ * 의 input min 속성만 미설정), 모든 spec 의 페이지가 본 endpoint 를 건드리므로
+ * 명시 mock 으로 실 네트워크 시도를 제거한다.
+ *
+ * side-effect 안전성: bounds 는 AsOfDatePicker 의 `min` 속성에만 반영되고,
+ * `max` 는 kstToday() 를 쓴다. asOf 값 자체의 클램프/검증은 없다(V1 e722a5b 에서
+ * 자동 클램프 로직 제거). 따라서 본 mock 은 기존 단언에 영향을 주지 않는다.
+ *
+ * wire schema 는 backend `get_calendar_coverage` 및 lib/api/calendar.CalendarWire
+ * 와 1:1 (snake_case). content_hash 는 클라이언트 미사용이나 계약상 포함.
+ */
+export async function mockCalendar(page: Page): Promise<void> {
+  await page.route(/\/api\/calendar(\?|$)/, async (route) => {
+    if (route.request().method() !== "GET") {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        min_date: "2000-01-04",
+        max_date: "2026-07-08",
+        earliest_business_day: "2000-01-04",
+        latest_business_day: "2026-07-07",
+        latest_data_date: "2026-07-07",
+        version: "cal-v1.0.0",
+        content_hash: "e2e-calendar-fixture",
       }),
     });
   });
