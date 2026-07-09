@@ -11,6 +11,7 @@
 stages:
   - check
   - test
+  - maintenance
 
 # -----------------------------------------------------------------------------
 # Stage: check — 정적 정책 게이트 (의존성 가장 적음)
@@ -92,3 +93,58 @@ client-test:
     - if: $CI_COMMIT_BRANCH == "develop"
     - if: $CI_COMMIT_BRANCH == "main"
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# -----------------------------------------------------------------------------
+# Stage: maintenance — KRX 캘린더 자동 확장 (schedule 전용)
+# -----------------------------------------------------------------------------
+#
+# **왜 필요한가** — as_of_policy.normalize(None) 은 실 kst_today() 로 최근 영업일을
+# 정규화하는데, 캘린더(shared/data/calendar/krx-calendar-v1.json)는 build 시점까지만
+# coverage 하는 정적 파일이다. 시간이 지나 today > coverage.max_date 가 되면
+# test_normalize_today_succeeds_after_calendar_extension 이 AsOfOutOfRangeError 로
+# 실패한다(구조적 시한폭탄). 손작업 재실행을 없애기 위해 스케줄이 매일 새벽 캘린더를
+# 오늘까지 확장 + develop 에 자동 commit 한다.
+#
+# **한계(정직)** — pykrx 는 과거 거래일만 도출하므로 max_date 는 today 를 넘길 수 없다.
+# 따라서 "이 잡이 그날 아침 도는 것"이 today ≤ max_date 를 보장한다. 스케줄 실행 전
+# stale base(어제 develop) 위에서 열린 pipeline 은 여전히 깨질 수 있다 — 완전 봉합이
+# 아니라 갭 최소화. 무갭을 원하면 forward-buffer(미래 평일 derived) 를 별도 도입해야 함.
+#
+# **필수 사전 설정(수동, GitLab UI)**:
+#   1. Settings → CI/CD → Pipeline schedules: target branch = develop,
+#      cron `0 21 * * *` (매일 06:00 KST = 21:00 UTC 전일).
+#   2. Settings → Access Tokens: project access token(name: calendar-bot,
+#      role: Developer 이상, scope: write_repository) 발급.
+#   3. Settings → CI/CD → Variables: CALENDAR_BOT_TOKEN = 위 토큰(Masked, Protected).
+#
+# **정책 예외** — 이 잡은 develop 에 직접 commit 한다(사용자 git 정책의 'develop 직접
+# 커밋 금지'에 대한 자동화 예외). commit 메시지에 [skip ci] 를 넣어 pipeline 무한루프
+# 를 차단한다. 사람 feature 워크플로우(squash merge)와 무관한 봇 유지보수 커밋이다.
+
+extend-krx-calendar:
+  stage: maintenance
+  image: python:3.12-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq git
+    - python -m pip install -U pip
+    - python -m pip install -e ./server
+  script:
+    # 스케줄 SHA 는 detached HEAD — develop tip 으로 명시 정렬 후 확장.
+    - git remote set-url origin "https://oauth2:${CALENDAR_BOT_TOKEN}@gitlab.com/migurazi/speculum.git"
+    - git fetch origin develop
+    - git checkout -B develop origin/develop
+    - python -m scripts.build_krx_calendar
+    - |
+      if git diff --quiet -- shared/data/calendar/krx-calendar-v1.json; then
+        echo "캘린더가 이미 오늘까지 coverage — 확장/commit 불필요."
+        exit 0
+      fi
+    - git config user.email "calendar-bot@speculum.local"
+    - git config user.name "speculum-calendar-bot"
+    - git add shared/data/calendar/krx-calendar-v1.json
+    - 'git commit -m "chore(calendar): 스케줄 자동 확장 (KRX 영업일) [skip ci]"'
+    - git push origin develop
+  # 네트워크(pykrx/KRX)·비ff 등 일시 실패가 다른 stage 를 막지 않도록 격리.
+  allow_failure: true

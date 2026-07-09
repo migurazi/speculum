@@ -94,7 +94,9 @@ def _write_raw(tmp_path: Path, body: dict, name: str = "cal.json") -> Path:
 def test_default_calendar_loaded() -> None:
     cal = DEFAULT_CALENDAR
     assert isinstance(cal, TradingCalendar)
-    assert cal.version == "1.1.0"
+    # 재확장 견고: build_krx_calendar 재실행마다 minor bump(1.x.0) — 하드코딩 대신
+    # major 라인 고정만 단언(max_date 와 동형 정책).
+    assert cal.version.startswith("1.")
     assert cal.min_date == date(2024, 1, 1)
     assert cal.max_date >= date(2024, 12, 31)  # 재확장 견고: max_date 는 2024-12-31 이상
     assert isinstance(cal.closed_days, frozenset)

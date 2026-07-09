@@ -35,7 +35,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies import BrowseAsOfDep, NormalizedAsOfDep
 from app.api.dependencies.auth import CurrentUserDep
 from app.api.dependencies.repositories import (
     CorporateActionRepoDep,
@@ -115,7 +115,7 @@ def _resolve_custom_pack(
 
 @screen_router.post("/custom", response_model=ScreenResultOut)
 async def execute_custom_screen(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     user: CurrentUserDep,
     stocks_repo: StocksRepoDep,
     custom_pack_repo: CustomPackRepoDep,

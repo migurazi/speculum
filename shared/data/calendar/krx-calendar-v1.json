@@ -1,13 +1,13 @@
 {
   "$schema": "https://speculum.dev/schemas/krx-calendar-v1.json",
   "type": "krx-trading-calendar",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "KRX 영업일 캘린더 v1.0.0 — 2024 calendar year (verified). 후속 release 에서 2020~2023 + 2025~2027 확장 예정 (work-order 별도). 본 데이터는 한국 공휴일 (관공서의공휴일에관한규정) + KRX 공식 휴장일 발표 + 임시공휴일 고시 기준으로 작성됨. 토/일은 자동 휴장으로 처리 — closed_days 에 포함 X.",
   "coverage": {
     "min_date": "2024-01-01",
-    "max_date": "2026-06-25"
+    "max_date": "2026-07-09"
   },
-  "verified_at": "2026-06-25",
+  "verified_at": "2026-07-09",
   "verified_by": "speculum-pykrx-derived",
   "verified_source": "2024: KRX 공식 캘린더 수동 검증; 2025+: pykrx get_market_ohlcv(005930) 거래일 도출 (keyless). https://open.krx.co.kr / pykrx",
   "closed_days": [
@@ -197,5 +197,5 @@
     }
   ],
   "half_days": [],
-  "content_hash": "sha256:d00a4a9afb3b7317a2a27b2199ed5d7fd5d3a861049e3b52dd875cf4d3a8e48d"
+  "content_hash": "sha256:a9d160763d90367dc6efaca2ecfafd5c9592649b5eed84486b2acc2d1b01a16e"
 }

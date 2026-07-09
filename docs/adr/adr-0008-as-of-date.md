@@ -2,10 +2,10 @@
 
 | | |
 |---|---|
-| **Status** | ACCEPTED |
+| **Status** | ACCEPTED (D7-bis 2026-05-27, D10 amendment 2026-07-09) |
 | **Date** | 2026-05-22 |
 | **Deciders** | 사용자 |
-| **Related** | `docs/CONCEPT.md §2.4 PIT`, `§2.10 Reproducibility`, `docs/M0_PLAN.md T8, T21, T34`, [[adr-0002-factor-fact-model]], [[adr-0009-corporate-action]] |
+| **Related** | `docs/CONCEPT.md §2.4 PIT`, `§2.10 Reproducibility`, `docs/ROADMAP_v2.md §2.3`, `docs/M0_PLAN.md T8, T21, T34`, [[adr-0002-factor-fact-model]], [[adr-0009-corporate-action]] |
 
 ## Context
 
@@ -196,6 +196,57 @@ M0 PIT 의 명시적 한계 (CONCEPT §2.4 의 limitation 과 일관):
 - 그러나 종목별 표시 데이터 (PER, 가격 등) 는 as-of 기준.
 - 상장폐지된 종목이 as-of 이후라면 Watchlist 에 표시되 데이터가 N/A — UI 가 "이 종목은 {date} 에 상장폐지되었습니다" 명시.
 
+### D10. 캘린더 이중성 — browse degrade / frozen strict (2026-07-09 amendment)
+
+**Context (2026-07-09)** — GitLab server-test 가 주기적으로 red. 근본 원인은 구조적
+시한폭탄: `AsOfPolicy.normalize(None)` 은 실 `kst_today()` 로 최근 영업일을 정규화
+하는데(D6), KRX 캘린더(`shared/data/calendar/krx-calendar-v1.json`)는 build 시점
+까지만 `coverage.max_date` 를 갖는 정적 파일이다. `today > max_date` 가 되면
+`latest_business_day` → `_assert_in_range` 에서 `CalendarRangeError` → strict 경로가
+`AsOfOutOfRangeError`(400). 실 사용자 영향은 strict 엔드포인트 한정.
+
+`scripts/build_krx_calendar.py` 는 pykrx(삼성전자 005930 실거래일)로 **과거 거래일만**
+도출하므로 max_date 를 today 이상으로 밀 수 없다 — 즉 "매 영업일 만료" 는 물리적 제약.
+
+#### D10.1 두 경로 계약 (framework: `as_of_policy.py` mode)
+
+| 경로 | dependency | 캘린더 범위 밖 today | 성격 |
+|---|---|---|---|
+| **browse (거울)** | `BrowseAsOfDep` (`mode="browse"`) | `_previous_weekday` 근사 + `X-AsOf-Degraded: true` → **200 보장(무갭)** | read-only 표시 — 종목·시장·비교·**picker preview·portfolio·custom screen 실행** |
+| **frozen (재현)** | `NormalizedAsOfDep` (`mode="strict"`) | `AsOfOutOfRangeError`(400) — **정직한 거부** | Screen Run snapshot 저장·backtest — 정확 휴장일 필수(§2.10 재현 무의미하면 fail) |
+
+browse degrade 는 **정확성이 아닌 가용성** 을 `X-AsOf-Degraded` 헤더로 명시 고지한다
+(§2.1 Fidelity: 부정확을 숨기지 않고 라벨). frozen 의 400 은 버그가 아니라 "그 시점
+정확 휴장일이 존재하지 않으므로 재현 불가" 라는 정직한 제약이다.
+
+#### D10.2 forward-buffer 거부 — Fidelity 위반
+
+"무갭" 을 위해 캘린더 max_date 를 미래(+90일 등)로 선행 확장하고 verified 구간 이후를
+규칙(주말+고정공휴일)으로 채우는 **forward-buffer 안을 거부**한다. 근거:
+
+- 음력 명절(설날·추석·부처님오신날)·대체공휴일·임시공휴일(예: 2024-10-01 국군의날)은
+  규칙으로 미래 예측 불가 → buffer 구간에서 실 휴장일을 **"영업일"로 위조**. 이는 "데이터
+  없음" 이 아니라 **"데이터 부정확"** — §2.1 Fidelity 가 명시 금지한 최악.
+- `snap_to_previous` cursor 가 phantom 영업일에서 멈춰 frozen Run 이 KRX 종가 없는 날로
+  정규화 → factor 왜곡 + 거짓 provenance(`verified_source="pykrx 도출"` 인데 미도출).
+- Oracle 자문(2026-07-09): "완성된 browse/frozen 이중 아키텍처를 우회해 미검증 사실을
+  캘린더 데이터에 주입하는 퇴행."
+
+#### D10.3 캘린더 최신성 = 자동화로 유지 (미래 위조 금지)
+
+무갭의 정합적 달성은 미래 위조가 아니라 **캘린더를 과거→현재로 실검증 확장하는 자동화**
+다. `.gitlab-ci.yml` 의 `extend-krx-calendar` 스케줄 잡(schedule 전용, 매일 새벽
+`build_krx_calendar` 실행 + develop 자동 commit)이 max_date 를 today 근방까지 유지.
+스케줄 실행 전 stale base push 의 좁은 갭은 잔여 부채로 수용(§2.10 계열 영구부채).
+
+#### D10.4 엔드포인트 분류 원칙
+
+read-only **거울** 경로(사용자에게 오늘/과거 데이터를 *표시*)는 browse, **재현·freeze**
+경로(Screen Run snapshot 저장·backtest)는 strict. 신규 엔드포인트는 이 기준으로 분류.
+(2026-07-09 재검토: `meta.get_as_of` picker preview / `portfolio.get_positions` /
+`screen_custom.execute_custom_screen` 는 거울 성격이나 strict 로 분류돼 있어 browse 전환
+검토 대상. `runs.save_custom_run` 은 snapshot 저장이라 strict 유지가 옳음.)
+
 ## Rationale
 
 1. **§2.4 PIT 의 implementation** — UI / state / API / DB layer 일관.
@@ -228,6 +279,7 @@ M0 PIT 의 명시적 한계 (CONCEPT §2.4 의 limitation 과 일관):
 - **B. 페이지별 picker (전역 아님)** — Stock Detail 에만 picker 두기. 그러나 Screener·Compare 의 as-of 부재 → 일관성 깨짐. **거부**.
 - **C. Picker default = localStorage last** — 사용성 ↑ 그러나 사용자가 옛 날짜 사용 후 다음 세션 confusion. **거부**.
 - **D. As_of 없는 API + repository 가 self-PIT** — 단순. 그러나 외부 통합 시 PIT 우회 가능. **거부**.
+- **E. Forward-buffer (미래 규칙 도출로 캘린더 max_date 선행 확장)** — 시한폭탄 무갭 봉합안. 그러나 예측 불가 음력·임시공휴일을 "영업일" 로 위조 → §2.1 Fidelity 위반 + frozen 재현 오염. browse degrade(D10.1)가 이미 무갭을 정직하게 제공하므로 불요. **거부** (D10.2, Oracle 자문 2026-07-09).
 
 ## References
 

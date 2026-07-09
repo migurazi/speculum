@@ -214,8 +214,10 @@ def test_as_of_out_of_calendar_range_returns_400(client: TestClient) -> None:
     assert body["code"] == "AS_OF_OUT_OF_RANGE"
     assert body["requested"] == "2023-06-01"
     assert body["min_date"] == "2024-01-01"
-    # V1a B2 — 캘린더가 pykrx 도출로 2026-06-25 까지 확장됨.
-    assert body["max_date"] == "2026-06-25"
+    # V1a B2 — 캘린더는 build_krx_calendar 재실행마다 max_date 가 확장되므로
+    # 프로즌 리터럴 대신 라이브 DEFAULT_CALENDAR 와 비교(재확장 견고).
+    from app.services.krx_calendar import DEFAULT_CALENDAR
+    assert body["max_date"] == DEFAULT_CALENDAR.max_date.isoformat()
 
 
 # =============================================================================

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
-from app.api.dependencies import NormalizedAsOfDep
+from app.api.dependencies import BrowseAsOfDep
 from app.api.dependencies.repositories import ActivePackDep, BatchRunRepoDep, PriceRepoDep
 from app.schemas.data_freshness import DataFreshnessOut
 from app.services.data_freshness import assess_data_freshness
@@ -26,24 +26,31 @@ router = APIRouter(prefix="/api", tags=["meta"])
 
 
 @router.get("/as_of")
-async def get_as_of(as_of: NormalizedAsOfDep) -> dict:
+async def get_as_of(as_of: BrowseAsOfDep) -> dict:
     """현재 입력의 정규화 결과 반환. picker UI 가 snap 결과 미리 보기 + Response
     header (`X-AsOf-*`) 와 함께 사용.
+
+    **browse 경로**(ADR-0008 D10.1) — picker preview 는 read-only 거울이므로, KRX
+    캘린더 verified 범위 밖 today(캘린더 만료 경과)에도 400 대신 weekday 근사로
+    degrade(`was_degraded=True` + `X-AsOf-Degraded`) 해 **200 을 보장**한다. 이렇게
+    하지 않으면 캘린더 만료 시 전역 헤더 picker 자체가 깨진다.
 
     Response body:
         value: 정규화된 영업일 (ISO 8601).
         was_defaulted: 입력 None → kst_today 채움.
         was_snapped: 휴장일 입력 → 직전 영업일 snap.
+        was_degraded: verified 범위 밖 weekday 근사(휴장일 미반영 고지).
         original_input: snap 전 입력 (was_snapped=True 시).
         pit_policy_version: 본 결과를 만든 정책 버전.
 
     Response headers (`as_of` dependency 가 자동 채움):
-        X-AsOf, X-AsOf-Defaulted, X-AsOf-Snapped, X-AsOf-Original.
+        X-AsOf, X-AsOf-Defaulted, X-AsOf-Snapped, X-AsOf-Original, X-AsOf-Degraded.
     """
     return {
         "value": as_of.value.isoformat(),
         "was_defaulted": as_of.was_defaulted,
         "was_snapped": as_of.was_snapped,
+        "was_degraded": as_of.was_degraded,
         "original_input": (
             as_of.original_input.isoformat()
             if as_of.original_input is not None else None

@@ -132,9 +132,11 @@ def test_get_calendar_exposes_coverage(client: TestClient) -> None:
         "version", "content_hash",
     }
     assert set(body.keys()) == expected_keys
-    # KRX 캘린더 coverage 실제 값 (V1a B2 — pykrx 도출로 2026-06-25 까지 확장).
+    # KRX 캘린더 coverage — max_date 는 build_krx_calendar 재실행마다 확장되므로
+    # 프로즌 리터럴 대신 라이브 DEFAULT_CALENDAR 와 비교(재확장 견고).
+    from app.services.krx_calendar import DEFAULT_CALENDAR
     assert body["min_date"] == "2024-01-01"
-    assert body["max_date"] == "2026-06-25"
+    assert body["max_date"] == DEFAULT_CALENDAR.max_date.isoformat()
     # earliest/latest_business_day 는 [min_date, max_date] 범위 내 + 평일.
     earliest = date.fromisoformat(body["earliest_business_day"])
     latest = date.fromisoformat(body["latest_business_day"])

@@ -193,22 +193,43 @@ def test_private_helper_is_underscore_prefixed() -> None:
     assert "_normalize_with_today" not in (mod.__all__ or [])
 
 
-def test_normalize_today_succeeds_after_calendar_extension() -> None:
-    """운영 normalize(None) 이 **실제 오늘**로 성공 — V1a B2 캘린더 확장 후.
+def test_normalize_none_browse_succeeds_regardless_of_calendar_staleness() -> None:
+    """browse normalize(None) 은 캘린더 만료와 무관하게 항상 200 — 시한폭탄 제거.
 
-    복구플랜 0.4 (시간-비고정 as_of 계약): `today` 를 하드코딩하지 않고 실 `kst_today()`
-    로 `normalize(None)` 이 200(성공)이어야 한다. 캘린더가 2026-06-25 까지 확장됐으므로
-    오늘이 verified 범위 내 → AsOfOutOfRangeError 없이 영업일 정규화. (확장 전엔 이
-    테스트가 의도적으로 AsOfOutOfRangeError 를 단언해 'production 실패'를 문서화했고,
-    그 우회가 바로 oracle 기획검토가 지적한 'production 실패 은폐'였다 — 확장으로 해소.)
+    **재구성 이력 (ADR-0008 D10, 2026-07-09)**: 이전 테스트
+    `test_normalize_today_succeeds_after_calendar_extension` 는 strict `normalize(None)`
+    이 실 `kst_today()` 로 성공하길 요구했는데, 이는 today 가 캘린더 `max_date` 를 초과
+    하는 순간 `AsOfOutOfRangeError` 로 재실패하는 **구조적 시한폭탄**이었다(캘린더는 build
+    시점까지만 coverage 하는 정적 파일). 근본 재검토 결과 실 사용자 대면 거울 경로
+    (picker preview·portfolio·custom screen 실행)를 모두 browse 로 전환했으므로,
+    **시간-비고정 계약은 strict 가 아니라 browse 가 진다**.
 
-    Note: 캘린더 max_date 를 today 가 초과하는 시점(미확장 경과)에는 다시 범위 밖이
-    되므로 `build_krx_calendar` 재실행이 필요(§8 — 손작업 아닌 스크립트 재실행).
+    browse 는 verified 범위 밖 today 도 `_previous_weekday` 근사로 degrade → 항상 200.
+    따라서 이 단언은 벽시계 날짜·캘린더 coverage 와 무관하게 영구히 통과한다.
+    (frozen strict 의 만료 시 거부 계약은 아래 별도 테스트에서 시간-비고정으로 검증.)
     """
-    result = AsOfPolicy.normalize(None)  # today 미주입, kst_today 자동 사용
-    # 영업일 정규화 성공 — value 는 today 이하의 최근 영업일.
+    result = AsOfPolicy.normalize(None, mode="browse")
     assert result.was_defaulted is True
     assert result.value <= kst_today()
+
+
+def test_normalize_none_strict_raises_when_stale_is_intended_frozen_contract() -> None:
+    """strict normalize(None) 이 캘린더 만료 시 raise 하는 것은 frozen 의 정직한 계약.
+
+    ADR-0008 D10.1: frozen/재현(runs·backtest)은 정확 휴장일 필수 → verified 범위 밖은
+    `AsOfOutOfRangeError`(정직한 거부)가 옳다. 이는 'production 실패 은폐'가 아니다 —
+    거울 경로가 browse 이므로 실 사용자는 이 strict 거부에 노출되지 않는다.
+
+    시간-비고정: 실 `kst_today()` 대신 캘린더 어떤 verified 범위도 넘는 미래 today 를
+    **주입**해 만료 상황을 재현한다(벽시계 의존 제거).
+    """
+    stale_today = date(2099, 1, 1)  # 어떤 verified 캘린더도 초과하는 주입 today
+    with pytest.raises(AsOfOutOfRangeError):
+        AsOfPolicy._normalize_with_today(None, today=stale_today, mode="strict")
+    # 동일 만료 상황에서 browse 는 degrade 로 200 (무갭 보장).
+    browse = AsOfPolicy._normalize_with_today(None, today=stale_today, mode="browse")
+    assert browse.was_defaulted is True
+    assert browse.was_degraded is True
 
 
 # =============================================================================

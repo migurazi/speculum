@@ -32,7 +32,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.dependencies.as_of import NormalizedAsOfDep
+from app.api.dependencies.as_of import BrowseAsOfDep
 from app.api.dependencies.auth import CurrentUserDep
 from app.api.dependencies.repositories import (
     CorporateActionRepoDep,
@@ -127,7 +127,7 @@ async def delete_transaction(
 
 @router.get("/positions", response_model=PortfolioPositionsOut)
 async def get_positions(
-    as_of: NormalizedAsOfDep,
+    as_of: BrowseAsOfDep,
     user: CurrentUserDep,
     repo: PortfolioRepoDep,
     stocks_repo: StocksRepoDep,
